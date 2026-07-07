@@ -1,0 +1,10 @@
+# runtime data (SQLite DB, uploads, renders, generated secret key, demo song)
+data/
+
+# OS / editor
+.DS_Store
+*.log
+__pycache__/
+*.pyc
+.vscode/
+.idea/
