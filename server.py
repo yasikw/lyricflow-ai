@@ -7,7 +7,7 @@
 - ホワイトラベル外部API (X-API-Key)
 標準ライブラリのみで動作。DB=SQLite, ファイル=ローカルストレージ。
 """
-import base64, hashlib, hmac, json, math, mimetypes, os, random, re, secrets, sqlite3, struct, subprocess, threading, time, urllib.request, uuid, wave
+import base64, hashlib, hmac, json, math, mimetypes, os, random, re, secrets, sqlite3, struct, subprocess, threading, time, urllib.request, urllib.parse, uuid, wave
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -19,7 +19,16 @@ STATIC = os.path.join(ROOT, "static")
 PORT = int(os.environ.get("PORT", "4189"))
 ACCESS_TTL = 3600           # 1時間 (仕様 2.1.1)
 REFRESH_TTL = 30 * 86400    # 30日
-PLAN_LIMITS = {"free": {"projects": 5, "storage": 1 << 30}, "pro": {"projects": None, "storage": 10 << 30}, "team": {"projects": None, "storage": 100 << 30}}
+# 仕様 9.1 サブスクリプションプラン
+PLAN_LIMITS = {
+    "free":       {"projects": 5,    "storage": 1 << 30,   "exports_month": 3,    "ai_month": 3,    "max_res": 720,  "watermark": True,  "formats": ["mp4"],                  "brand_kit": False, "custom_font": False, "api_rate": 0},
+    "pro":        {"projects": None, "storage": 10 << 30,  "exports_month": None, "ai_month": None, "max_res": 2160, "watermark": False, "formats": ["mp4", "webm", "gif"],    "brand_kit": False, "custom_font": True,  "api_rate": 60},
+    "team":       {"projects": None, "storage": 100 << 30, "exports_month": None, "ai_month": None, "max_res": 2160, "watermark": False, "formats": ["mp4", "webm", "gif", "prores"], "brand_kit": True, "custom_font": True, "api_rate": 300},
+    "enterprise": {"projects": None, "storage": 1 << 40,   "exports_month": None, "ai_month": None, "max_res": 2160, "watermark": False, "formats": ["mp4", "webm", "gif", "prores"], "brand_kit": True, "custom_font": True, "api_rate": 1200},
+}
+def plan_limits(plan):
+    return PLAN_LIMITS.get(plan, PLAN_LIMITS["free"])
+RES_HEIGHTS = {"720p": 720, "1080p": 1080, "4k": 2160}
 
 os.makedirs(UPLOADS, exist_ok=True)
 os.makedirs(RENDERS, exist_ok=True)
@@ -46,10 +55,30 @@ def db():
     con.execute("PRAGMA journal_mode=WAL")
     return con
 
+def _month_start():
+    lt = time.localtime()
+    return time.mktime((lt.tm_year, lt.tm_mon, 1, 0, 0, 0, 0, 0, -1))
+
+def ws_plan(con, wid):
+    r = con.execute("SELECT plan_type FROM workspaces WHERE id=?", (wid,)).fetchone()
+    return r["plan_type"] if r else "free"
+
+def usage_snapshot(con, wid):
+    plan = ws_plan(con, wid)
+    lim = plan_limits(plan)
+    ms = _month_start()
+    projects = con.execute("SELECT COUNT(*) c FROM projects WHERE workspace_id=? AND status!='archived'", (wid,)).fetchone()["c"]
+    exports = con.execute("""SELECT COUNT(*) c FROM render_jobs r JOIN projects p ON p.id=r.project_id
+                             WHERE p.workspace_id=? AND r.status='completed' AND r.created_at>=?""", (wid, ms)).fetchone()["c"]
+    ai = con.execute("SELECT COUNT(*) c FROM ai_jobs WHERE workspace_id=? AND kind='sync-lyrics' AND created_at>=?", (wid, ms)).fetchone()["c"]
+    used = con.execute("SELECT COALESCE(SUM(size_bytes),0) s FROM assets WHERE workspace_id=?", (wid,)).fetchone()["s"]
+    return plan, lim, {"projects": projects, "exports_month": exports, "ai_month": ai, "storage": used}
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users(
   id TEXT PRIMARY KEY, email TEXT UNIQUE NOT NULL, password_hash TEXT,
-  name TEXT NOT NULL, avatar_url TEXT, created_at REAL, updated_at REAL);
+  name TEXT NOT NULL, avatar_url TEXT, mfa_secret TEXT, mfa_enabled INTEGER DEFAULT 0,
+  created_at REAL, updated_at REAL);
 CREATE TABLE IF NOT EXISTS workspaces(
   id TEXT PRIMARY KEY, name TEXT NOT NULL, plan_type TEXT NOT NULL DEFAULT 'pro',
   brand_kit_json TEXT, owner_user_id TEXT NOT NULL, created_at REAL);
@@ -121,6 +150,75 @@ def verify_token(token, kind="access"):
         return data["sub"]
     except Exception:
         return None
+
+# ---------------------------------------------------------------- MFA (TOTP, RFC 6238)
+def _b32(b):
+    return base64.b32encode(b).decode().rstrip("=")
+
+def _b32_dec(s):
+    s = s.upper()
+    return base64.b32decode(s + "=" * (-len(s) % 8))
+
+def totp(secret_b32, t=None, step=30, digits=6):
+    counter = int((t if t is not None else time.time()) // step)
+    msg = struct.pack(">Q", counter)
+    h = hmac.new(_b32_dec(secret_b32), msg, hashlib.sha1).digest()
+    off = h[-1] & 0x0F
+    code = (struct.unpack(">I", h[off:off + 4])[0] & 0x7FFFFFFF) % (10 ** digits)
+    return str(code).zfill(digits)
+
+def totp_verify(secret_b32, code, step=30):
+    if not code:
+        return False
+    code = str(code).strip().replace(" ", "")
+    now = time.time()
+    return any(hmac.compare_digest(totp(secret_b32, now + off * step), code) for off in (-1, 0, 1))
+
+# ---------------------------------------------------------------- rate limiting (external API)
+_RATE = {}
+_RATE_LOCK = threading.Lock()
+
+def rate_check(key, limit_per_min):
+    if not limit_per_min:
+        return True, 0
+    now = time.time()
+    with _RATE_LOCK:
+        q = _RATE.setdefault(key, [])
+        cutoff = now - 60
+        while q and q[0] < cutoff:
+            q.pop(0)
+        if len(q) >= limit_per_min:
+            return False, int(60 - (now - q[0]))
+        q.append(now)
+        return True, 0
+
+# ---------------------------------------------------------------- language detection (依存なし)
+def detect_language(text):
+    counts = {"ja": 0, "ko": 0, "zh": 0, "ar": 0, "he": 0, "ru": 0, "la": 0}
+    for ch in text:
+        o = ord(ch)
+        if 0x3040 <= o <= 0x30FF:
+            counts["ja"] += 2               # かな = 日本語確定寄り
+        elif 0xAC00 <= o <= 0xD7A3:
+            counts["ko"] += 1
+        elif 0x4E00 <= o <= 0x9FFF:
+            counts["zh"] += 1               # 漢字 (日本語にも出る)
+        elif 0x0600 <= o <= 0x06FF:
+            counts["ar"] += 1
+        elif 0x0590 <= o <= 0x05FF:
+            counts["he"] += 1
+        elif 0x0400 <= o <= 0x04FF:
+            counts["ru"] += 1
+        elif 0x41 <= (o & ~0x20) <= 0x5A:
+            counts["la"] += 1
+    if counts["ja"]:
+        return "ja"
+    if counts["zh"] and not counts["ko"]:
+        return "zh"
+    best = max(counts, key=counts.get)
+    return best if counts[best] else "und"
+
+RTL_LANGS = {"ar", "he", "fa", "ur"}
 
 # ---------------------------------------------------------------- AI engines
 def _percentile(sorted_vals, q):
@@ -305,8 +403,8 @@ def run_ai_job(job_id):
                                     payload.get("hop", 0.1), float(payload.get("duration", 0)))
             v_start, v_end = detect_vocal_range(payload.get("envelope") or [], payload.get("hop", 0.1),
                                                 float(payload.get("duration", 0)))
-            result = {"timestamps": ts, "vocal_start": v_start, "vocal_end": v_end,
-                      "language": payload.get("language", "ja")}
+            lang = payload.get("language") or detect_language(payload.get("lyrics_text", ""))
+            result = {"timestamps": ts, "vocal_start": v_start, "vocal_end": v_end, "language": lang}
         elif kind == "analyze-scene":
             upd(20, "BPM・スペクトル解析 (Librosa)")
             upd(60, "シーン境界検出")
@@ -315,9 +413,12 @@ def run_ai_job(job_id):
             result = {"sections": secs}
         elif kind == "translate-lyrics":
             upd(30, "言語検出 (langdetect)")
+            src_lang = detect_language(payload.get("lyrics_text", ""))
             upd(60, "AI翻訳 (DeepL / GPT-4o)")
-            lines, engine = translate_engine(payload.get("lyrics_text", ""), payload.get("target", "en"))
-            result = {"lines": lines, "engine": engine, "target": payload.get("target", "en")}
+            target = payload.get("target", "en")
+            lines, engine = translate_engine(payload.get("lyrics_text", ""), target)
+            result = {"lines": lines, "engine": engine, "target": target,
+                      "source_language": src_lang, "rtl": target.split("-")[0].lower() in RTL_LANGS}
         else:
             raise ValueError(f"unknown job kind {kind}")
         con.execute("UPDATE ai_jobs SET status='completed',progress_pct=100,stage='完了',result_json=?,completed_at=? WHERE id=?",
@@ -337,14 +438,15 @@ def run_render_job(job_id, src_path):
         return
     settings = json.loads(job["output_settings_json"] or "{}")
     fmt = settings.get("format", "mp4")
+    ext = {"mp4": "mp4", "webm": "webm", "prores": "mov", "gif": "gif"}.get(fmt, "mp4")
     try:
         con.execute("UPDATE render_jobs SET status='processing',progress_pct=5 WHERE id=?", (job_id,))
         con.commit()
-        out_name = f"{job_id}.{fmt if fmt in ('mp4','webm') else 'mp4'}"
+        out_name = f"{job_id}.{ext}"
         out_path = os.path.join(RENDERS, out_name)
         if fmt == "webm" or not FFMPEG:
-            os.replace(src_path, os.path.join(RENDERS, f"{job_id}.webm"))
             out_name = f"{job_id}.webm"
+            os.replace(src_path, os.path.join(RENDERS, out_name))
         else:
             dur = 0.0
             try:
@@ -353,9 +455,15 @@ def run_render_job(job_id, src_path):
                 dur = float(pr.stdout.strip() or 0)
             except Exception:
                 pass
-            cmd = [FFMPEG, "-y", "-i", src_path, "-c:v", "libx264", "-preset", "fast",
-                   "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-c:a", "aac", "-b:a", "192k",
-                   "-progress", "pipe:1", "-nostats", out_path]
+            if fmt == "prores":            # ProRes 422 (映像制作ワークフロー, 仕様 2.6.2)
+                vargs = ["-c:v", "prores_ks", "-profile:v", "2", "-pix_fmt", "yuv422p10le", "-c:a", "pcm_s16le"]
+            elif fmt == "gif":             # SNSサムネイル用GIF (palettegenで高品質化)
+                vargs = ["-vf", "fps=12,scale=640:-1:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse",
+                         "-an", "-loop", "0"]
+            else:                          # MP4 H.264 + AAC
+                vargs = ["-c:v", "libx264", "-preset", "fast", "-crf", "19", "-pix_fmt", "yuv420p",
+                         "-movflags", "+faststart", "-c:a", "aac", "-b:a", "192k"]
+            cmd = [FFMPEG, "-y", "-i", src_path, *vargs, "-progress", "pipe:1", "-nostats", out_path]
             proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
             for line in proc.stdout:
                 m = re.match(r"out_time_ms=(\d+)", line.strip())
@@ -526,7 +634,7 @@ def seed():
         return
     now = time.time()
     uid, wid = str(uuid.uuid4()), str(uuid.uuid4())
-    con.execute("INSERT INTO users VALUES(?,?,?,?,?,?,?)",
+    con.execute("INSERT INTO users(id,email,password_hash,name,avatar_url,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
                 (uid, "demo@lyricflow.app", hash_pw("demo1234"), "Kaito", None, now, now))
     con.execute("INSERT INTO workspaces VALUES(?,?,?,?,?,?)",
                 (wid, "Demo Studio", "team",
@@ -536,7 +644,7 @@ def seed():
     for m_email, m_name, role in [("hanako@lyricflow.app", "Hanako Suzuki", "Editor"),
                                   ("kenji@lyricflow.app", "Kenji Tanaka", "Viewer")]:
         mid = str(uuid.uuid4())
-        con.execute("INSERT INTO users VALUES(?,?,?,?,?,?,?)", (mid, m_email, hash_pw("demo1234"), m_name, None, now, now))
+        con.execute("INSERT INTO users(id,email,password_hash,name,avatar_url,created_at,updated_at) VALUES(?,?,?,?,?,?,?)", (mid, m_email, hash_pw("demo1234"), m_name, None, now, now))
         con.execute("INSERT INTO workspace_users VALUES(?,?,?)", (wid, mid, role))
     for tid, title, author, price, cfg in BUILTIN_TEMPLATES:
         con.execute("INSERT INTO templates VALUES(?,?,?,?,?,?,?,?,?,?,?)",
@@ -565,6 +673,7 @@ def seed():
                    "overlay": [{"id": "ov1", "type": "text", "text": "星空のメロディー", "x": 0.5, "y": 0.12,
                                 "start": 0.5, "end": 5.5, "size": 34, "color": "#00d4ff"}]},
         "scenes": sections, "fx": tpl["fx"], "colors": tpl["colors"], "particles": tpl["particles"],
+        "watermark": False,
     }
     pid = str(uuid.uuid4())
     con.execute("INSERT INTO projects VALUES(?,?,?,?,?,?,?,?,?)",
@@ -747,7 +856,7 @@ class Handler(BaseHTTPRequestHandler):
                         return self.err(409, "email_taken", "このメールアドレスは登録済みです")
                     now = time.time()
                     uid, wid = str(uuid.uuid4()), str(uuid.uuid4())
-                    con.execute("INSERT INTO users VALUES(?,?,?,?,?,?,?)", (uid, email, hash_pw(pw), name, None, now, now))
+                    con.execute("INSERT INTO users(id,email,password_hash,name,avatar_url,created_at,updated_at) VALUES(?,?,?,?,?,?,?)", (uid, email, hash_pw(pw), name, None, now, now))
                     con.execute("INSERT INTO workspaces VALUES(?,?,?,?,?,?)",
                                 (wid, f"{name} の Workspace", "free", None, uid, now))
                     con.execute("INSERT INTO workspace_users VALUES(?,?,?)", (wid, uid, "Owner"))
@@ -759,6 +868,12 @@ class Handler(BaseHTTPRequestHandler):
                     row = con.execute("SELECT * FROM users WHERE email=?", (email,)).fetchone()
                     if not row or not check_pw(b.get("password") or "", row["password_hash"] or ""):
                         return self.err(401, "invalid_credentials", "メールアドレスまたはパスワードが違います")
+                    if row["mfa_enabled"]:                # 仕様 2.1.1: TOTP多要素認証
+                        code = b.get("mfa_code")
+                        if not code:
+                            return self.send_json({"mfa_required": True})
+                        if not totp_verify(row["mfa_secret"], code):
+                            return self.err(401, "invalid_mfa", "認証コードが正しくありません")
                     return self.send_json({"access_token": make_token(row["id"]), "refresh_token": make_token(row["id"], "refresh"),
                                            "user": {"id": row["id"], "email": row["email"], "name": row["name"]}})
                 if s[1] == "refresh" and method == "POST":
@@ -775,6 +890,18 @@ class Handler(BaseHTTPRequestHandler):
                 wid = self.api_key_ws()
                 if not wid:
                     return self.err(401, "invalid_api_key", "X-API-Key が無効です")
+                # 仕様 6.6 / 2.7.2: プラン別レート制限 (サブスクAPIとは独立)
+                ok, retry = rate_check("apikey:" + self.headers.get("X-API-Key", ""),
+                                       plan_limits(ws_plan(con, wid))["api_rate"])
+                if not ok:
+                    self.send_response(429)
+                    self.send_header("Retry-After", str(retry))
+                    self.send_header("Content-Type", "application/json; charset=utf-8")
+                    body = json.dumps({"error": {"code": "rate_limited", "message": f"レート制限を超えました。{retry}秒後に再試行してください。"}}).encode()
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
                 if s[1] == "templates" and method == "GET":
                     rows = con.execute("SELECT id,title,author,price_usd,data_json FROM templates WHERE is_public=1").fetchall()
                     return self.send_json({"templates": [{"id": r["id"], "title": r["title"], "author": r["author"],
@@ -811,16 +938,44 @@ class Handler(BaseHTTPRequestHandler):
                 return r["role"] if r else None
 
             if s[0] == "me" and method == "GET":
-                u = con.execute("SELECT id,email,name FROM users WHERE id=?", (uid,)).fetchone()
+                u = con.execute("SELECT id,email,name,mfa_enabled FROM users WHERE id=?", (uid,)).fetchone()
                 wss = con.execute("""SELECT w.*, wu.role FROM workspaces w
                                      JOIN workspace_users wu ON wu.workspace_id=w.id WHERE wu.user_id=?""", (uid,)).fetchall()
                 out = []
                 for w in wss:
-                    used = con.execute("SELECT COALESCE(SUM(size_bytes),0) s FROM assets WHERE workspace_id=?", (w["id"],)).fetchone()["s"]
-                    out.append({"id": w["id"], "name": w["name"], "plan_type": w["plan_type"], "role": w["role"],
-                                "brand_kit": json.loads(w["brand_kit_json"] or "null"), "storage_used": used,
-                                "storage_limit": PLAN_LIMITS.get(w["plan_type"], PLAN_LIMITS["free"])["storage"]})
-                return self.send_json({"user": dict(u), "workspaces": out, "ffmpeg": bool(FFMPEG)})
+                    plan, lim, usage = usage_snapshot(con, w["id"])
+                    out.append({"id": w["id"], "name": w["name"], "plan_type": plan, "role": w["role"],
+                                "brand_kit": json.loads(w["brand_kit_json"] or "null"), "storage_used": usage["storage"],
+                                "storage_limit": lim["storage"], "limits": lim, "usage": usage})
+                return self.send_json({"user": {"id": u["id"], "email": u["email"], "name": u["name"],
+                                                "mfa_enabled": bool(u["mfa_enabled"])},
+                                       "workspaces": out, "ffmpeg": bool(FFMPEG)})
+
+            # ---------- MFA (TOTP) ----------
+            if s[0] == "mfa":
+                urow = con.execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone()
+                if len(s) == 2 and s[1] == "setup" and method == "POST":
+                    secret = _b32(secrets.token_bytes(20))
+                    con.execute("UPDATE users SET mfa_secret=? WHERE id=?", (secret, uid))
+                    con.commit()
+                    label = urllib.parse.quote(f"LyricFlow AI:{urow['email']}")
+                    uri = f"otpauth://totp/{label}?secret={secret}&issuer=LyricFlow%20AI&digits=6&period=30"
+                    return self.send_json({"secret": secret, "otpauth_uri": uri, "current_code": totp(secret)})
+                if len(s) == 2 and s[1] == "enable" and method == "POST":
+                    if not urow["mfa_secret"]:
+                        return self.err(400, "no_secret", "先に /mfa/setup を実行してください")
+                    if not totp_verify(urow["mfa_secret"], self.json_body().get("code")):
+                        return self.err(401, "invalid_mfa", "認証コードが正しくありません")
+                    con.execute("UPDATE users SET mfa_enabled=1 WHERE id=?", (uid,))
+                    con.commit()
+                    return self.send_json({"ok": True, "mfa_enabled": True})
+                if len(s) == 2 and s[1] == "disable" and method == "POST":
+                    if urow["mfa_enabled"] and not totp_verify(urow["mfa_secret"], self.json_body().get("code")):
+                        return self.err(401, "invalid_mfa", "認証コードが正しくありません")
+                    con.execute("UPDATE users SET mfa_enabled=0,mfa_secret=NULL WHERE id=?", (uid,))
+                    con.commit()
+                    return self.send_json({"ok": True, "mfa_enabled": False})
+                return self.err(404, "not_found", "unknown mfa endpoint")
 
             # ---------- workspaces/{id}/... ----------
             if s[0] == "workspaces" and len(s) >= 3:
@@ -842,6 +997,9 @@ class Handler(BaseHTTPRequestHandler):
                     if method == "POST":
                         if role == "Viewer":
                             return self.err(403, "forbidden", "Viewerはプロジェクトを作成できません")
+                        plan, lim, usage = usage_snapshot(con, wid)
+                        if lim["projects"] is not None and usage["projects"] >= lim["projects"]:
+                            return self.err(402, "plan_limit", f"{plan.upper()}プランのプロジェクト上限（{lim['projects']}件）に達しました。Proにアップグレードすると無制限になります。")
                         b = self.json_body()
                         tpl_id = b.get("template", "tpl-neon-city")
                         tpl_row = con.execute("SELECT data_json FROM templates WHERE id=?", (tpl_id,)).fetchone()
@@ -877,6 +1035,11 @@ class Handler(BaseHTTPRequestHandler):
                                 "ttf": "font", "otf": "font", "woff2": "font"}.get(ext.lstrip("."))
                         if not kind:
                             return self.err(400, "bad_type", f"未対応のファイル形式です: {ext}")
+                        plan, lim, usage = usage_snapshot(con, wid)
+                        if kind == "font" and not lim["custom_font"]:
+                            return self.err(402, "plan_limit", f"カスタムフォントはProプラン以上の機能です（現在: {plan.upper()}）。")
+                        if usage["storage"] + len(f["data"]) > lim["storage"]:
+                            return self.err(402, "storage_full", f"ストレージ上限（{lim['storage'] >> 30}GB）を超えます。不要なアセットを削除するかアップグレードしてください。")
                         aid = str(uuid.uuid4())
                         fname = aid + ext
                         with open(os.path.join(UPLOADS, fname), "wb") as fh:
@@ -900,9 +1063,21 @@ class Handler(BaseHTTPRequestHandler):
                     rows = con.execute("""SELECT r.*, p.title FROM render_jobs r JOIN projects p ON p.id=r.project_id
                                           WHERE p.workspace_id=? ORDER BY r.created_at DESC LIMIT 30""", (wid,)).fetchall()
                     return self.send_json({"renders": [dict(r) for r in rows]})
+                if sub == "plan" and method == "PUT":
+                    # デモ用: プラン変更 (本番はStripe Checkout/Customer Portal経由)
+                    if role not in ("Owner",):
+                        return self.err(403, "forbidden", "プラン変更はOwnerのみ可能です")
+                    newp = self.json_body().get("plan_type")
+                    if newp not in PLAN_LIMITS:
+                        return self.err(400, "bad_plan", "不正なプランです")
+                    con.execute("UPDATE workspaces SET plan_type=? WHERE id=?", (newp, wid))
+                    con.commit()
+                    return self.send_json({"ok": True, "plan_type": newp})
                 if sub == "brand-kit" and method == "PUT":
                     if role in ("Viewer",):
                         return self.err(403, "forbidden", "権限がありません")
+                    if not plan_limits(ws_plan(con, wid))["brand_kit"]:
+                        return self.err(402, "plan_limit", "ブランドキットはTeamプラン以上の機能です。")
                     con.execute("UPDATE workspaces SET brand_kit_json=? WHERE id=?",
                                 (json.dumps(self.json_body(), ensure_ascii=False), wid))
                     con.commit()
@@ -924,7 +1099,7 @@ class Handler(BaseHTTPRequestHandler):
                         if not u:
                             nid = str(uuid.uuid4())
                             now = time.time()
-                            con.execute("INSERT INTO users VALUES(?,?,?,?,?,?,?)",
+                            con.execute("INSERT INTO users(id,email,password_hash,name,avatar_url,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
                                         (nid, email, hash_pw(secrets.token_hex(8)), email.split("@")[0], None, now, now))
                             u = con.execute("SELECT * FROM users WHERE id=?", (nid,)).fetchone()
                         con.execute("INSERT OR REPLACE INTO workspace_users VALUES(?,?,?)", (wid, u["id"], new_role))
@@ -954,7 +1129,9 @@ class Handler(BaseHTTPRequestHandler):
                 if not role:
                     return self.err(403, "forbidden", "アクセス権がありません")
                 if len(s) == 2 and method == "GET":
-                    return self.send_json(dict(row) | {"timeline_data": json.loads(row["timeline_data_json"]), "role": role})
+                    plan = ws_plan(con, row["workspace_id"])
+                    return self.send_json(dict(row) | {"timeline_data": json.loads(row["timeline_data_json"]),
+                                                       "role": role, "plan": plan, "watermark": plan_limits(plan)["watermark"]})
                 if len(s) == 2 and method == "PUT":
                     if role == "Viewer":
                         return self.err(403, "forbidden", "Viewerは編集できません")
@@ -986,6 +1163,26 @@ class Handler(BaseHTTPRequestHandler):
                                  row["timeline_data_json"], row["aspect_ratio"], row["thumbnail_url"], now, now))
                     con.commit()
                     return self.send_json({"id": nid}, 201)
+                if len(s) == 3 and s[2] == "publish-template" and method == "POST":
+                    # 仕様 2.7.1: プロジェクトをテンプレートとして公開
+                    if role == "Viewer":
+                        return self.err(403, "forbidden", "権限がありません")
+                    b = self.json_body()
+                    tl = json.loads(row["timeline_data_json"])
+                    cfg = {"scene": tl.get("sceneDefault", "city"),
+                           "particles": tl.get("particles", "stars"),
+                           "anim": tl.get("lyricStyle", {}).get("anim", "glow-pop"),
+                           "colors": tl.get("colors", BUILTIN_TEMPLATES[0][4]["colors"]),
+                           "font": tl.get("lyricStyle", {}).get("font", "'Noto Sans JP', sans-serif"),
+                           "fx": tl.get("fx", BUILTIN_TEMPLATES[0][4]["fx"])}
+                    author = con.execute("SELECT name FROM users WHERE id=?", (uid,)).fetchone()["name"]
+                    tid = str(uuid.uuid4())
+                    price = max(0.0, float(b.get("price_usd", 0) or 0))
+                    con.execute("INSERT INTO templates VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                                (tid, row["workspace_id"], b.get("title") or row["title"], author, None,
+                                 json.dumps(cfg, ensure_ascii=False), 1, price, 5.0, 0, time.time()))
+                    con.commit()
+                    return self.send_json({"id": tid, "price_usd": price}, 201)
 
             # ---------- AI jobs ----------
             if s[0] == "ai":
@@ -994,6 +1191,10 @@ class Handler(BaseHTTPRequestHandler):
                     wid = b.get("workspace_id")
                     if wid and not ws_role(wid):
                         return self.err(403, "forbidden", "アクセス権がありません")
+                    if wid and s[1] == "sync-lyrics":       # 仕様 9.1: FreeはAI歌詞同期 月3回
+                        plan, lim, usage = usage_snapshot(con, wid)
+                        if lim["ai_month"] is not None and usage["ai_month"] >= lim["ai_month"]:
+                            return self.err(402, "plan_limit", f"{plan.upper()}プランのAI歌詞同期は月{lim['ai_month']}回までです。Proで無制限になります。")
                     jid = str(uuid.uuid4())
                     con.execute("INSERT INTO ai_jobs VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
                                 (jid, wid, uid, s[1], "pending", 0, None,
@@ -1022,6 +1223,15 @@ class Handler(BaseHTTPRequestHandler):
                     prj = con.execute("SELECT * FROM projects WHERE id=?", (pid,)).fetchone()
                     if not prj or not ws_role(prj["workspace_id"]):
                         return self.err(403, "forbidden", "アクセス権がありません")
+                    # 仕様 9.1: プラン別のエクスポート回数/解像度/フォーマット制限
+                    plan, lim, usage = usage_snapshot(con, prj["workspace_id"])
+                    if lim["exports_month"] is not None and usage["exports_month"] >= lim["exports_month"]:
+                        return self.err(402, "plan_limit", f"{plan.upper()}プランの月間エクスポート数（{lim['exports_month']}回）に達しました。")
+                    fmt = settings.get("format", "mp4")
+                    if fmt not in lim["formats"]:
+                        return self.err(402, "plan_limit", f"{fmt.upper()}出力は現在のプラン（{plan.upper()}）では利用できません。")
+                    if int(settings.get("height", 720)) > lim["max_res"]:
+                        return self.err(402, "plan_limit", f"{plan.upper()}プランの最大解像度は{lim['max_res']}pです。")
                     jid = str(uuid.uuid4())
                     src = os.path.join(RENDERS, f"{jid}_src.webm")
                     with open(src, "wb") as fh:

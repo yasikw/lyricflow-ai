@@ -32,7 +32,7 @@ const App = {
       return;
     }
     this.renderShell(app, page);
-    const fn = { dashboard: this.pageDashboard, projects: this.pageProjects, templates: this.pageTemplates, assets: this.pageAssets, team: this.pageTeam }[page];
+    const fn = { dashboard: this.pageDashboard, projects: this.pageProjects, templates: this.pageTemplates, assets: this.pageAssets, team: this.pageTeam, account: this.pageAccount }[page];
     if (fn) await fn.call(this, document.getElementById('page'));
     else location.hash = '#/dashboard';
   },
@@ -98,7 +98,12 @@ const App = {
       try {
         const body = { email: document.getElementById('f-email').value, password: document.getElementById('f-pass').value };
         if (!isLogin) body.name = document.getElementById('f-name').value;
-        const d = await API.post('/auth/' + (isLogin ? 'login' : 'register'), body);
+        let d = await API.post('/auth/' + (isLogin ? 'login' : 'register'), body);
+        if (d.mfa_required) {                     // 二段階認証チャレンジ
+          const code = prompt('二段階認証コード(6桁)を入力してください');
+          if (!code) return;
+          d = await API.post('/auth/login', { ...body, mfa_code: code });
+        }
         API.setTokens(d.access_token, d.refresh_token);
         const me = await API.get('/me');
         this.user = me.user; this.workspaces = me.workspaces; this.ws = me.workspaces[0]; this.me = me;
@@ -117,6 +122,7 @@ const App = {
       ['templates', 'テンプレート', 'M4 4h7v7H4zM13 4h7v4h-7zM13 11h7v9h-7zM4 14h7v6H4z'],
       ['assets', 'アセット', 'M4 5h16v14H4zM4 15l4-4 3 3 5-5 4 4'],
       ['team', 'チーム / API', 'M16 11a4 4 0 10-8 0M2 20c0-3 4-5 10-5s10 2 10 5'],
+      ['account', 'アカウント', 'M12 2a5 5 0 100 10 5 5 0 000-10zM3 20a9 9 0 0118 0'],
     ];
     app.innerHTML = `
     <div class="shell">
@@ -136,7 +142,13 @@ const App = {
       </aside>
       <div class="main">
         <div class="topbar">
-          <span class="ws-pill">🎬 <b>${esc(w.name)}</b> · ${esc(w.role)}</span>
+          <div class="ws-switch" id="ws-switch">
+            <span class="ws-pill">🎬 <b>${esc(w.name)}</b> · ${esc(w.role)} <span style="color:var(--faint)">▾</span></span>
+            <div class="ws-menu" id="ws-menu" style="display:none">
+              ${this.workspaces.map(x => `<button class="ws-opt ${x.id === w.id ? 'sel' : ''}" data-ws="${x.id}">
+                <span>${esc(x.name)}</span><span class="plan-chip" style="margin:0">${x.plan_type.toUpperCase()}</span></button>`).join('')}
+            </div>
+          </div>
           <div style="display:flex;align-items:center;gap:12px">
             <span style="font-size:12.5px;color:var(--muted)">${esc(this.user.name)}</span>
             <span class="avatar">${esc(this.user.name[0] || '?')}</span>
@@ -151,6 +163,17 @@ const App = {
       await API.post('/auth/logout', {}).catch(() => {});
       API.clear(); this.user = null; location.hash = '#/login';
     };
+    // ワークスペース切替
+    const menu = document.getElementById('ws-menu');
+    document.querySelector('#ws-switch .ws-pill').onclick = e => {
+      e.stopPropagation();
+      menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
+    };
+    document.addEventListener('click', () => { if (menu) menu.style.display = 'none'; }, { once: true });
+    app.querySelectorAll('.ws-opt').forEach(b => b.onclick = () => {
+      const nw = this.workspaces.find(x => x.id === b.dataset.ws);
+      if (nw && nw.id !== this.ws.id) { this.ws = nw; this.route(); }
+    });
   },
 
   /* ================= dashboard ================= */
@@ -463,6 +486,103 @@ const App = {
       navigator.clipboard.writeText(b.dataset.copy);
       toast('コピーしました', 'ok');
     });
+  },
+
+  /* ================= account: plan + usage + MFA ================= */
+  async pageAccount(el) {
+    const me = await API.get('/me');
+    this.me = me; this.user = me.user;
+    const w = me.workspaces.find(x => x.id === this.ws.id) || me.workspaces[0];
+    this.ws = w;
+    const u = w.usage || {}, lim = w.limits || {};
+    const fmtLim = (v, suffix = '') => v === null || v === undefined ? '無制限' : v + suffix;
+    const PLANS = [
+      ['free', 'Free', '$0', ['5プロジェクト', '月3エクスポート', '720p / 透かしあり', 'AI同期 月3回', 'ストレージ 1GB']],
+      ['pro', 'Pro', '$19/月', ['無制限プロジェクト', '無制限エクスポート', '4K / 透かしなし', 'AI同期 無制限', 'ストレージ 10GB', 'カスタムフォント', 'GIF出力', '優先レンダリング']],
+      ['team', 'Team', '$49/人・月', ['Proの全機能', 'ブランドキット', 'チーム共同編集', 'ProRes出力', 'ストレージ 100GB', '専任CSM']],
+    ];
+    el.innerHTML = `
+      <div class="page-head"><div><h1>アカウント・プラン</h1><p>サブスクリプション・使用状況・セキュリティ設定</p></div></div>
+      <div class="panel">
+        <h3>今月の使用状況 <span class="plan-chip" style="margin-left:6px">${w.plan_type.toUpperCase()}</span></h3>
+        <p class="p-sub">ワークスペース「${esc(w.name)}」の消費状況</p>
+        <div class="usage-grid">
+          <div class="usage-item"><div class="u-label">プロジェクト</div><div class="u-val">${u.projects ?? 0} / ${fmtLim(lim.projects)}</div></div>
+          <div class="usage-item"><div class="u-label">エクスポート (今月)</div><div class="u-val">${u.exports_month ?? 0} / ${fmtLim(lim.exports_month)}</div></div>
+          <div class="usage-item"><div class="u-label">AI歌詞同期 (今月)</div><div class="u-val">${u.ai_month ?? 0} / ${fmtLim(lim.ai_month)}</div></div>
+          <div class="usage-item"><div class="u-label">ストレージ</div><div class="u-val" style="font-size:15px">${fmtBytes(u.storage ?? 0)} / ${fmtBytes(lim.storage)}</div></div>
+          <div class="usage-item"><div class="u-label">最大解像度</div><div class="u-val">${lim.max_res || 720}p</div></div>
+        </div>
+      </div>
+      <div class="panel">
+        <h3>プラン変更</h3>
+        <p class="p-sub">本番環境ではStripe Checkout / Customer Portal 経由で決済します（このデモでは即時切替）。</p>
+        <div class="plan-card-row">
+          ${PLANS.map(([id, name, price, feats]) => `
+            <div class="plan-card ${w.plan_type === id ? 'current' : ''}">
+              <h4>${name}</h4><div class="price">${price}</div>
+              <ul>${feats.map(f => `<li>✓ ${f}</li>`).join('')}</ul>
+              ${w.plan_type === id ? '<button class="btn sm" disabled style="width:100%;justify-content:center">現在のプラン</button>'
+                : `<button class="btn primary sm" data-plan="${id}" style="width:100%;justify-content:center">${name}に変更</button>`}
+            </div>`).join('')}
+        </div>
+      </div>
+      <div class="panel">
+        <h3>二段階認証 (MFA / TOTP)</h3>
+        <p class="p-sub">仕様 2.1.1: Time-based One-Time Password。認証アプリ(Google Authenticator等)で6桁コードを生成します。</p>
+        <div id="mfa-area">${me.user.mfa_enabled
+          ? `<div style="display:flex;align-items:center;gap:12px"><span class="badge exported">有効</span>
+             <span style="font-size:12.5px;color:var(--muted)">ログイン時に認証コードが必要です</span>
+             <button class="btn danger sm" id="mfa-disable" style="margin-left:auto">無効化</button></div>`
+          : `<div style="display:flex;align-items:center;gap:12px"><span class="badge draft">未設定</span>
+             <button class="btn sm" id="mfa-setup" style="margin-left:auto">MFAを設定</button></div>`}
+        </div>
+      </div>`;
+    el.querySelectorAll('[data-plan]').forEach(b => b.onclick = async () => {
+      try {
+        await API.put(`/workspaces/${w.id}/plan`, { plan_type: b.dataset.plan });
+        toast(`${b.dataset.plan.toUpperCase()}プランに変更しました`, 'ok');
+        // ローカルのworkspace情報を更新
+        const fresh = await API.get('/me');
+        this.workspaces = fresh.workspaces; this.me = fresh;
+        this.ws = fresh.workspaces.find(x => x.id === w.id);
+        this.route();
+      } catch (e) { toast(e.message, 'err'); }
+    });
+    const disableBtn = el.querySelector('#mfa-disable');
+    if (disableBtn) disableBtn.onclick = async () => {
+      const code = prompt('無効化を確認するため、現在の認証コード(6桁)を入力してください');
+      if (code === null) return;
+      try { await API.post('/mfa/disable', { code }); toast('MFAを無効化しました', 'ok'); this.route(); }
+      catch (e) { toast(e.message, 'err'); }
+    };
+    const setupBtn = el.querySelector('#mfa-setup');
+    if (setupBtn) setupBtn.onclick = () => this.mfaSetup(el.querySelector('#mfa-area'));
+  },
+
+  async mfaSetup(area) {
+    const d = await API.post('/mfa/setup', {});
+    area.innerHTML = `
+      <div style="display:flex;gap:20px;flex-wrap:wrap;align-items:flex-start">
+        <div>
+          <div style="font-size:12px;color:var(--muted);margin-bottom:8px">認証アプリに手動で登録するキー:</div>
+          <code style="background:var(--bg-deep);border:1px solid var(--border);padding:8px 12px;border-radius:6px;color:var(--cyan);font-size:13px;letter-spacing:.1em">${d.secret}</code>
+          <div style="font-size:11.5px;color:var(--faint);margin-top:14px">現在のコード(参考・30秒毎に更新):</div>
+          <div class="mfa-code-big" id="mfa-live">${d.current_code}</div>
+        </div>
+        <div style="flex:1;min-width:200px">
+          <label class="fld"><span>認証アプリに表示された6桁コードを入力</span>
+            <input class="input" id="mfa-code" placeholder="000000" maxlength="6" inputmode="numeric" style="letter-spacing:.3em;font-family:Inter,monospace"></label>
+          <button class="btn primary sm" id="mfa-enable" style="width:100%;justify-content:center">有効化する</button>
+        </div>
+      </div>`;
+    area.querySelector('#mfa-enable').onclick = async () => {
+      try {
+        await API.post('/mfa/enable', { code: area.querySelector('#mfa-code').value });
+        toast('二段階認証を有効化しました', 'ok');
+        this.route();
+      } catch (e) { toast(e.message, 'err'); }
+    };
   },
 };
 

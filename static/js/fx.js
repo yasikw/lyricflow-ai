@@ -87,6 +87,22 @@ class FXEngine {
     this._vignette(ctx, W, H);
     const bloom = (fxActive.bloom ?? fx.bloom ?? 0.5) * boost;
     if (bloom > 0.05) this._bloomFlash(ctx, W, H, colors, bloom * energy * 0.5);
+    if (tl.watermark) this._watermark(ctx, W, H);
+  }
+
+  _watermark(ctx, W, H) {
+    // Freeプランの透かし (仕様 9.1)
+    ctx.save();
+    const fs = Math.max(13, W * 0.018);
+    ctx.font = `700 ${fs}px 'Noto Sans JP', sans-serif`;
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'bottom';
+    ctx.globalAlpha = 0.5;
+    ctx.fillStyle = '#ffffff';
+    ctx.shadowColor = 'rgba(0,0,0,0.6)';
+    ctx.shadowBlur = 6;
+    ctx.fillText('♪ LyricFlow AI', W - fs * 0.9, H - fs * 0.9);
+    ctx.restore();
   }
 
   _activeFx(t) {

@@ -7,6 +7,7 @@ const ASPECTS = { '16:9': [1280, 720], '9:16': [405, 720], '1:1': [720, 720], '4
 const EXPORT_RES = {
   '720p': { '16:9': [1280, 720], '9:16': [720, 1280], '1:1': [720, 720], '4:5': [720, 900] },
   '1080p': { '16:9': [1920, 1080], '9:16': [1080, 1920], '1:1': [1080, 1080], '4:5': [1080, 1350] },
+  '4k': { '16:9': [3840, 2160], '9:16': [2160, 3840], '1:1': [2160, 2160], '4:5': [2160, 2700] },
 };
 const ANIMS = [['glow-pop', 'グロウポップ'], ['fade', 'フェード'], ['fade-up', 'フェードアップ'], ['slide-up', 'スライドアップ'], ['pop-scale', 'ポップスケール'], ['glitch-in', 'グリッチイン']];
 const SCENES = [['city', 'ネオン都市'], ['sky', '夜空'], ['stars', '星空(高密度)'], ['grid', 'サイバーグリッド'], ['sunset', 'レトロサンセット'], ['flat', 'フラット']];
@@ -34,6 +35,9 @@ class Editor {
     this.project = p;
     this.tl = p.timeline_data;
     this.role = p.role;
+    this.plan = p.plan || 'free';
+    this.limits = (App.ws && App.ws.limits) || {};
+    this.tl.watermark = !!p.watermark;   // Freeプランは透かし表示（保存対象外の表示専用フラグ）
     const [tpls, assets] = await Promise.all([API.get('/templates'), API.get(`/workspaces/${p.workspace_id}/assets`)]);
     this.templates = tpls.templates;
     this.assets = assets.assets;
@@ -92,6 +96,7 @@ class Editor {
         <span class="autosave" id="autosave">自動保存: 30秒ごと</span>
         <div style="flex:1"></div>
         <span class="badge ${this.project.status}" id="status-badge">${this.project.status}</span>
+        <button class="btn sm" id="publish-btn" title="このプロジェクトをテンプレートとして公開">✦ テンプレ化</button>
         <button class="btn sm" id="save-btn">保存</button>
         <button class="btn primary sm" id="export-btn">⬆ エクスポート</button>
       </div>
@@ -145,6 +150,7 @@ class Editor {
     $('#back-btn').onclick = () => { location.hash = '#/projects'; };
     $('#save-btn').onclick = () => this.save();
     $('#export-btn').onclick = () => this.openExport();
+    $('#publish-btn').onclick = () => this.publishTemplate();
     $('#tp-play').onclick = () => this.togglePlay();
     $('#tp-start').onclick = () => this.seek(0);
     $('#tp-end').onclick = () => this.seek(this.tl.duration || 0);
@@ -656,6 +662,7 @@ class Editor {
   async save(silent) {
     if (!this.dirty && silent) return;
     const tlCopy = { ...this.tl };
+    delete tlCopy.watermark;   // 表示専用フラグは永続化しない
     try {
       await API.put('/projects/' + this.pid, { timeline_data: tlCopy });
       this.dirty = false;
@@ -665,25 +672,52 @@ class Editor {
     } catch (e) { if (!silent) toast('保存失敗: ' + e.message, 'err'); }
   }
 
+  /* ---------------- publish as template (仕様 2.7.1) ---------------- */
+  async publishTemplate() {
+    const title = prompt('テンプレート名を入力してください', this.project.title + ' Style');
+    if (!title) return;
+    const priceStr = prompt('販売価格 (USD)。無料は 0 を入力。\n※収益の70%がクリエイターに分配されます (Stripe Connect)', '0');
+    if (priceStr === null) return;
+    try {
+      await API.post(`/projects/${this.pid}/publish-template`, { title, price_usd: parseFloat(priceStr) || 0 });
+      toast(`テンプレート「${title}」をマーケットプレイスに公開しました`, 'ok');
+    } catch (e) { toast(e.message, 'err'); }
+  }
+
   /* ---------------- export ---------------- */
   openExport() {
     if (!this.tl.duration) return toast('先に音源を設定してください', 'err');
     const bg = document.createElement('div');
     bg.className = 'modal-bg';
-    const state = { res: '1080p', fmt: 'mp4', aspect: this.project.aspect_ratio };
+    const lim = this.limits || {};
+    const maxRes = lim.max_res || 2160;
+    const allowFmts = lim.formats || ['mp4', 'webm', 'gif', 'prores'];
+    const heights = { '720p': 720, '1080p': 1080, '4k': 2160 };
+    const state = { res: maxRes >= 1080 ? '1080p' : '720p', fmt: 'mp4', aspect: this.project.aspect_ratio };
+    const resOpt = (id, title, sub) => {
+      const locked = heights[id] > maxRes;
+      return `<div class="exp-opt ${id === state.res ? 'sel' : ''} ${locked ? 'locked' : ''}" data-res="${id}" ${locked ? 'data-locked="1"' : ''}><b>${title}${locked ? ' 🔒' : ''}</b><small>${locked ? 'Pro以上' : sub}</small></div>`;
+    };
+    const fmtOpt = (id, title, sub) => {
+      const locked = !allowFmts.includes(id);
+      return `<div class="exp-opt ${id === state.fmt ? 'sel' : ''} ${locked ? 'locked' : ''}" data-fmt="${id}" ${locked ? 'data-locked="1"' : ''}><b>${title}${locked ? ' 🔒' : ''}</b><small>${locked ? 'アップグレード' : sub}</small></div>`;
+    };
     bg.innerHTML = `
       <div class="modal">
         <div class="m-head"><h2>エクスポート / Export Video</h2><button class="x-btn">×</button></div>
         <div class="m-body">
-          <label class="fld"><span>解像度</span></label>
-          <div class="exp-grid" id="res-grid">
-            <div class="exp-opt sel" data-res="1080p"><b>1080p Full HD</b><small>本番出力推奨</small></div>
-            <div class="exp-opt" data-res="720p"><b>720p HD</b><small>高速・軽量</small></div>
+          <label class="fld"><span>解像度 (プラン: ${(this.plan || 'free').toUpperCase()} — 最大${maxRes}p)</span></label>
+          <div class="exp-grid" id="res-grid" style="grid-template-columns:1fr 1fr 1fr">
+            ${resOpt('720p', '720p HD', '高速・軽量')}
+            ${resOpt('1080p', '1080p FHD', '本番推奨')}
+            ${resOpt('4k', '4K UHD', '3840×2160')}
           </div>
           <label class="fld"><span>フォーマット</span></label>
-          <div class="exp-grid" id="fmt-grid">
-            <div class="exp-opt sel" data-fmt="mp4"><b>MP4 (H.264)</b><small>汎用配信 · ffmpeg変換</small></div>
-            <div class="exp-opt" data-fmt="webm"><b>WebM (VP9)</b><small>Web埋め込み</small></div>
+          <div class="exp-grid" id="fmt-grid" style="grid-template-columns:1fr 1fr">
+            ${fmtOpt('mp4', 'MP4 (H.264)', '汎用配信')}
+            ${fmtOpt('webm', 'WebM (VP9)', 'Web埋め込み')}
+            ${fmtOpt('prores', 'ProRes 422', '映像制作 (.mov)')}
+            ${fmtOpt('gif', 'GIF', 'SNSサムネイル')}
           </div>
           <label class="fld"><span>アスペクト比 (${state.aspect} — エディターで変更)</span></label>
           <label class="fld"><span>歌詞ファイル同時出力</span></label>
@@ -711,10 +745,12 @@ class Editor {
     bg.querySelector('#exp-cancel').onclick = close;
     bg.onclick = e => { if (e.target === bg) close(); };
     bg.querySelectorAll('#res-grid .exp-opt').forEach(o => o.onclick = () => {
+      if (o.dataset.locked) return toast('この解像度はProプラン以上で利用できます', 'err');
       bg.querySelectorAll('#res-grid .exp-opt').forEach(x => x.classList.toggle('sel', x === o));
       state.res = o.dataset.res;
     });
     bg.querySelectorAll('#fmt-grid .exp-opt').forEach(o => o.onclick = () => {
+      if (o.dataset.locked) return toast('このフォーマットは上位プランで利用できます', 'err');
       bg.querySelectorAll('#fmt-grid .exp-opt').forEach(x => x.classList.toggle('sel', x === o));
       state.fmt = o.dataset.fmt;
     });
@@ -777,7 +813,8 @@ class Editor {
     await this.audioCtx.resume();
     const stream = new MediaStream([...canvasStream.getVideoTracks(), ...this.audioDest.stream.getAudioTracks()]);
     const mime = MediaRecorder.isTypeSupported('video/webm;codecs=vp9,opus') ? 'video/webm;codecs=vp9,opus' : 'video/webm';
-    const rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: state.res === '1080p' ? 12_000_000 : 7_000_000 });
+    const bitrate = state.res === '4k' ? 40_000_000 : state.res === '1080p' ? 12_000_000 : 7_000_000;
+    const rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: bitrate });
     const chunks = [];
     rec.ondataavailable = e => e.data.size && chunks.push(e.data);
     this.recording = rec;
@@ -800,9 +837,10 @@ class Editor {
           setP('サーバーでエンコード中 (ffmpeg)…', 62 + j.progress_pct * 0.38);
           if (j.status === 'completed') {
             setP('完了', 100);
+            const ext = { mp4: 'mp4', webm: 'webm', prores: 'mov', gif: 'gif' }[state.fmt] || 'mp4';
             const done = bg.querySelector('#exp-done');
             done.style.display = 'block';
-            done.innerHTML = `<a class="btn primary" href="${j.output_url}" download="${esc(this.project.title)}.${state.fmt}" style="width:100%;justify-content:center">⬇ ${esc(this.project.title)}.${state.fmt} をダウンロード</a>`;
+            done.innerHTML = `<a class="btn primary" href="${j.output_url}" download="${esc(this.project.title)}.${ext}" style="width:100%;justify-content:center">⬇ ${esc(this.project.title)}.${ext} をダウンロード</a>`;
             this.project.status = 'exported';
             const badge = this.root.querySelector('#status-badge');
             if (badge) { badge.textContent = 'exported'; badge.className = 'badge exported'; }
