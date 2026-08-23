@@ -208,6 +208,9 @@ const App = {
           ${p.dur ? `<span class="dur">${fmtTime(p.dur)}</span>` : ''}</div>
         <div class="pc-menu">
           <button data-dup="${p.id}" title="複製">⧉</button>
+          ${p.status === 'archived'
+            ? `<button data-unarch="${p.id}" title="復元">↩</button>`
+            : `<button data-arch="${p.id}" title="アーカイブ">📥</button>`}
           <button data-del="${p.id}" title="削除">🗑</button>
         </div>
         <div class="pc-body">
@@ -237,6 +240,14 @@ const App = {
       await API.del('/projects/' + b.dataset.del);
       toast('削除しました', 'ok'); this.route();
     });
+    grid.querySelectorAll('[data-arch]').forEach(b => b.onclick = async () => {
+      await API.post(`/projects/${b.dataset.arch}/archive`);
+      toast('アーカイブしました', 'ok'); this.route();
+    });
+    grid.querySelectorAll('[data-unarch]').forEach(b => b.onclick = async () => {
+      await API.post(`/projects/${b.dataset.unarch}/unarchive`);
+      toast('復元しました', 'ok'); this.route();
+    });
   },
 
   async _templates() {
@@ -250,7 +261,7 @@ const App = {
         <div class="thumb"><canvas data-tthumb="${t.id}"></canvas></div>
         <div class="tc-body">
           <div class="tc-title">${esc(t.title)} <span class="price ${t.price_usd ? '' : 'free'}">${t.price_usd ? '$' + t.price_usd : 'Free'}</span></div>
-          <div class="tc-meta"><span>by ${esc(t.author)}</span><span>★ ${t.rating}</span><span>${t.sales} sales</span></div>
+          <div class="tc-meta"><span>by ${esc(t.author)}</span><span>★ ${t.rating}</span><span>${t.sales} sales</span>${t._genre ? `<span class="genre-tag">${t._genre}</span>` : ''}</div>
         </div>
       </div>`).join('');
     row.querySelectorAll('canvas[data-tthumb]').forEach(c => {
@@ -261,16 +272,25 @@ const App = {
   },
 
   /* ================= projects ================= */
-  async pageProjects(el) {
-    const pj = await API.get(`/workspaces/${this.ws.id}/projects`);
+  async pageProjects(el, showArchived) {
+    const pj = await API.get(`/workspaces/${this.ws.id}/projects${showArchived ? '?archived=1' : ''}`);
     el.innerHTML = `
       <div class="page-head">
-        <div><h1>プロジェクト</h1><p>${pj.projects.length} 件 · ワークスペース「${esc(this.ws.name)}」</p></div>
-        <button class="btn primary" id="new-p">+ 新規プロジェクト</button>
+        <div><h1>プロジェクト</h1><p>${pj.projects.length} 件 · ワークスペース「${esc(this.ws.name)}」${showArchived ? ' · アーカイブ済み' : ''}</p></div>
+        <div style="display:flex;gap:10px">
+          <button class="btn ${showArchived ? 'primary' : ''}" id="toggle-arch">${showArchived ? '← アクティブに戻る' : '📥 アーカイブ済み'}</button>
+          ${showArchived ? '' : '<button class="btn primary" id="new-p">+ 新規プロジェクト</button>'}
+        </div>
       </div>
       <div class="proj-grid" id="grid"></div>`;
-    el.querySelector('#new-p').onclick = () => this.newProjectModal();
-    this.renderProjectCards(el.querySelector('#grid'), pj.projects, true);
+    const np = el.querySelector('#new-p');
+    if (np) np.onclick = () => this.newProjectModal();
+    el.querySelector('#toggle-arch').onclick = () => this.pageProjects(el, !showArchived);
+    if (showArchived && !pj.projects.length) {
+      el.querySelector('#grid').innerHTML = '<div class="empty-note">アーカイブ済みのプロジェクトはありません</div>';
+    } else {
+      this.renderProjectCards(el.querySelector('#grid'), pj.projects, !showArchived);
+    }
   },
 
   async newProjectModal(preTpl) {
@@ -328,12 +348,46 @@ const App = {
   /* ================= templates marketplace ================= */
   async pageTemplates(el) {
     const templates = await this._templates();
+    const GENRE = { city: 'シティ', sky: 'ナイト', stars: 'ファンタジー', grid: 'サイバー', sunset: 'レトロ', flat: 'ミニマル' };
+    templates.forEach(t => { t._genre = GENRE[t.config?.scene] || 'その他'; });
+    const genres = [...new Set(templates.map(t => t._genre))];
+    const st = { q: '', price: 'all', rating: 0, genre: 'all', sort: 'popular' };
     el.innerHTML = `
       <div class="page-head">
         <div><h1>テンプレートマーケットプレイス</h1><p>クリエイター制作のMVテンプレート。売上の70%が制作者に還元されます (Stripe Connect)。</p></div>
       </div>
+      <div class="mkt-filters">
+        <input class="input mkt-search" id="mkt-q" placeholder="🔍 タイトル・作者で検索…">
+        <select class="input" id="mkt-genre"><option value="all">ジャンル: すべて</option>${genres.map(g => `<option value="${g}">${g}</option>`).join('')}</select>
+        <select class="input" id="mkt-price"><option value="all">価格: すべて</option><option value="free">無料のみ</option><option value="paid">有料のみ</option></select>
+        <select class="input" id="mkt-rating"><option value="0">評価: すべて</option><option value="4">★4.0以上</option><option value="4.5">★4.5以上</option></select>
+        <select class="input" id="mkt-sort"><option value="popular">人気順</option><option value="rating">評価順</option><option value="price_asc">価格が安い順</option><option value="price_desc">価格が高い順</option></select>
+      </div>
+      <div class="mkt-count" id="mkt-count"></div>
       <div class="tpl-row" id="mkt"></div>`;
-    this.renderTemplateCards(el.querySelector('#mkt'), templates);
+    const apply = () => {
+      let list = templates.filter(t => {
+        if (st.q && !(`${t.title} ${t.author}`.toLowerCase().includes(st.q.toLowerCase()))) return false;
+        if (st.genre !== 'all' && t._genre !== st.genre) return false;
+        if (st.price === 'free' && t.price_usd > 0) return false;
+        if (st.price === 'paid' && !(t.price_usd > 0)) return false;
+        if (t.rating < st.rating) return false;
+        return true;
+      });
+      const cmp = { popular: (a, b) => b.sales - a.sales, rating: (a, b) => b.rating - a.rating,
+                    price_asc: (a, b) => a.price_usd - b.price_usd, price_desc: (a, b) => b.price_usd - a.price_usd }[st.sort];
+      list.sort(cmp);
+      el.querySelector('#mkt-count').textContent = `${list.length} 件のテンプレート`;
+      const mkt = el.querySelector('#mkt');
+      if (!list.length) { mkt.innerHTML = '<div class="empty-note">条件に一致するテンプレートがありません</div>'; return; }
+      this.renderTemplateCards(mkt, list);
+    };
+    el.querySelector('#mkt-q').oninput = e => { st.q = e.target.value; apply(); };
+    el.querySelector('#mkt-genre').onchange = e => { st.genre = e.target.value; apply(); };
+    el.querySelector('#mkt-price').onchange = e => { st.price = e.target.value; apply(); };
+    el.querySelector('#mkt-rating').onchange = e => { st.rating = parseFloat(e.target.value); apply(); };
+    el.querySelector('#mkt-sort').onchange = e => { st.sort = e.target.value; apply(); };
+    apply();
   },
 
   /* ================= assets ================= */

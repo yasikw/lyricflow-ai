@@ -96,6 +96,7 @@ class Editor {
         <span class="autosave" id="autosave">自動保存: 30秒ごと</span>
         <div style="flex:1"></div>
         <span class="badge ${this.project.status}" id="status-badge">${this.project.status}</span>
+        <button class="btn sm" id="history-btn" title="バージョン履歴">🕑 履歴</button>
         <button class="btn sm" id="publish-btn" title="このプロジェクトをテンプレートとして公開">✦ テンプレ化</button>
         <button class="btn sm" id="save-btn">保存</button>
         <button class="btn primary sm" id="export-btn">⬆ エクスポート</button>
@@ -151,6 +152,7 @@ class Editor {
     $('#save-btn').onclick = () => this.save();
     $('#export-btn').onclick = () => this.openExport();
     $('#publish-btn').onclick = () => this.publishTemplate();
+    $('#history-btn').onclick = () => this.openHistory();
     $('#tp-play').onclick = () => this.togglePlay();
     $('#tp-start').onclick = () => this.seek(0);
     $('#tp-end').onclick = () => this.seek(this.tl.duration || 0);
@@ -670,6 +672,49 @@ class Editor {
       if (el) { el.textContent = '保存済み ' + new Date().toLocaleTimeString('ja-JP'); el.classList.add('saved'); }
       if (!silent) toast('プロジェクトを保存しました', 'ok');
     } catch (e) { if (!silent) toast('保存失敗: ' + e.message, 'err'); }
+  }
+
+  /* ---------------- version history + rollback (仕様 2.2) ---------------- */
+  async openHistory() {
+    await this.save(true);   // 現在の状態を保存してから履歴を出す
+    let data;
+    try { data = await API.get(`/projects/${this.pid}/versions`); }
+    catch (e) { return toast(e.message, 'err'); }
+    const bg = document.createElement('div');
+    bg.className = 'modal-bg';
+    const rows = data.versions.length ? data.versions.map((v, i) => `
+      <div class="ver-row">
+        <div class="ver-info">
+          <div class="ver-title">バージョン ${data.versions.length - i}${i === 0 ? ' <span class="badge draft" style="margin-left:6px">最新の保存前</span>' : ''}</div>
+          <div class="ver-meta">${new Date(v.created_at * 1000).toLocaleString('ja-JP')} · ${v.dur ? fmtTime(v.dur) : '—'} · ${v.tpl || ''}</div>
+        </div>
+        <button class="btn sm" data-restore="${v.id}">この版に復元</button>
+      </div>`).join('') : '<div class="empty-note">まだ履歴がありません。編集すると自動で版が記録されます（最大50件）。</div>';
+    bg.innerHTML = `
+      <div class="modal">
+        <div class="m-head"><h2>バージョン履歴</h2><button class="x-btn">×</button></div>
+        <div class="m-body">
+          <p class="p-sub" style="margin-bottom:12px">編集ごとに自動保存された版から復元できます（最大50件保持）。復元すると現在の状態も履歴に退避されます。</p>
+          <div class="ver-list">${rows}</div>
+        </div>
+      </div>`;
+    document.body.appendChild(bg);
+    const close = () => bg.remove();
+    bg.querySelector('.x-btn').onclick = close;
+    bg.onclick = e => { if (e.target === bg) close(); };
+    bg.querySelectorAll('[data-restore]').forEach(b => b.onclick = async () => {
+      if (!confirm('この版に復元しますか？ 現在の編集内容は履歴に退避されます。')) return;
+      try {
+        const r = await API.post(`/projects/${this.pid}/versions/${b.dataset.restore}/restore`);
+        this.tl = r.timeline_data;
+        this.engine.setTimeline(this.tl);
+        await this.loadAudio();
+        this.dirty = false;
+        this.renderAll();
+        close();
+        toast('バージョンを復元しました', 'ok');
+      } catch (e) { toast(e.message, 'err'); }
+    });
   }
 
   /* ---------------- publish as template (仕様 2.7.1) ---------------- */

@@ -19,12 +19,12 @@ STATIC = os.path.join(ROOT, "static")
 PORT = int(os.environ.get("PORT", "4189"))
 ACCESS_TTL = 3600           # 1時間 (仕様 2.1.1)
 REFRESH_TTL = 30 * 86400    # 30日
-# 仕様 9.1 サブスクリプションプラン
+# 仕様 9.1 サブスクリプションプラン / 2.3.1 ファイルサイズ上限 (Free 100MB, Pro以上 500MB)
 PLAN_LIMITS = {
-    "free":       {"projects": 5,    "storage": 1 << 30,   "exports_month": 3,    "ai_month": 3,    "max_res": 720,  "watermark": True,  "formats": ["mp4"],                  "brand_kit": False, "custom_font": False, "api_rate": 0},
-    "pro":        {"projects": None, "storage": 10 << 30,  "exports_month": None, "ai_month": None, "max_res": 2160, "watermark": False, "formats": ["mp4", "webm", "gif"],    "brand_kit": False, "custom_font": True,  "api_rate": 60},
-    "team":       {"projects": None, "storage": 100 << 30, "exports_month": None, "ai_month": None, "max_res": 2160, "watermark": False, "formats": ["mp4", "webm", "gif", "prores"], "brand_kit": True, "custom_font": True, "api_rate": 300},
-    "enterprise": {"projects": None, "storage": 1 << 40,   "exports_month": None, "ai_month": None, "max_res": 2160, "watermark": False, "formats": ["mp4", "webm", "gif", "prores"], "brand_kit": True, "custom_font": True, "api_rate": 1200},
+    "free":       {"projects": 5,    "storage": 1 << 30,   "exports_month": 3,    "ai_month": 3,    "max_res": 720,  "watermark": True,  "formats": ["mp4"],                  "brand_kit": False, "custom_font": False, "api_rate": 0,    "file_max": 100 << 20},
+    "pro":        {"projects": None, "storage": 10 << 30,  "exports_month": None, "ai_month": None, "max_res": 2160, "watermark": False, "formats": ["mp4", "webm", "gif"],    "brand_kit": False, "custom_font": True,  "api_rate": 60,   "file_max": 500 << 20},
+    "team":       {"projects": None, "storage": 100 << 30, "exports_month": None, "ai_month": None, "max_res": 2160, "watermark": False, "formats": ["mp4", "webm", "gif", "prores"], "brand_kit": True, "custom_font": True, "api_rate": 300,  "file_max": 500 << 20},
+    "enterprise": {"projects": None, "storage": 1 << 40,   "exports_month": None, "ai_month": None, "max_res": 2160, "watermark": False, "formats": ["mp4", "webm", "gif", "prores"], "brand_kit": True, "custom_font": True, "api_rate": 1200, "file_max": 2000 << 20},
 }
 def plan_limits(plan):
     return PLAN_LIMITS.get(plan, PLAN_LIMITS["free"])
@@ -192,6 +192,39 @@ def rate_check(key, limit_per_min):
         q.append(now)
         return True, 0
 
+# ---------------------------------------------------------------- login brute-force lockout (仕様 8.3: 5回失敗で15分ロック)
+_LOGIN_FAILS = {}
+_LOGIN_LOCK = threading.Lock()
+LOGIN_MAX_FAILS = 5
+LOGIN_LOCK_SEC = 15 * 60
+
+def login_locked(key):
+    """返り値: ロック中なら残り秒数(>0)、そうでなければ0。"""
+    now = time.time()
+    with _LOGIN_LOCK:
+        rec = _LOGIN_FAILS.get(key)
+        if not rec:
+            return 0
+        fails, first = rec
+        if now - first > LOGIN_LOCK_SEC:
+            _LOGIN_FAILS.pop(key, None)
+            return 0
+        if fails >= LOGIN_MAX_FAILS:
+            return int(LOGIN_LOCK_SEC - (now - first))
+        return 0
+
+def login_fail(key):
+    now = time.time()
+    with _LOGIN_LOCK:
+        fails, first = _LOGIN_FAILS.get(key, (0, now))
+        if now - first > LOGIN_LOCK_SEC:
+            fails, first = 0, now
+        _LOGIN_FAILS[key] = (fails + 1, first)
+
+def login_reset(key):
+    with _LOGIN_LOCK:
+        _LOGIN_FAILS.pop(key, None)
+
 # ---------------------------------------------------------------- language detection (依存なし)
 def detect_language(text):
     counts = {"ja": 0, "ko": 0, "zh": 0, "ar": 0, "he": 0, "ru": 0, "la": 0}
@@ -219,6 +252,35 @@ def detect_language(text):
     return best if counts[best] else "und"
 
 RTL_LANGS = {"ar", "he", "fa", "ur"}
+
+# ---------------------------------------------------------------- upload MIME sniffing (仕様 8.3 ファイルアップロード攻撃対策)
+def sniff_kind(data, ext):
+    """マジックバイトからファイル種別を推定し、拡張子から期待する種別と照合する。"""
+    head = data[:16]
+    detected = None
+    if head[:3] == b"ID3" or head[:2] == b"\xff\xfb" or head[:2] == b"\xff\xf3" or head[:2] == b"\xff\xf2":
+        detected = "audio"                                  # MP3
+    elif head[:4] == b"RIFF" and data[8:12] == b"WAVE":
+        detected = "audio"                                  # WAV
+    elif head[:4] == b"\x00\x00\x00\x1c" or data[4:8] == b"ftyp":
+        detected = "video" if ext in ("mp4", "m4a", "mov") else "audio"  # MP4/M4A container
+        if ext == "m4a":
+            detected = "audio"
+    elif head[:4] == b"\x1aE\xdf\xa3":
+        detected = "video"                                  # WebM/Matroska
+    elif head[:8] == b"\x89PNG\r\n\x1a\n":
+        detected = "image"                                  # PNG
+    elif head[:3] == b"\xff\xd8\xff":
+        detected = "image"                                  # JPEG
+    elif head[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        detected = "image"                                  # WebP
+    elif head[:5] == b"<?xml" or head.lstrip()[:4] == b"<svg":
+        detected = "image"                                  # SVG
+    elif head[:4] in (b"\x00\x01\x00\x00", b"OTTO", b"true", b"ttcf"):
+        detected = "font"                                   # TTF/OTF
+    elif head[:4] == b"wOF2" or head[:4] == b"wOFF":
+        detected = "font"                                   # WOFF/WOFF2
+    return detected
 
 # ---------------------------------------------------------------- AI engines
 def _percentile(sorted_vals, q):
@@ -865,15 +927,23 @@ class Handler(BaseHTTPRequestHandler):
                                            "user": {"id": uid, "email": email, "name": name}})
                 if s[1] == "login" and method == "POST":
                     email = (b.get("email") or "").strip().lower()
+                    lock_key = f"{self.client_address[0]}|{email}"
+                    locked = login_locked(lock_key)         # 仕様 8.3: 5回失敗で15分ロック
+                    if locked:
+                        return self.err(429, "account_locked",
+                                        f"ログイン試行が上限を超えました。約{(locked + 59) // 60}分後に再試行してください。")
                     row = con.execute("SELECT * FROM users WHERE email=?", (email,)).fetchone()
                     if not row or not check_pw(b.get("password") or "", row["password_hash"] or ""):
+                        login_fail(lock_key)
                         return self.err(401, "invalid_credentials", "メールアドレスまたはパスワードが違います")
                     if row["mfa_enabled"]:                # 仕様 2.1.1: TOTP多要素認証
                         code = b.get("mfa_code")
                         if not code:
                             return self.send_json({"mfa_required": True})
                         if not totp_verify(row["mfa_secret"], code):
+                            login_fail(lock_key)
                             return self.err(401, "invalid_mfa", "認証コードが正しくありません")
+                    login_reset(lock_key)
                     return self.send_json({"access_token": make_token(row["id"]), "refresh_token": make_token(row["id"], "refresh"),
                                            "user": {"id": row["id"], "email": row["email"], "name": row["name"]}})
                 if s[1] == "refresh" and method == "POST":
@@ -986,10 +1056,13 @@ class Handler(BaseHTTPRequestHandler):
                 sub = s[2]
                 if sub == "projects":
                     if method == "GET":
-                        rows = con.execute("""SELECT id,title,status,aspect_ratio,thumbnail_url,created_at,updated_at,
+                        qs = urllib.parse.parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
+                        archived = qs.get("archived", ["0"])[0] == "1"
+                        cond = "status='archived'" if archived else "status!='archived'"
+                        rows = con.execute(f"""SELECT id,title,status,aspect_ratio,thumbnail_url,created_at,updated_at,
                                               json_extract(timeline_data_json,'$.template') tpl,
                                               json_extract(timeline_data_json,'$.duration') dur
-                                              FROM projects WHERE workspace_id=? AND status!='archived'
+                                              FROM projects WHERE workspace_id=? AND {cond}
                                               ORDER BY updated_at DESC""", (wid,)).fetchall()
                         exports = con.execute("""SELECT COUNT(*) c FROM render_jobs r JOIN projects p ON p.id=r.project_id
                                                  WHERE p.workspace_id=? AND r.status='completed'""", (wid,)).fetchone()["c"]
@@ -1035,7 +1108,18 @@ class Handler(BaseHTTPRequestHandler):
                                 "ttf": "font", "otf": "font", "woff2": "font"}.get(ext.lstrip("."))
                         if not kind:
                             return self.err(400, "bad_type", f"未対応のファイル形式です: {ext}")
+                        # 仕様 8.3: マジックバイトによるMIME検証 (拡張子偽装を拒否)
+                        detected = sniff_kind(f["data"], ext.lstrip("."))
+                        if detected is None:
+                            return self.err(400, "bad_content", "ファイルの内容を判別できませんでした。破損しているか未対応の形式です。")
+                        if detected != kind:
+                            return self.err(400, "mime_mismatch",
+                                            f"拡張子({ext})とファイル内容({detected})が一致しません。アップロードを拒否しました。")
                         plan, lim, usage = usage_snapshot(con, wid)
+                        # 仕様 2.3.1: プラン別の1ファイルサイズ上限
+                        if len(f["data"]) > lim["file_max"]:
+                            return self.err(413, "file_too_large",
+                                            f"1ファイルの上限（{lim['file_max'] >> 20}MB）を超えています（{plan.upper()}プラン）。")
                         if kind == "font" and not lim["custom_font"]:
                             return self.err(402, "plan_limit", f"カスタムフォントはProプラン以上の機能です（現在: {plan.upper()}）。")
                         if usage["storage"] + len(f["data"]) > lim["storage"]:
@@ -1163,6 +1247,44 @@ class Handler(BaseHTTPRequestHandler):
                                  row["timeline_data_json"], row["aspect_ratio"], row["thumbnail_url"], now, now))
                     con.commit()
                     return self.send_json({"id": nid}, 201)
+                # 仕様 2.2: バージョン履歴 (最大50件) の閲覧とロールバック
+                if len(s) == 3 and s[2] == "versions" and method == "GET":
+                    rows = con.execute("""SELECT id, created_at,
+                                          json_extract(timeline_data_json,'$.duration') dur,
+                                          json_extract(timeline_data_json,'$.template') tpl
+                                          FROM project_versions WHERE project_id=?
+                                          ORDER BY created_at DESC""", (pid,)).fetchall()
+                    return self.send_json({"versions": [dict(r) for r in rows], "current_updated_at": row["updated_at"]})
+                if len(s) == 4 and s[2] == "versions" and method == "GET":
+                    ver = con.execute("SELECT * FROM project_versions WHERE id=? AND project_id=?", (s[3], pid)).fetchone()
+                    if not ver:
+                        return self.err(404, "not_found", "バージョンが見つかりません")
+                    return self.send_json({"timeline_data": json.loads(ver["timeline_data_json"])})
+                if len(s) == 5 and s[2] == "versions" and s[4] == "restore" and method == "POST":
+                    if role == "Viewer":
+                        return self.err(403, "forbidden", "権限がありません")
+                    ver = con.execute("SELECT * FROM project_versions WHERE id=? AND project_id=?", (s[3], pid)).fetchone()
+                    if not ver:
+                        return self.err(404, "not_found", "バージョンが見つかりません")
+                    now = time.time()
+                    # 復元前の現状も履歴に退避してからロールバック
+                    con.execute("INSERT INTO project_versions VALUES(?,?,?,?)",
+                                (str(uuid.uuid4()), pid, row["timeline_data_json"], now))
+                    con.execute("""DELETE FROM project_versions WHERE project_id=? AND id NOT IN
+                                   (SELECT id FROM project_versions WHERE project_id=? ORDER BY created_at DESC LIMIT 50)""",
+                                (pid, pid))
+                    con.execute("UPDATE projects SET timeline_data_json=?,updated_at=? WHERE id=?",
+                                (ver["timeline_data_json"], now, pid))
+                    con.commit()
+                    return self.send_json({"ok": True, "timeline_data": json.loads(ver["timeline_data_json"])})
+                # 仕様 2.2: アーカイブ / 復元
+                if len(s) == 3 and s[2] in ("archive", "unarchive") and method == "POST":
+                    if role == "Viewer":
+                        return self.err(403, "forbidden", "権限がありません")
+                    new_status = "archived" if s[2] == "archive" else "draft"
+                    con.execute("UPDATE projects SET status=?,updated_at=? WHERE id=?", (new_status, time.time(), pid))
+                    con.commit()
+                    return self.send_json({"ok": True, "status": new_status})
                 if len(s) == 3 and s[2] == "publish-template" and method == "POST":
                     # 仕様 2.7.1: プロジェクトをテンプレートとして公開
                     if role == "Viewer":
