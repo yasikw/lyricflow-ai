@@ -14,11 +14,31 @@ class FXEngine {
     this.tctx = this.textLayer.getContext('2d');
     this.post = document.createElement('canvas');
     this.pctx = this.post.getContext('2d');
+    // ブルーム用の低解像度バッファ (whole-frame blur add)
+    this.bloom = document.createElement('canvas');
+    this.bctx = this.bloom.getContext('2d');
     this.particles = [];
     this.pTime = -1;
     this.rand = this._seededRand(42);
     this.timeline = null;
     this.quality = 'full';
+    this._grain = null;
+  }
+
+  _grainTile() {
+    if (this._grain) return this._grain;
+    const c = document.createElement('canvas');
+    c.width = c.height = 128;
+    const g = c.getContext('2d');
+    const img = g.createImageData(128, 128);
+    for (let i = 0; i < img.data.length; i += 4) {
+      const v = 110 + Math.floor(Math.random() * 90);
+      img.data[i] = img.data[i + 1] = img.data[i + 2] = v;
+      img.data[i + 3] = 255;
+    }
+    g.putImageData(img, 0, 0);
+    this._grain = c;
+    return c;
   }
 
   _seededRand(seed) {
@@ -84,10 +104,63 @@ class FXEngine {
     if (glitchAmt > 0.08 && this.quality !== 'draft') this._glitch(ctx, W, H, glitchAmt, t);
     const waveAmt = (fxActive.wave ?? fx.wave ?? 0);
     if (waveAmt > 0.05) this._wave(ctx, W, H, waveAmt * (0.5 + energy * boost), t);
-    this._vignette(ctx, W, H);
+    // 本物の多段ブルーム (明部を抽出してブラー加算)
     const bloom = (fxActive.bloom ?? fx.bloom ?? 0.5) * boost;
-    if (bloom > 0.05) this._bloomFlash(ctx, W, H, colors, bloom * energy * 0.5);
+    if (bloom > 0.05) this._bloom(W, H, bloom * (0.55 + energy * 0.5));
+    this._grade(ctx, W, H, energy);      // カラーグレード + フィルムグレイン
+    this._vignette(ctx, W, H);
     if (tl.watermark) this._watermark(ctx, W, H);
+    ctx.filter = 'none';
+  }
+
+  /* 明部ベースのブルーム: フレームを縮小→自己乗算で明部を強調→ブラー加算。安価だが発光感が出る */
+  _bloom(W, H, strength) {
+    if (this.quality === 'draft') { this._bloomFlash(this.ctx, W, H, this.timeline.colors || {}, strength * 0.2); return; }
+    const bw = Math.max(200, W >> 2), bh = Math.max(112, H >> 2);
+    if (this.bloom.width !== bw || this.bloom.height !== bh) { this.bloom.width = bw; this.bloom.height = bh; }
+    const b = this.bctx, ctx = this.ctx;
+    b.globalCompositeOperation = 'source-over';
+    b.clearRect(0, 0, bw, bh);
+    b.drawImage(this.canvas, 0, 0, bw, bh);
+    b.globalCompositeOperation = 'multiply';        // 自己乗算で明部を残し暗部を落とす(擬似しきい値)
+    b.drawImage(this.canvas, 0, 0, bw, bh);
+    b.globalCompositeOperation = 'source-over';
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.imageSmoothingEnabled = true;
+    ctx.filter = `blur(${Math.max(2, W / 300)}px)`;  // タイトなコア
+    ctx.globalAlpha = Math.min(0.95, strength);
+    ctx.drawImage(this.bloom, 0, 0, W, H);
+    ctx.filter = `blur(${Math.max(5, W / 110)}px)`;  // 広いハロー
+    ctx.globalAlpha = Math.min(0.6, strength * 0.65);
+    ctx.drawImage(this.bloom, 0, 0, W, H);
+    ctx.restore();
+    ctx.filter = 'none';
+  }
+
+  /* 軽いカラーグレード(コントラスト持ち上げ)とフィルムグレイン */
+  _grade(ctx, W, H, energy) {
+    if (this.quality === 'draft') return;
+    // シャドウを僅かにパープル寄せ + ハイライトをシアン寄せの映画的トーン
+    ctx.save();
+    ctx.globalCompositeOperation = 'soft-light';
+    ctx.globalAlpha = 0.18;
+    const g = ctx.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0, '#0a1830'); g.addColorStop(0.5, '#141414'); g.addColorStop(1, '#1a0a24');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H);
+    ctx.restore();
+    // フィルムグレイン
+    ctx.save();
+    ctx.globalCompositeOperation = 'overlay';
+    ctx.globalAlpha = 0.05 + energy * 0.03;
+    const tile = this._grainTile();
+    const ox = (Math.random() * 128) | 0, oy = (Math.random() * 128) | 0;
+    const pat = ctx.createPattern(tile, 'repeat');
+    ctx.translate(-ox, -oy);
+    ctx.fillStyle = pat;
+    ctx.fillRect(ox, oy, W + 128, H + 128);
+    ctx.restore();
   }
 
   _watermark(ctx, W, H) {
@@ -117,16 +190,25 @@ class FXEngine {
   _drawScene(ctx, t, W, H, C, energy, boost) {
     const scene = (this.timeline.tracks?.background || []).find(b => t >= b.start && t < b.end)?.scene
       || this.timeline.sceneDefault || 'city';
+    // 背景グラデーション(全面・変形なし)
     const g = ctx.createLinearGradient(0, 0, 0, H);
     g.addColorStop(0, C.bg1); g.addColorStop(1, C.bg2);
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, W, H);
-
     if (scene === 'flat') return;
+    // ゆっくりしたカメラドリフト(Ken Burns)。サビでビート連動のズームを僅かに強める
+    ctx.save();
+    const beat = 1 + energy * boost * 0.012;
+    const zoom = (1.06 + 0.025 * Math.sin(t * 0.09)) * beat;
+    const px = Math.sin(t * 0.05) * W * 0.012, py = Math.cos(t * 0.043) * H * 0.012;
+    ctx.translate(W / 2 + px, H / 2 + py);
+    ctx.scale(zoom, zoom);
+    ctx.translate(-W / 2, -H / 2);
     if (scene === 'city') this._sceneCity(ctx, t, W, H, C, energy);
     else if (scene === 'grid') this._sceneGrid(ctx, t, W, H, C, energy * boost);
     else if (scene === 'stars' || scene === 'sky') this._sceneSky(ctx, t, W, H, C, scene === 'stars');
     else if (scene === 'sunset') this._sceneSunset(ctx, t, W, H, C, energy);
+    ctx.restore();
   }
 
   _sceneCity(ctx, t, W, H, C, energy) {
@@ -406,40 +488,61 @@ class FXEngine {
       return;
     }
     tc.save();
+    const eob = 1 + 2.70158 * Math.pow(p - 1, 3) + 1.70158 * Math.pow(p - 1, 2); // easeOutBack (軽い行き過ぎ)
     let dx = 0, dy = 0, scale = 1, alpha = 1;
     if (anim === 'fade') { alpha = ease; }
     else if (anim === 'fade-up') { alpha = ease; dy = (1 - ease) * fs * 0.5; }
     else if (anim === 'slide-up') { alpha = Math.min(1, ease * 1.4); dy = (1 - ease) * fs * 1.1; }
-    else if (anim === 'pop-scale') { scale = 0.4 + ease * 0.6 + (active ? Math.sin(t * 9) * 0.015 * boost : 0); alpha = ease; }
-    else if (anim === 'glow-pop') { scale = 0.72 + ease * 0.28; alpha = ease; }
+    else if (anim === 'pop-scale') { scale = 0.5 + eob * 0.5; alpha = Math.min(1, ease * 1.3); }
+    else if (anim === 'glow-pop') { scale = 0.78 + eob * 0.22; alpha = Math.min(1, ease * 1.3); }
     else if (anim === 'glitch-in') {
       alpha = ease;
       if (p < 1) { dx = (Math.random() - 0.5) * fs * 0.4 * (1 - p); dy = (Math.random() - 0.5) * fs * 0.2 * (1 - p); }
     }
+    // 発声中はエネルギーに合わせて微かに脈動
+    if (active) scale += Math.sin(t * 7 + w.start * 3) * 0.02 * (0.5 + energy);
     alpha *= (1 - lineOut);
     const cx = x + w.w / 2, cyy = y + dy;
-    tc.translate(cx, cyy); tc.scale(scale, scale); tc.translate(-cx, -cyy);
+    tc.translate(cx + dx, cyy); tc.scale(scale, scale); tc.translate(-cx - dx, -cyy);
     tc.globalAlpha = alpha;
+    const tx = x + dx, ty = y + dy;
+    // 縁取り (可読性 + アニメ的な締まり)
+    tc.lineJoin = 'round';
+    tc.lineWidth = fs * 0.085;
+    tc.strokeStyle = 'rgba(5,9,16,0.8)';
+    tc.strokeText(w.word, tx, ty);
     // グロー (Bloom)
     const glow = (style.glow ?? 0.6) * boost * (active ? 1 : 0.45);
     if (glow > 0.05 && this.quality !== 'draft') {
       tc.shadowColor = active ? C.accent : this._alpha(C.accent2, 0.8);
-      tc.shadowBlur = fs * 0.4 * glow * (0.7 + energy * 0.6);
+      tc.shadowBlur = fs * 0.45 * glow * (0.7 + energy * 0.6);
     }
-    tc.fillStyle = active ? (style.color || C.text) : this._alpha(style.color || C.text, 0.92);
-    tc.fillText(w.word, x, y + dy);
-    if (active && glow > 0.3) { // 発声中は二重描きで発光強調
+    if (active) {
+      // 発声中: 縦グラデ (上=セカンダリ, 中=白, 下=アクセント) で立体感
+      const grad = tc.createLinearGradient(0, ty - fs * 0.55, 0, ty + fs * 0.55);
+      grad.addColorStop(0, this._alpha(C.accent2, 0.95));
+      grad.addColorStop(0.45, '#ffffff');
+      grad.addColorStop(1, C.accent);
+      tc.fillStyle = grad;
+    } else {
+      tc.fillStyle = this._alpha(style.color || C.text, 0.9);
+    }
+    tc.fillText(w.word, tx, ty);
+    if (active && glow > 0.3) {          // 二重描きで芯の発光を強調
       tc.shadowBlur = fs * 0.14;
-      tc.fillText(w.word, x, y + dy);
+      tc.fillStyle = '#ffffff';
+      tc.globalAlpha = alpha * 0.5;
+      tc.fillText(w.word, tx, ty);
+      tc.globalAlpha = alpha;
     }
-    // アクセント下線 (発声中)
+    // カラオケ風の進行下線 (発声中)
     if (active) {
       tc.shadowBlur = 0;
       tc.globalAlpha = alpha * 0.9;
-      const grad = tc.createLinearGradient(x, 0, x + w.w, 0);
+      const grad = tc.createLinearGradient(tx, 0, tx + w.w, 0);
       grad.addColorStop(0, C.accent); grad.addColorStop(1, C.accent2);
       tc.fillStyle = grad;
-      tc.fillRect(x, y + dy + fs * 0.62, w.w * Math.min(1, (t - w.start) / Math.max(0.12, w.end - w.start)), fs * 0.05);
+      tc.fillRect(tx, ty + fs * 0.62, w.w * Math.min(1, (t - w.start) / Math.max(0.12, w.end - w.start)), fs * 0.055);
     }
     tc.restore();
   }

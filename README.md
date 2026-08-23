@@ -34,7 +34,22 @@ python3 server.py        # http://localhost:4189
 
 ## エクスポートの仕組み
 
-プレビュー(Canvas)を `captureStream` + `MediaRecorder` でリアルタイムキャプチャ (曲の実時間かかります) → WebMをサーバーへ → ffmpegで各フォーマットに変換 (MP4=H.264+AAC / ProRes 422=.mov / GIF=palettegen高品質 / WebMは無変換)。レンダリングジョブは進捗ポーリング (`GET /api/v1/render/{job_id}`)。プラン別に解像度・フォーマット・月間回数を検証。
+プレビュー(Canvas)を **60fps** の `captureStream` + `MediaRecorder` で**映像のみ**リアルタイムキャプチャ (曲の実時間かかります) → VP9をサーバーへ → ffmpegで**元音源(WAV)を直接ミックス**して各フォーマットに変換。音声はWebAudio再エンコードを経由しないため劣化ゼロ・完全同期。
+- **MP4**: H.264 (`-crf 18 -tune animation` = アニメ調に最適) + AAC 256k
+- **ProRes 422 HQ**: `.mov` (prores_ks profile 3) + PCM
+- **WebM**: VP9を無変換コピー + Opus (音声のみ付与)
+- **GIF**: palettegen (max 224色 + sierra2_4a ディザ)
+
+レンダリングジョブは進捗ポーリング (`GET /api/v1/render/{job_id}`)。プラン別に解像度・フォーマット・月間回数を検証。
+
+## 映像品質 (アニメ調FXエンジン)
+
+`static/js/fx.js` の Canvas 2Dエンジンで以下を毎フレーム合成:
+- **多段ブルーム**: フレーム縮小→自己乗算で明部抽出→2段ブラー加算 (発光感)
+- **キネティック・タイポグラフィ**: 縦グラデ塗り(セカンダリ→白→アクセント) + 縁取り + 多層グロー + easeOutBack の行き過ぎ + 発声中のエネルギー脈動 + カラオケ下線
+- **カメラドリフト (Ken Burns)**: 背景のゆっくりズーム/パン + サビでビート連動
+- **カラーグレード + フィルムグレイン**: soft-light の映画的トーン + overlay グレイン
+- サビ(Chorus)で全エフェクト強度が自動ブースト、パーティクル(桜/雪/雨/星/火の粉)は加算合成で発光
 
 ## プラン制限 (仕様 9.1)
 

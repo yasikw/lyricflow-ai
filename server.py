@@ -501,12 +501,24 @@ def run_render_job(job_id, src_path):
     settings = json.loads(job["output_settings_json"] or "{}")
     fmt = settings.get("format", "mp4")
     ext = {"mp4": "mp4", "webm": "webm", "prores": "mov", "gif": "gif"}.get(fmt, "mp4")
+    # 元音源を解決 (映像のみキャプチャ + サーバー側で高音質ミックス)
+    audio_path = None
+    if settings.get("mux_source_audio") and fmt != "gif":
+        prj = con.execute("SELECT timeline_data_json FROM projects WHERE id=?", (job["project_id"],)).fetchone()
+        if prj:
+            aid = (json.loads(prj["timeline_data_json"]) or {}).get("audio_asset_id")
+            if aid:
+                arow = con.execute("SELECT url FROM assets WHERE id=?", (aid,)).fetchone()
+                if arow:
+                    ap = os.path.join(DATA, arow["url"].replace("/media/", "", 1).lstrip("/"))
+                    if os.path.exists(ap):
+                        audio_path = ap
     try:
         con.execute("UPDATE render_jobs SET status='processing',progress_pct=5 WHERE id=?", (job_id,))
         con.commit()
         out_name = f"{job_id}.{ext}"
         out_path = os.path.join(RENDERS, out_name)
-        if fmt == "webm" or not FFMPEG:
+        if not FFMPEG:
             out_name = f"{job_id}.webm"
             os.replace(src_path, os.path.join(RENDERS, out_name))
         else:
@@ -517,15 +529,31 @@ def run_render_job(job_id, src_path):
                 dur = float(pr.stdout.strip() or 0)
             except Exception:
                 pass
-            if fmt == "prores":            # ProRes 422 (映像制作ワークフロー, 仕様 2.6.2)
-                vargs = ["-c:v", "prores_ks", "-profile:v", "2", "-pix_fmt", "yuv422p10le", "-c:a", "pcm_s16le"]
+            inputs = ["-i", src_path]
+            maps, tail, ac = [], [], []
+            if audio_path:
+                inputs += ["-i", audio_path]
+                maps = ["-map", "0:v:0", "-map", "1:a:0"]
+                tail = ["-shortest"]
+            if fmt == "prores":            # ProRes 422 HQ (映像制作ワークフロー, 仕様 2.6.2)
+                vc = ["-c:v", "prores_ks", "-profile:v", "3", "-vendor", "apl0", "-pix_fmt", "yuv422p10le"]
+                if audio_path:
+                    ac = ["-c:a", "pcm_s16le"]
             elif fmt == "gif":             # SNSサムネイル用GIF (palettegenで高品質化)
-                vargs = ["-vf", "fps=12,scale=640:-1:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse",
-                         "-an", "-loop", "0"]
-            else:                          # MP4 H.264 + AAC
-                vargs = ["-c:v", "libx264", "-preset", "fast", "-crf", "19", "-pix_fmt", "yuv420p",
-                         "-movflags", "+faststart", "-c:a", "aac", "-b:a", "192k"]
-            cmd = [FFMPEG, "-y", "-i", src_path, *vargs, "-progress", "pipe:1", "-nostats", out_path]
+                inputs = ["-i", src_path]; maps = []; tail = []
+                vc = ["-vf", "fps=15,scale=720:-1:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=224[p];[s1][p]paletteuse=dither=sierra2_4a",
+                      "-an", "-loop", "0"]
+            elif fmt == "webm":            # VP9はそのままコピーし音声のみ付与 (再エンコード無し=劣化なし)
+                vc = ["-c:v", "copy"]
+                if audio_path:
+                    ac = ["-c:a", "libopus", "-b:a", "192k"]
+            else:                          # MP4 H.264 (アニメ調に最適な -tune animation, 高品質CRF18)
+                preset = "fast" if settings.get("height", 1080) >= 2160 else "medium"
+                vc = ["-c:v", "libx264", "-preset", preset, "-crf", "18", "-tune", "animation",
+                      "-pix_fmt", "yuv420p", "-movflags", "+faststart"]
+                if audio_path:
+                    ac = ["-c:a", "aac", "-b:a", "256k"]
+            cmd = [FFMPEG, "-y", *inputs, *maps, *vc, *ac, *tail, "-progress", "pipe:1", "-nostats", out_path]
             proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
             for line in proc.stdout:
                 m = re.match(r"out_time_ms=(\d+)", line.strip())

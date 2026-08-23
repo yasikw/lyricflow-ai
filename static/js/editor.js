@@ -841,24 +841,17 @@ class Editor {
       bg.querySelector('#exp-pct').textContent = Math.floor(pct) + '%';
       bg.querySelector('#exp-fill').style.width = pct + '%';
     };
-    // 高解像度キャンバスへ切替
+    // 高解像度キャンバスへ切替 (60fps)
     const [W, H] = EXPORT_RES[state.res][state.aspect] || EXPORT_RES[state.res]['16:9'];
+    const FPS = 60;
     this.pause();
     this.engine.resize(W, H);
     this.engine.quality = 'full';
-    const canvasStream = this.root.querySelector('#stage').captureStream(30);
-    // 音声をMediaStreamへ
-    if (!this.audioCtx) {
-      this.audioCtx = new AudioContext();
-      this.mediaSrc = this.audioCtx.createMediaElementSource(this.audio);
-      this.audioDest = this.audioCtx.createMediaStreamDestination();
-      this.mediaSrc.connect(this.audioDest);
-      this.mediaSrc.connect(this.audioCtx.destination);
-    }
-    await this.audioCtx.resume();
-    const stream = new MediaStream([...canvasStream.getVideoTracks(), ...this.audioDest.stream.getAudioTracks()]);
-    const mime = MediaRecorder.isTypeSupported('video/webm;codecs=vp9,opus') ? 'video/webm;codecs=vp9,opus' : 'video/webm';
-    const bitrate = state.res === '4k' ? 40_000_000 : state.res === '1080p' ? 12_000_000 : 7_000_000;
+    // 映像のみをキャプチャ。音声は劣化を避けるためサーバー側で元音源を直接ミックスする
+    const canvasStream = this.root.querySelector('#stage').captureStream(FPS);
+    const stream = new MediaStream(canvasStream.getVideoTracks());
+    const mime = MediaRecorder.isTypeSupported('video/webm;codecs=vp9') ? 'video/webm;codecs=vp9' : 'video/webm';
+    const bitrate = state.res === '4k' ? 55_000_000 : state.res === '1080p' ? 18_000_000 : 10_000_000;
     const rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: bitrate });
     const chunks = [];
     rec.ondataavailable = e => e.data.size && chunks.push(e.data);
@@ -874,7 +867,7 @@ class Editor {
       const fd = new FormData();
       fd.append('file', blob, 'capture.webm');
       fd.append('project_id', this.pid);
-      fd.append('settings', JSON.stringify({ format: state.fmt, resolution: state.res, aspect: state.aspect, width: W, height: H }));
+      fd.append('settings', JSON.stringify({ format: state.fmt, resolution: state.res, aspect: state.aspect, width: W, height: H, fps: FPS, mux_source_audio: true }));
       try {
         const { job_id } = await API.upload('/render', fd);
         for (;;) {
