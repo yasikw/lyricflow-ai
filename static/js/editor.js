@@ -398,10 +398,18 @@ class Editor {
     el.innerHTML = `
       <div class="prop-group">
         <h4>AI ツール</h4>
+        <div class="ai-engine-row">
+          <span>エンジン</span>
+          <select class="input" id="ai-engine">
+            <option value="builtin">Built-in</option>
+            <option value="codex" ${App.codexAvailable ? '' : 'disabled'}>Codex${App.codexAvailable ? '' : ' (未接続)'}</option>
+          </select>
+        </div>
         <div class="ai-tools">
+          <button class="ai-btn" id="ai-suggest"><span class="ic">✨</span><span>演出提案 (AI Director)<small>歌詞から背景・配色・演出を提案</small></span></button>
           <button class="ai-btn" id="ai-sync"><span class="ic">♪</span><span>AI歌詞同期<small>Demucs + Whisper + MFA</small></span></button>
           <button class="ai-btn" id="ai-scene"><span class="ic">◈</span><span>シーン解析AI<small>曲構成を検出し演出を自動適用</small></span></button>
-          <button class="ai-btn" id="ai-trans"><span class="ic">文</span><span>AI多言語翻訳<small>50言語以上 / DeepL・GPT-4o</small></span></button>
+          <button class="ai-btn" id="ai-trans"><span class="ic">文</span><span>AI多言語翻訳<small>50言語以上 / DeepL・Codex</small></span></button>
         </div>
         <div class="job-bar" id="job-bar" style="display:none">
           <div class="jb-label"><span id="jb-stage">処理中…</span><span id="jb-pct">0%</span></div>
@@ -446,6 +454,10 @@ class Editor {
         <div class="empty-note" style="padding:6px 2px;text-align:left;font-size:11px">サビ(Chorus)では強度が自動ブーストされます</div>
       </div>`;
     const $ = s => el.querySelector(s);
+    const engSel = $('#ai-engine');
+    engSel.value = this.aiEngine();
+    engSel.onchange = e => { localStorage.setItem('lf_ai_engine', e.target.value); };
+    $('#ai-suggest').onclick = () => this.runSuggest();
     $('#ai-sync').onclick = () => this.runSync();
     $('#ai-scene').onclick = () => this.runSceneAnalysis();
     $('#ai-trans').onclick = () => this.runTranslate();
@@ -490,6 +502,36 @@ class Editor {
     if (pct >= 100) setTimeout(() => { if (bar) bar.style.display = 'none'; }, 900);
   }
 
+  aiEngine() {
+    const e = localStorage.getItem('lf_ai_engine') || 'builtin';
+    return (e === 'codex' && App.codexAvailable) ? 'codex' : 'builtin';
+  }
+
+  async runSuggest() {
+    if (!this.tl.lyrics_text?.trim()) return toast('先に歌詞を入力してください(左の歌詞タブ)', 'err');
+    const engine = this.aiEngine();
+    const { job_id } = await API.post('/ai/suggest', {
+      workspace_id: this.project.workspace_id, lyrics_text: this.tl.lyrics_text, engine,
+    });
+    let res;
+    try { res = await API.waitJob(job_id, j => this.showJob(j.stage, j.progress_pct)); }
+    catch (e) { return toast('演出提案に失敗: ' + e.message, 'err'); }
+    const msg = `${res.engine === 'codex' ? 'Codex' : 'Built-in'} の提案:\n\n` +
+      `背景: ${res.scene} / 粒子: ${res.particles} / アニメ: ${res.anim}\n` +
+      `${res.rationale || ''}\n\nこの演出を適用しますか?`;
+    if (!confirm(msg)) return;
+    Object.assign(this.tl, {
+      colors: res.colors, fx: { ...this.tl.fx, ...res.fx }, particles: res.particles, sceneDefault: res.scene,
+      lyricStyle: { ...this.tl.lyricStyle, anim: res.anim, color: res.colors.text, glow: res.fx.bloom },
+    });
+    if (this.tl.tracks.background[0]) this.tl.tracks.background[0].scene = res.scene;
+    else this.tl.tracks.background.push({ id: 'bg' + Date.now(), start: 0, end: this.tl.duration || 60, scene: res.scene });
+    this.engine.particles = [];
+    this.engine.setTimeline(this.tl);
+    this.markDirty(); this.renderRight(); this.renderTimeline();
+    toast(`演出提案を適用しました (${res.engine})`, 'ok');
+  }
+
   async runSync() {
     if (!this.tl.lyrics_text?.trim()) return toast('先に歌詞を入力してください(左の歌詞タブ)', 'err');
     if (!this.tl.duration) return toast('先に音源を設定してください', 'err');
@@ -524,11 +566,12 @@ class Editor {
     const target = prompt('翻訳先の言語コードを入力してください (en / ko / zh / fr / es …)', 'en');
     if (!target) return;
     const { job_id } = await API.post('/ai/translate-lyrics', {
-      workspace_id: this.project.workspace_id, lyrics_text: this.tl.lyrics_text, target,
+      workspace_id: this.project.workspace_id, lyrics_text: this.tl.lyrics_text, target, engine: this.aiEngine(),
     });
     const res = await API.waitJob(job_id, j => this.showJob(j.stage, j.progress_pct));
     const joined = res.lines.join('\n');
-    if (confirm(`翻訳結果 (${res.engine === 'deepl' ? 'DeepL' : 'プレビュー翻訳'}):\n\n${joined}\n\nこの歌詞に置き換えてタイムスタンプを再生成しますか?`)) {
+    const engLabel = { codex: 'Codex', deepl: 'DeepL', preview: 'プレビュー翻訳' }[res.engine] || res.engine;
+    if (confirm(`翻訳結果 (${engLabel}):\n\n${joined}\n\nこの歌詞に置き換えてタイムスタンプを再生成しますか?`)) {
       this.tl.lyrics_text = joined;
       this.tl.language = target;
       await this.runSync();

@@ -5,6 +5,8 @@
 const App = {
   user: null, ws: null, workspaces: [], me: null, editor: null,
 
+  get codexAvailable() { return !!(this.me && this.me.codex_available); },
+
   async boot() {
     window.addEventListener('hashchange', () => this.route());
     if (API.token) {
@@ -582,6 +584,18 @@ const App = {
         </div>
       </div>
       <div class="panel">
+        <h3>AIエンジン</h3>
+        <p class="p-sub">歌詞翻訳と演出提案に使うエンジン。エディターのAIツールからも切替できます。歌詞同期・シーン解析は音声解析のため常にBuilt-inです。</p>
+        <div style="display:flex;align-items:center;gap:12px">
+          <span class="badge ${me.codex_available ? 'exported' : 'draft'}">Codex ${me.codex_available ? '接続済み' : '未接続'}</span>
+          <span style="font-size:12.5px;color:var(--muted)">${me.codex_available ? 'ローカルの codex CLI (ChatGPTログイン) を利用します' : 'codex CLI が見つかりません。Built-inのみ利用可能です'}</span>
+          <select class="input" id="acc-engine" style="width:150px;margin-left:auto" ${me.codex_available ? '' : 'disabled'}>
+            <option value="builtin">Built-in</option>
+            <option value="codex">Codex</option>
+          </select>
+        </div>
+      </div>
+      <div class="panel">
         <h3>二段階認証 (MFA / TOTP)</h3>
         <p class="p-sub">仕様 2.1.1: Time-based One-Time Password。認証アプリ(Google Authenticator等)で6桁コードを生成します。</p>
         <div id="mfa-area">${me.user.mfa_enabled
@@ -603,6 +617,11 @@ const App = {
         this.route();
       } catch (e) { toast(e.message, 'err'); }
     });
+    const accEngine = el.querySelector('#acc-engine');
+    if (accEngine) {
+      accEngine.value = (localStorage.getItem('lf_ai_engine') === 'codex' && me.codex_available) ? 'codex' : 'builtin';
+      accEngine.onchange = e => { localStorage.setItem('lf_ai_engine', e.target.value); toast(`AIエンジンを ${e.target.value === 'codex' ? 'Codex' : 'Built-in'} に設定しました`, 'ok'); };
+    }
     const disableBtn = el.querySelector('#mfa-disable');
     if (disableBtn) disableBtn.onclick = async () => {
       const code = prompt('無効化を確認するため、現在の認証コード(6桁)を入力してください');

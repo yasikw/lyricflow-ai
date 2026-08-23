@@ -7,7 +7,7 @@
 - ホワイトラベル外部API (X-API-Key)
 標準ライブラリのみで動作。DB=SQLite, ファイル=ローカルストレージ。
 """
-import base64, hashlib, hmac, json, math, mimetypes, os, random, re, secrets, sqlite3, struct, subprocess, threading, time, urllib.request, urllib.parse, uuid, wave
+import base64, hashlib, hmac, json, math, mimetypes, os, random, re, secrets, shutil, sqlite3, struct, subprocess, tempfile, threading, time, urllib.request, urllib.parse, uuid, wave
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -47,6 +47,38 @@ for p in ("/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "ffmpeg"):
         break
     except Exception:
         continue
+
+# ---------------------------------------------------------------- Codex CLI (選択式AIエンジン)
+CODEX_BIN = shutil.which("codex") or next(
+    (p for p in ("/opt/homebrew/bin/codex", "/usr/local/bin/codex") if os.path.exists(p)), None)
+
+def codex_available():
+    return bool(CODEX_BIN)
+
+def codex_json(prompt, schema, timeout=120):
+    """codex exec を非対話・read-onlyサンドボックスで実行し、JSON Schemaに沿った出力を返す。
+    副作用防止: read-onlyサンドボックス + 一時ディレクトリで実行。失敗時は例外(呼び出し側でbuiltinへフォールバック)。"""
+    if not CODEX_BIN:
+        raise RuntimeError("codex CLI が見つかりません")
+    with tempfile.TemporaryDirectory() as td:
+        schema_f = os.path.join(td, "schema.json")
+        out_f = os.path.join(td, "out.json")
+        with open(schema_f, "w") as f:
+            json.dump(schema, f)
+        cmd = [CODEX_BIN, "exec", "--skip-git-repo-check", "-s", "read-only", "--color", "never",
+               "--output-schema", schema_f, "-o", out_f, prompt]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, cwd=td,
+                           env={**os.environ, "RUST_LOG": "error"})
+        if r.returncode != 0:
+            raise RuntimeError("codex 実行に失敗: " + (r.stderr or "")[-300:])
+        raw = ""
+        if os.path.exists(out_f):
+            raw = open(out_f).read().strip()
+        if not raw:
+            raw = (r.stdout or "").strip()
+        # 念のため最初の JSON オブジェクトを抽出
+        m = re.search(r"\{.*\}", raw, re.S)
+        return json.loads(m.group(0) if m else raw)
 
 # ---------------------------------------------------------------- DB
 def db():
@@ -417,9 +449,24 @@ MOCK_DICT = {
     "君に届くまで": "Until it reaches you",
 }
 
-def translate_engine(lyrics_text, target):
-    key = os.environ.get("DEEPL_API_KEY")
+def translate_engine(lyrics_text, target, engine="builtin"):
     lines = [l for l in lyrics_text.splitlines()]
+    # Codexエンジン: 元の行順・空行を保ったまま自然な訳を返す
+    if engine == "codex" and codex_available():
+        try:
+            nonblank = [l for l in lines if l.strip()]
+            schema = {"type": "object", "properties": {"lines": {"type": "array", "items": {"type": "string"}}},
+                      "required": ["lines"], "additionalProperties": False}
+            prompt = ("You are a professional lyric translator. Translate each line below into natural, "
+                      f"singable {target}. Preserve line order and count exactly. Return JSON "
+                      '{"lines":[...]} with one entry per input line.\n\nLines:\n' + "\n".join(nonblank))
+            res = codex_json(prompt, schema, timeout=120)
+            it = iter(res.get("lines", []))
+            merged = [next(it, "") if l.strip() else "" for l in lines]
+            return merged, "codex"
+        except Exception as e:
+            print("  codex translate fallback:", e)
+    key = os.environ.get("DEEPL_API_KEY")
     if key:
         try:
             body = json.dumps({"text": [l for l in lines if l.strip()], "target_lang": target.upper()}).encode()
@@ -441,6 +488,72 @@ def translate_engine(lyrics_text, target):
         else:
             out.append(f"[{target.upper()}] {l.strip()}")
     return out, "preview"
+
+# ---------------------------------------------------------------- 演出提案 (Creative Director, 仕様 2.4 差別化機能)
+SCENE_OPTS = ["city", "sky", "stars", "grid", "sunset", "flat"]
+PARTICLE_OPTS = ["rain", "sakura", "snow", "stars", "embers", "none"]
+ANIM_OPTS = ["glow-pop", "fade", "fade-up", "slide-up", "pop-scale", "glitch-in"]
+
+def suggest_direction(lyrics_text, mood="", engine="builtin"):
+    """歌詞の雰囲気から背景シーン・配色・パーティクル・エフェクト強度を提案する。"""
+    if engine == "codex" and codex_available():
+        try:
+            schema = {"type": "object", "additionalProperties": False,
+                      "required": ["scene", "particles", "anim", "colors", "fx", "rationale"],
+                      "properties": {
+                          "scene": {"type": "string", "enum": SCENE_OPTS},
+                          "particles": {"type": "string", "enum": PARTICLE_OPTS},
+                          "anim": {"type": "string", "enum": ANIM_OPTS},
+                          "colors": {"type": "object", "additionalProperties": False,
+                                     "required": ["bg1", "bg2", "accent", "accent2", "text"],
+                                     "properties": {k: {"type": "string"} for k in ("bg1", "bg2", "accent", "accent2", "text")}},
+                          "fx": {"type": "object", "additionalProperties": False,
+                                 "required": ["bloom", "glitch", "chroma", "wave"],
+                                 "properties": {k: {"type": "number"} for k in ("bloom", "glitch", "chroma", "wave")}},
+                          "rationale": {"type": "string"}}}
+            prompt = ("You are an art director for anime-style lyric music videos. Based on the lyrics' mood, "
+                      "design one cohesive visual look. Choose scene from " + str(SCENE_OPTS) +
+                      ", particles from " + str(PARTICLE_OPTS) + ", lyric animation from " + str(ANIM_OPTS) +
+                      ". Provide 5 hex colors (bg1/bg2 dark background gradient, accent & accent2 neon highlights, "
+                      "text usually #ffffff) and fx intensities 0..1 (bloom, glitch, chroma, wave). "
+                      "Write a one-sentence Japanese rationale. Return JSON only.\n\n"
+                      + (f"Mood hint: {mood}\n" if mood else "") + "Lyrics:\n" + lyrics_text[:1500])
+            res = codex_json(prompt, schema, timeout=120)
+            res["engine"] = "codex"
+            return res
+        except Exception as e:
+            print("  codex suggest fallback:", e)
+    # builtin: 歌詞のキーワードからヒューリスティックに選ぶ
+    t = lyrics_text
+    def has(*ws):
+        return any(w in t for w in ws)
+    if has("桜", "春", "花", "はな"):
+        pick = dict(scene="sky", particles="sakura", anim="fade-up",
+                    colors=dict(bg1="#2b1530", bg2="#5a2a52", accent="#ff9ecf", accent2="#ffd6e8", text="#fff5fa"),
+                    fx=dict(bloom=0.5, glitch=0.0, chroma=0.2, wave=0.2))
+    elif has("雪", "冬", "白", "凍"):
+        pick = dict(scene="sky", particles="snow", anim="fade-up",
+                    colors=dict(bg1="#0a1526", bg2="#1d3a52", accent="#bfe3ff", accent2="#e8f6ff", text="#f4faff"),
+                    fx=dict(bloom=0.45, glitch=0.0, chroma=0.15, wave=0.1))
+    elif has("雨", "涙", "泣"):
+        pick = dict(scene="city", particles="rain", anim="slide-up",
+                    colors=dict(bg1="#050a18", bg2="#1a2340", accent="#6fb7ff", accent2="#7b8cff", text="#eef4ff"),
+                    fx=dict(bloom=0.55, glitch=0.05, chroma=0.35, wave=0.25))
+    elif has("星", "夜", "空", "宇宙"):
+        pick = dict(scene="stars", particles="stars", anim="glow-pop",
+                    colors=dict(bg1="#030722", bg2="#14104a", accent="#8ab4ff", accent2="#c3a6ff", text="#f0f4ff"),
+                    fx=dict(bloom=0.7, glitch=0.05, chroma=0.3, wave=0.1))
+    elif has("炎", "火", "熱", "燃"):
+        pick = dict(scene="grid", particles="embers", anim="pop-scale",
+                    colors=dict(bg1="#160500", bg2="#3d0f00", accent="#ff9d2e", accent2="#ff4e3a", text="#fff8f0"),
+                    fx=dict(bloom=0.85, glitch=0.25, chroma=0.4, wave=0.2))
+    else:
+        pick = dict(scene="city", particles="rain", anim="glow-pop",
+                    colors=dict(bg1="#050a18", bg2="#1a0b38", accent="#00d4ff", accent2="#7b2ff7", text="#ffffff"),
+                    fx=dict(bloom=0.8, glitch=0.15, chroma=0.5, wave=0.0))
+    pick["rationale"] = "歌詞のキーワードから雰囲気を推定し、配色とエフェクトを自動選定しました。"
+    pick["engine"] = "builtin"
+    return pick
 
 # ---------------------------------------------------------------- job workers
 def run_ai_job(job_id):
@@ -474,13 +587,19 @@ def run_ai_job(job_id):
                                         float(payload.get("duration", 0)))
             result = {"sections": secs}
         elif kind == "translate-lyrics":
+            eng = payload.get("engine", "builtin")
             upd(30, "言語検出 (langdetect)")
             src_lang = detect_language(payload.get("lyrics_text", ""))
-            upd(60, "AI翻訳 (DeepL / GPT-4o)")
+            upd(60, "AI翻訳 (Codex)" if eng == "codex" else "AI翻訳 (DeepL / GPT-4o)")
             target = payload.get("target", "en")
-            lines, engine = translate_engine(payload.get("lyrics_text", ""), target)
+            lines, engine = translate_engine(payload.get("lyrics_text", ""), target, eng)
             result = {"lines": lines, "engine": engine, "target": target,
                       "source_language": src_lang, "rtl": target.split("-")[0].lower() in RTL_LANGS}
+        elif kind == "suggest":
+            eng = payload.get("engine", "builtin")
+            upd(35, "歌詞のムード解析 (Codex)" if eng == "codex" else "歌詞のムード解析")
+            upd(65, "配色・演出の設計")
+            result = suggest_direction(payload.get("lyrics_text", ""), payload.get("mood", ""), eng)
         else:
             raise ValueError(f"unknown job kind {kind}")
         con.execute("UPDATE ai_jobs SET status='completed',progress_pct=100,stage='完了',result_json=?,completed_at=? WHERE id=?",
@@ -1047,7 +1166,7 @@ class Handler(BaseHTTPRequestHandler):
                                 "storage_limit": lim["storage"], "limits": lim, "usage": usage})
                 return self.send_json({"user": {"id": u["id"], "email": u["email"], "name": u["name"],
                                                 "mfa_enabled": bool(u["mfa_enabled"])},
-                                       "workspaces": out, "ffmpeg": bool(FFMPEG)})
+                                       "workspaces": out, "ffmpeg": bool(FFMPEG), "codex_available": codex_available()})
 
             # ---------- MFA (TOTP) ----------
             if s[0] == "mfa":
@@ -1336,11 +1455,13 @@ class Handler(BaseHTTPRequestHandler):
 
             # ---------- AI jobs ----------
             if s[0] == "ai":
-                if s[1] in ("sync-lyrics", "analyze-scene", "translate-lyrics") and method == "POST":
+                if s[1] in ("sync-lyrics", "analyze-scene", "translate-lyrics", "suggest") and method == "POST":
                     b = self.json_body()
                     wid = b.get("workspace_id")
                     if wid and not ws_role(wid):
                         return self.err(403, "forbidden", "アクセス権がありません")
+                    if b.get("engine") == "codex" and not codex_available():
+                        return self.err(400, "codex_unavailable", "Codex CLIが利用できません。builtinエンジンをご利用ください。")
                     if wid and s[1] == "sync-lyrics":       # 仕様 9.1: FreeはAI歌詞同期 月3回
                         plan, lim, usage = usage_snapshot(con, wid)
                         if lim["ai_month"] is not None and usage["ai_month"] >= lim["ai_month"]:

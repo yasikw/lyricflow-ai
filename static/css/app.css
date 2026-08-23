@@ -382,6 +382,9 @@ pre.code {
 .prop-row .input, .prop-row select { width: 128px; padding: 5px 8px; font-size: 12px; }
 .prop-row input[type=range] { width: 128px; accent-color: var(--cyan); }
 .prop-row input[type=color] { width: 30px; height: 26px; padding: 2px; border-radius: 5px; border: 1px solid var(--border); background: var(--bg-deep); }
+.ai-engine-row { display: flex; align-items: center; justify-content: space-between; gap: 9px; margin-bottom: 10px; font-size: 12px; }
+.ai-engine-row > span { color: var(--muted); }
+.ai-engine-row select { width: 128px; padding: 5px 8px; font-size: 12px; }
 .ai-tools { display: flex; flex-direction: column; gap: 8px; }
 .ai-btn {
   display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 7px; text-align: left;
