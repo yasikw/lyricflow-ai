@@ -792,7 +792,23 @@ class FXEngine {
     tc.translate(cx + a.dx, cyy); tc.scale(a.scale, a.scale); tc.translate(-cx - a.dx, -cyy);
     const gx = cx + a.dx, gy = y + a.dy;
     const glow = (style.glow ?? 0.6) * boost * (active ? 1 : 0.45) * (0.7 + energy * 0.6);
-    this._paintGlyph(tc, w.word, gx, gy, w.w, fs, preset, active, a.alpha, glow, C, style, t, w);
+    if (style.randomSize) {
+      // 一文字ごとにサイズをランダム化 (文字ID×位置から決定論的=チラつかない)
+      const chars = [...w.word];
+      let lx = gx - w.w / 2;
+      chars.forEach((ch, i) => {
+        const cw = tc.measureText(ch).width;
+        const center = lx + cw / 2;
+        const f = 0.6 + this._hash01(w.id + ':' + i) * 0.9;   // 0.6x .. 1.5x
+        tc.save();
+        tc.translate(center, gy); tc.scale(f, f); tc.translate(-center, -gy);
+        this._paintGlyph(tc, ch, center, gy, cw, fs, preset, active, a.alpha, glow, C, style, t, w);
+        tc.restore();
+        lx += cw;
+      });
+    } else {
+      this._paintGlyph(tc, w.word, gx, gy, w.w, fs, preset, active, a.alpha, glow, C, style, t, w);
+    }
     // カラオケ進行下線 (neon/brush系のみ)
     if (active && preset !== 'marker' && preset !== 'longshadow') {
       tc.globalAlpha = a.alpha * 0.9;
@@ -833,9 +849,11 @@ class FXEngine {
         const upcoming = t < w.start;
         const a = upcoming ? { dx: 0, dy: 0, scale: 1, alpha: 0.13 * (1 - lineOut) }
           : this._wordAnim(w, t, fs, anim, active, energy, lineOut);
-        for (const ch of wc.chars) {
+        wc.chars.forEach((ch, ci) => {
+          const jf = style.randomSize ? 0.6 + this._hash01(w.id + ':' + ci) * 0.9 : 1;
           tc.save();
-          tc.translate(cx, cy + a.dy); tc.scale(a.scale, a.scale); tc.translate(-cx, -(cy + a.dy));
+          const sc = a.scale * jf;
+          tc.translate(cx, cy + a.dy); tc.scale(sc, sc); tc.translate(-cx, -(cy + a.dy));
           if (upcoming) {
             tc.globalAlpha = a.alpha; tc.fillStyle = style.color || C.text; tc.fillText(ch, cx, cy + a.dy);
           } else {
@@ -844,7 +862,7 @@ class FXEngine {
           }
           tc.restore();
           cy += charH;
-        }
+        });
       }
     });
   }
@@ -929,6 +947,13 @@ class FXEngine {
     const m = /^#?([\da-f]{2})([\da-f]{2})([\da-f]{2})/i.exec(hex || '#ffffff');
     if (!m) return `rgba(255,255,255,${a})`;
     return `rgba(${parseInt(m[1], 16)},${parseInt(m[2], 16)},${parseInt(m[3], 16)},${a})`;
+  }
+
+  /* 文字列から決定論的な 0..1 値 (毎フレーム同じ=チラつかない) */
+  _hash01(s) {
+    let h = 2166136261;
+    for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
+    return ((h >>> 0) % 100000) / 100000;
   }
 }
 

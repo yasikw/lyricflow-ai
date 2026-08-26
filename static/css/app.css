@@ -397,6 +397,8 @@ pre.code {
 .ai-engine-row { display: flex; align-items: center; justify-content: space-between; gap: 9px; margin-bottom: 10px; font-size: 12px; }
 .ai-engine-row > span { color: var(--muted); }
 .ai-engine-row select { width: 128px; padding: 5px 8px; font-size: 12px; }
+.chk-row { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); cursor: pointer; padding: 4px 2px; }
+.chk-row input[type=checkbox] { width: 15px; height: 15px; accent-color: var(--cyan); cursor: pointer; }
 .ai-tools { display: flex; flex-direction: column; gap: 8px; }
 .ai-btn {
   display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 7px; text-align: left;

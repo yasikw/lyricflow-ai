@@ -462,6 +462,7 @@ class Editor {
           <select class="input" id="st-anim">${ANIMS.map(([v, l]) => `<option value="${v}" ${st.anim === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
         <div class="prop-row"><span>字間</span><input type="range" id="st-track" min="0" max="60" value="${(st.tracking || 0) * 100}"></div>
         <div class="prop-row"><span>グロー</span><input type="range" id="st-glow" min="0" max="100" value="${(st.glow ?? 0.6) * 100}"></div>
+        <label class="chk-row"><input type="checkbox" id="st-randsize" ${st.randomSize ? 'checked' : ''}><span>文字サイズをランダム化</span></label>
       </div>
       <div class="prop-group">
         <h4>シーン &amp; パーティクル</h4>
@@ -511,6 +512,7 @@ class Editor {
     $('#st-letter').onchange = e => { this.tl.lyricStyle.lettering = e.target.value; this.markDirty(); };
     $('#st-track').oninput = e => { this.tl.lyricStyle.tracking = e.target.value / 100; this.markDirty(); };
     $('#st-glow').oninput = e => { this.tl.lyricStyle.glow = e.target.value / 100; this.markDirty(); };
+    $('#st-randsize').onchange = e => { this.tl.lyricStyle.randomSize = e.target.checked; this.markDirty(); };
     $('#sc-scene').onchange = e => {
       this.tl.sceneDefault = e.target.value;
       if (this.tl.tracks.background[0]) this.tl.tracks.background[0].scene = e.target.value;
