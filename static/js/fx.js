@@ -634,24 +634,26 @@ class FXEngine {
       this._drawLyricsVertical(tc, lineWords, t, fontSize, C, style, anim, energy, boost, lineOut, fx, W, H);
     } else {
       // 横書き: 行内レイアウト (中央寄せ・必要なら折り返し)
-      const gap = fontSize * 0.22 + (style.tracking || 0) * fontSize;
-      const widths = lineWords.map(w => tc.measureText(w.word).width);
+      const tracking = (style.tracking || 0) * fontSize;   // 文字ごとの字間(px)
+      const gap = fontSize * 0.18 + tracking;               // 単語間
+      const headId = lineWords[0] && lineWords[0].id;        // 先頭の単語
+      const widths = lineWords.map(w => this._measureWord(tc, w.word, tracking));
       const rows = [[]];
       let rw = 0;
-      const maxW = W * 0.86;
+      const maxW = W * 0.92;
       lineWords.forEach((w, i) => {
         if (rw + widths[i] + gap > maxW && rows[rows.length - 1].length) { rows.push([]); rw = 0; }
         rows[rows.length - 1].push({ ...w, w: widths[i] });
         rw += widths[i] + gap;
       });
-      const lineH = fontSize * 1.28;
+      const lineH = fontSize * 1.34;
       const cy = H * (portrait ? 0.5 : 0.58) - (rows.length - 1) * lineH / 2;
       rows.forEach((row, ri) => {
         const totalW = row.reduce((a, w) => a + w.w, 0) + gap * (row.length - 1);
         let x = (W - totalW) / 2;
         const y = cy + ri * lineH;
         for (const w of row) {
-          this._drawWord(tc, w, x, y, t, fontSize, C, style, anim, energy, boost, lineOut, fx);
+          this._drawWord(tc, w, x, y, t, fontSize, C, style, anim, energy, boost, lineOut, fx, tracking, w.id === headId);
           x += w.w + gap;
         }
       });
@@ -772,7 +774,15 @@ class FXEngine {
     tc.shadowBlur = 0;
   }
 
-  _drawWord(tc, w, x, y, t, fs, C, style, anim, energy, boost, lineOut, fx) {
+  _measureWord(tc, word, tracking) {
+    const chars = [...word];
+    let wsum = 0;
+    chars.forEach((ch, i) => { wsum += tc.measureText(ch).width + (i < chars.length - 1 ? tracking : 0); });
+    return wsum;
+  }
+
+  _drawWord(tc, w, x, y, t, fs, C, style, anim, energy, boost, lineOut, fx, tracking, isHead) {
+    tracking = tracking || 0;
     const active = t >= w.start && t < w.end + 0.1;
     const upcoming = t < w.start;
     const preset = style.lettering || 'neon';
@@ -792,23 +802,23 @@ class FXEngine {
     tc.translate(cx + a.dx, cyy); tc.scale(a.scale, a.scale); tc.translate(-cx - a.dx, -cyy);
     const gx = cx + a.dx, gy = y + a.dy;
     const glow = (style.glow ?? 0.6) * boost * (active ? 1 : 0.45) * (0.7 + energy * 0.6);
-    if (style.randomSize) {
-      // 一文字ごとにサイズをランダム化 (文字ID×位置から決定論的=チラつかない)
-      const chars = [...w.word];
-      let lx = gx - w.w / 2;
-      chars.forEach((ch, i) => {
-        const cw = tc.measureText(ch).width;
-        const center = lx + cw / 2;
-        const f = 0.6 + this._hash01(w.id + ':' + i) * 0.9;   // 0.6x .. 1.5x
-        tc.save();
-        tc.translate(center, gy); tc.scale(f, f); tc.translate(-center, -gy);
-        this._paintGlyph(tc, ch, center, gy, cw, fs, preset, active, a.alpha, glow, C, style, t, w);
-        tc.restore();
-        lx += cw;
-      });
-    } else {
-      this._paintGlyph(tc, w.word, gx, gy, w.w, fs, preset, active, a.alpha, glow, C, style, t, w);
-    }
+    // 常に一文字ずつ描画 (字間トラッキング + ランダムサイズ対応)
+    const chars = [...w.word];
+    let lx = gx - w.w / 2;
+    chars.forEach((ch, i) => {
+      const cw = tc.measureText(ch).width;
+      const center = lx + cw / 2;
+      let f = 1;
+      if (style.randomSize) {
+        const h = this._hash01(w.id + ':' + i);
+        // 先頭の単語は縮小しない (1.0〜1.7)。それ以外は 0.7〜1.9
+        f = isHead ? (1.0 + h * 0.7) : (0.7 + h * 1.2);
+      }
+      if (f !== 1) { tc.save(); tc.translate(center, gy); tc.scale(f, f); tc.translate(-center, -gy); }
+      this._paintGlyph(tc, ch, center, gy, cw, fs, preset, active, a.alpha, glow, C, style, t, w);
+      if (f !== 1) tc.restore();
+      lx += cw + (i < chars.length - 1 ? tracking : 0);
+    });
     // カラオケ進行下線 (neon/brush系のみ)
     if (active && preset !== 'marker' && preset !== 'longshadow') {
       tc.globalAlpha = a.alpha * 0.9;
@@ -823,7 +833,8 @@ class FXEngine {
   /* 縦書き: 各語を縦にスタックし、列を右→左に配置 */
   _drawLyricsVertical(tc, lineWords, t, fs, C, style, anim, energy, boost, lineOut, fx, W, H) {
     const preset = style.lettering || 'neon';
-    const charH = fs * 1.02 + (style.tracking || 0) * fs;
+    const headId = lineWords[0] && lineWords[0].id;
+    const charH = fs * 1.04 + (style.tracking || 0) * fs;
     const colW = fs * 1.34;
     const maxColChars = Math.floor((H * 0.82) / charH);
     // 語を列に詰める (縦に溢れたら新しい列へ)
@@ -849,8 +860,10 @@ class FXEngine {
         const upcoming = t < w.start;
         const a = upcoming ? { dx: 0, dy: 0, scale: 1, alpha: 0.13 * (1 - lineOut) }
           : this._wordAnim(w, t, fs, anim, active, energy, lineOut);
+        const isHead = w.id === headId;
         wc.chars.forEach((ch, ci) => {
-          const jf = style.randomSize ? 0.6 + this._hash01(w.id + ':' + ci) * 0.9 : 1;
+          const h = this._hash01(w.id + ':' + ci);
+          const jf = style.randomSize ? (isHead ? 1.0 + h * 0.7 : 0.7 + h * 1.2) : 1;
           tc.save();
           const sc = a.scale * jf;
           tc.translate(cx, cy + a.dy); tc.scale(sc, sc); tc.translate(-cx, -(cy + a.dy));

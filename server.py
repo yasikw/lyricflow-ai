@@ -53,7 +53,7 @@ WHISPER_PY = next((p for p in [os.environ.get("WHISPER_PY", ""),
                                "/opt/homebrew/Caskroom/miniconda/base/envs/lyricflow-whisper/bin/python"]
                    if p and os.path.exists(p)), None)
 WHISPER_SCRIPT = os.path.join(ROOT, "scripts", "whisper_align.py")
-WHISPER_MODEL = os.environ.get("WHISPER_MODEL", "base")
+WHISPER_MODEL = os.environ.get("WHISPER_MODEL", "small")   # smallは日本語の頭出し精度がbaseより高い
 
 def whisper_available():
     return bool(WHISPER_PY and os.path.exists(WHISPER_SCRIPT))

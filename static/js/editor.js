@@ -452,7 +452,7 @@ class Editor {
             <option value="'Noto Serif JP', serif" ${(st.font || '').includes('Serif') ? 'selected' : ''}>Noto Serif JP</option>
             <option value="'Inter', sans-serif" ${(st.font || '').includes('Inter') ? 'selected' : ''}>Inter</option>
           </select></div>
-        <div class="prop-row"><span>サイズ</span><input type="range" id="st-size" min="28" max="120" value="${st.size || 64}"></div>
+        <div class="prop-row"><span>サイズ</span><input type="range" id="st-size" min="28" max="300" value="${st.size || 64}"></div>
         <div class="prop-row"><span>カラー</span><input type="color" id="st-color" value="${st.color || '#ffffff'}"></div>
         <div class="prop-row"><span>組方向</span>
           <select class="input" id="st-orient">${ORIENTS.map(([v, l]) => `<option value="${v}" ${(st.orient || 'horizontal') === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
@@ -703,18 +703,21 @@ class Editor {
       rawLines.forEach((ln, li) => {
         if (state.taps[li] == null) return;
         const start = state.taps[li];
-        let end = state.taps[li + 1] != null ? state.taps[li + 1] : Math.min(dur, start + 3.5);
-        if (end <= start) end = Math.min(dur, start + 1.2);
+        const nextTap = state.taps[li + 1] != null ? state.taps[li + 1] : Math.min(dur, start + 4);
         const chunks = splitWordsJS(ln);
-        const wsum = chunks.reduce((a, c) => a + Math.max(1, c.length), 0) || 1;
-        const gap = Math.min(0.4, (end - start) * 0.1);
-        const usable = (end - start) - gap;
+        const charN = chunks.reduce((a, c) => a + Math.max(1, c.length), 0) || 1;
+        // 行内の語は「自然な歌唱ペース」で並べ、行間の空きに引き伸ばさない(=遅延/間延び防止)
+        // 1文字あたり約0.26s目安。ただし次のタップは超えない
+        const natural = Math.min(nextTap - start, charN * 0.26 + 0.25);
+        const wsum = charN;
         let t = start;
-        for (const c of chunks) {
-          const wd = usable * Math.max(1, c.length) / wsum;
-          out.push({ id: Math.random().toString(36).slice(2, 10), word: c, line: li, start: +t.toFixed(2), end: +(t + wd).toFixed(2) });
+        chunks.forEach((c, ci) => {
+          const wd = natural * Math.max(1, c.length) / wsum;
+          // 最後の語だけ次行(nextTap)まで保持して行を表示し続ける
+          const en = ci === chunks.length - 1 ? Math.max(t + wd, nextTap - 0.05) : t + wd;
+          out.push({ id: Math.random().toString(36).slice(2, 10), word: c, line: li, start: +t.toFixed(2), end: +en.toFixed(2) });
           t += wd;
-        }
+        });
       });
     } else {
       // 語ごと: units は全語。各語 start=tap, end=次tap or +0.5

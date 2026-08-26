@@ -25,7 +25,8 @@ conda run -n lyricflow-whisper pip install faster-whisper
 ```
 
 - サーバーは `/opt/homebrew/Caskroom/miniconda/base/envs/lyricflow-whisper/bin/python` を自動検出（`WHISPER_PY` 環境変数で上書き可）。
-- モデルは既定 `base`（`WHISPER_MODEL=small` 等で変更可、初回のみ自動DL）。`scripts/whisper_align.py` がアライメント本体。
+- モデルは既定 `small`（日本語の頭出し精度が高い。`WHISPER_MODEL=base` で高速化 / `medium` で更に高精度、初回のみ自動DL）。`scripts/whisper_align.py` がアライメント本体。
+- アライメントは「認識発話全域(疎なら曲全体)へ字数按分＋行頭を単語オンセットにスナップ」方式で、認識が弱くても歌詞が先頭に詰まらないよう設計。
 - サーバー本体はstdlibのまま。Whisperは**サブプロセス**で呼ぶため未導入でも通常起動できます。
 
 ## 実装済み機能 (仕様書対応)
