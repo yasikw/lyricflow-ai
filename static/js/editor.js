@@ -10,7 +10,9 @@ const EXPORT_RES = {
   '4k': { '16:9': [3840, 2160], '9:16': [2160, 3840], '1:1': [2160, 2160], '4:5': [2160, 2700] },
 };
 const ANIMS = [['glow-pop', 'グロウポップ'], ['fade', 'フェード'], ['fade-up', 'フェードアップ'], ['slide-up', 'スライドアップ'], ['pop-scale', 'ポップスケール'], ['glitch-in', 'グリッチイン']];
-const SCENES = [['city', 'ネオン都市'], ['sky', '夜空'], ['stars', '星空(高密度)'], ['grid', 'サイバーグリッド'], ['sunset', 'レトロサンセット'], ['flat', 'フラット']];
+const SCENES = [['city', 'ネオン都市'], ['sky', '夜空'], ['stars', '星空(高密度)'], ['grid', 'サイバーグリッド'], ['sunset', 'レトロサンセット'], ['stage', 'ステージ(照明)'], ['flat', 'フラット']];
+const LETTERINGS = [['neon', 'ネオン(グラデ)'], ['outline', 'アウトライン'], ['marker', 'マーカー'], ['brush', '筆(太字)'], ['chrome', 'クローム(金属)'], ['longshadow', 'ロングシャドウ']];
+const ORIENTS = [['horizontal', '横書き'], ['vertical', '縦書き']];
 const PARTICLES = [['rain', '雨'], ['sakura', '桜'], ['snow', '雪'], ['stars', '光の粒'], ['embers', '火の粉'], ['none', 'なし']];
 const SCENE_COLORS = { Intro: '#8b96a8', Verse: '#00d4ff', 'Pre-Chorus': '#3fd58f', Chorus: '#ff7edb', Bridge: '#ffb03a', Outro: '#8b96a8' };
 
@@ -286,6 +288,21 @@ class Editor {
     }
   }
 
+  async addSubject(file) {
+    if (!file) return;
+    const fd = new FormData();
+    fd.append('file', file);
+    toast('キャラ画像をアップロード中…');
+    try {
+      const a = await API.upload(`/workspaces/${this.project.workspace_id}/assets`, fd);
+      this.assets.unshift(a);
+      this.tl.subject = { asset_id: a.id, url: a.url, name: a.filename, scale: 0.72, x: 0.5, y: 0.98 };
+      this.engine.setTimeline(this.tl);
+      this.markDirty(); this.renderRight();
+      toast('前景キャラを配置しました', 'ok');
+    } catch (e) { toast(e.message, 'err'); }
+  }
+
   async uploadAsset(file) {
     if (!file) return;
     const fd = new FormData();
@@ -327,7 +344,8 @@ class Editor {
     const c = t.config;
     Object.assign(this.tl, {
       template: tplId, colors: c.colors, fx: { ...c.fx }, particles: c.particles, sceneDefault: c.scene,
-      lyricStyle: { ...this.tl.lyricStyle, font: c.font, anim: c.anim, glow: c.fx.bloom, color: c.colors.text },
+      lyricStyle: { ...this.tl.lyricStyle, font: c.font, anim: c.anim, glow: c.fx.bloom, color: c.colors.text,
+                    lettering: c.lettering || 'neon', orient: c.orient || 'horizontal' },
     });
     if (this.tl.tracks.background[0]) this.tl.tracks.background[0].scene = c.scene;
     this.engine.setTimeline(this.tl);
@@ -434,8 +452,13 @@ class Editor {
           </select></div>
         <div class="prop-row"><span>サイズ</span><input type="range" id="st-size" min="28" max="120" value="${st.size || 64}"></div>
         <div class="prop-row"><span>カラー</span><input type="color" id="st-color" value="${st.color || '#ffffff'}"></div>
+        <div class="prop-row"><span>組方向</span>
+          <select class="input" id="st-orient">${ORIENTS.map(([v, l]) => `<option value="${v}" ${(st.orient || 'horizontal') === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+        <div class="prop-row"><span>レタリング</span>
+          <select class="input" id="st-letter">${LETTERINGS.map(([v, l]) => `<option value="${v}" ${(st.lettering || 'neon') === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
         <div class="prop-row"><span>アニメ</span>
           <select class="input" id="st-anim">${ANIMS.map(([v, l]) => `<option value="${v}" ${st.anim === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+        <div class="prop-row"><span>字間</span><input type="range" id="st-track" min="0" max="60" value="${(st.tracking || 0) * 100}"></div>
         <div class="prop-row"><span>グロー</span><input type="range" id="st-glow" min="0" max="100" value="${(st.glow ?? 0.6) * 100}"></div>
       </div>
       <div class="prop-group">
@@ -451,7 +474,23 @@ class Editor {
         <div class="fx-toggle"><span>Glitch</span><input type="range" id="fx-glitch" min="0" max="100" value="${(fx.glitch || 0) * 100}"></div>
         <div class="fx-toggle"><span>色収差</span><input type="range" id="fx-chroma" min="0" max="100" value="${(fx.chroma || 0) * 100}"></div>
         <div class="fx-toggle"><span>Wave 歪み</span><input type="range" id="fx-wave" min="0" max="100" value="${(fx.wave || 0) * 100}"></div>
+        <div class="fx-toggle"><span>光芒 God rays</span><input type="range" id="fx-godray" min="0" max="100" value="${(fx.godray || 0) * 100}"></div>
+        <div class="fx-toggle"><span>レンズフレア</span><input type="range" id="fx-flare" min="0" max="100" value="${(fx.flare || 0) * 100}"></div>
+        <div class="fx-toggle"><span>被写界深度 DoF</span><input type="range" id="fx-dof" min="0" max="100" value="${(fx.dof || 0) * 100}"></div>
         <div class="empty-note" style="padding:6px 2px;text-align:left;font-size:11px">サビ(Chorus)では強度が自動ブーストされます</div>
+      </div>
+      <div class="prop-group">
+        <h4>前景キャラ / 被写体</h4>
+        ${this.tl.subject ? `
+          <div class="prop-row"><span>素材</span><span style="font-size:11px;color:var(--cyan);overflow:hidden;text-overflow:ellipsis">${esc(this.tl.subject.name || '設定済み')}</span></div>
+          <div class="prop-row"><span>大きさ</span><input type="range" id="su-scale" min="30" max="100" value="${(this.tl.subject.scale || 0.72) * 100}"></div>
+          <div class="prop-row"><span>横位置</span><input type="range" id="su-x" min="0" max="100" value="${(this.tl.subject.x ?? 0.5) * 100}"></div>
+          <button class="btn danger sm" id="su-del" style="width:100%;justify-content:center;margin-top:5px">キャラを外す</button>
+        ` : `
+          <div class="empty-note" style="padding:4px 2px;text-align:left;font-size:11px">アニメキャラ等の画像/透過PNGを前景に配置し、リムライト・浮遊・呼吸で演出します。</div>
+          <input type="file" id="su-file" accept=".png,.jpg,.jpeg,.webp" style="display:none">
+          <button class="btn sm" id="su-add" style="width:100%;justify-content:center;margin-top:6px">＋ キャラ画像を配置</button>
+        `}
       </div>`;
     const $ = s => el.querySelector(s);
     const engSel = $('#ai-engine');
@@ -465,6 +504,9 @@ class Editor {
     $('#st-size').oninput = e => { this.tl.lyricStyle.size = +e.target.value; this.markDirty(); };
     $('#st-color').oninput = e => { this.tl.lyricStyle.color = e.target.value; this.markDirty(); };
     $('#st-anim').onchange = e => { this.tl.lyricStyle.anim = e.target.value; this.markDirty(); };
+    $('#st-orient').onchange = e => { this.tl.lyricStyle.orient = e.target.value; this.markDirty(); };
+    $('#st-letter').onchange = e => { this.tl.lyricStyle.lettering = e.target.value; this.markDirty(); };
+    $('#st-track').oninput = e => { this.tl.lyricStyle.tracking = e.target.value / 100; this.markDirty(); };
     $('#st-glow').oninput = e => { this.tl.lyricStyle.glow = e.target.value / 100; this.markDirty(); };
     $('#sc-scene').onchange = e => {
       this.tl.sceneDefault = e.target.value;
@@ -473,8 +515,17 @@ class Editor {
       this.markDirty(); this.renderTimeline();
     };
     $('#sc-part').onchange = e => { this.tl.particles = e.target.value; this.engine.particles = []; this.markDirty(); };
-    for (const k of ['bloom', 'glitch', 'chroma', 'wave']) {
+    for (const k of ['bloom', 'glitch', 'chroma', 'wave', 'godray', 'flare', 'dof']) {
       $('#fx-' + k).oninput = e => { this.tl.fx[k] = e.target.value / 100; this.markDirty(); };
+    }
+    // 前景キャラ/被写体
+    if (this.tl.subject) {
+      $('#su-scale').oninput = e => { this.tl.subject.scale = e.target.value / 100; this.markDirty(); };
+      $('#su-x').oninput = e => { this.tl.subject.x = e.target.value / 100; this.markDirty(); };
+      $('#su-del').onclick = () => { this.tl.subject = null; this.engine.setTimeline(this.tl); this.markDirty(); this.renderRight(); };
+    } else {
+      $('#su-add').onclick = () => $('#su-file').click();
+      $('#su-file').onchange = e => this.addSubject(e.target.files[0]);
     }
     if (selWord) {
       $('#w-start').onchange = e => { selWord.start = +e.target.value; this.markDirty(); this.renderTimeline(); };
@@ -517,12 +568,16 @@ class Editor {
     try { res = await API.waitJob(job_id, j => this.showJob(j.stage, j.progress_pct)); }
     catch (e) { return toast('演出提案に失敗: ' + e.message, 'err'); }
     const msg = `${res.engine === 'codex' ? 'Codex' : 'Built-in'} の提案:\n\n` +
-      `背景: ${res.scene} / 粒子: ${res.particles} / アニメ: ${res.anim}\n` +
+      `背景: ${res.scene} / 粒子: ${res.particles} / アニメ: ${res.anim}` +
+      `${res.lettering ? ' / 文字: ' + res.lettering : ''}${res.orient === 'vertical' ? ' / 縦書き' : ''}\n` +
       `${res.rationale || ''}\n\nこの演出を適用しますか?`;
     if (!confirm(msg)) return;
+    const ls = { ...this.tl.lyricStyle, anim: res.anim, color: res.colors.text, glow: res.fx.bloom };
+    if (res.lettering) ls.lettering = res.lettering;
+    if (res.orient) ls.orient = res.orient;
     Object.assign(this.tl, {
       colors: res.colors, fx: { ...this.tl.fx, ...res.fx }, particles: res.particles, sceneDefault: res.scene,
-      lyricStyle: { ...this.tl.lyricStyle, anim: res.anim, color: res.colors.text, glow: res.fx.bloom },
+      lyricStyle: ls,
     });
     if (this.tl.tracks.background[0]) this.tl.tracks.background[0].scene = res.scene;
     else this.tl.tracks.background.push({ id: 'bg' + Date.now(), start: 0, end: this.tl.duration || 60, scene: res.scene });

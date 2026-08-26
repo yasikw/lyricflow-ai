@@ -50,6 +50,16 @@ class FXEngine {
     this.timeline = tl;
     this.particles = [];
     this.pTime = -1;
+    // 前景キャラ/被写体の画像を読み込み
+    const url = tl && tl.subject && tl.subject.url;
+    if (url && this._subjUrl !== url) {
+      this._subjUrl = url;
+      this._subjImg = new Image();
+      this._subjImg.crossOrigin = 'anonymous';
+      this._subjImg.src = url;
+    } else if (!url) {
+      this._subjImg = null; this._subjUrl = null;
+    }
   }
 
   resize(w, h) {
@@ -95,7 +105,15 @@ class FXEngine {
 
     ctx.clearRect(0, 0, W, H);
     this._drawScene(ctx, t, W, H, colors, energy, boost);
+    // 光芒 (God rays) — 背景の上・前景/歌詞の下に敷く
+    const godray = (fxActive.godray ?? fx.godray ?? 0);
+    if (godray > 0.04 && this.quality !== 'draft') this._godRays(ctx, t, W, H, colors, godray * (0.6 + energy * boost * 0.6));
     this._stepParticles(ctx, t, W, H, colors, energy * boost);
+    // 被写界深度 (Depth of Field) — 背景/粒子をフォーカス帯の外でぼかす
+    const dof = (fxActive.dof ?? fx.dof ?? 0);
+    if (dof > 0.05 && this.quality !== 'draft') this._dof(ctx, W, H, dof);
+    // 前景キャラ/被写体レイヤー (任意アップロード素材)
+    this._drawSubject(ctx, t, W, H, energy, boost);
     this._drawLyrics(t, W, H, colors, energy, boost, fx);
     this._drawOverlays(ctx, t, W, H, colors);
 
@@ -107,10 +125,137 @@ class FXEngine {
     // 本物の多段ブルーム (明部を抽出してブラー加算)
     const bloom = (fxActive.bloom ?? fx.bloom ?? 0.5) * boost;
     if (bloom > 0.05) this._bloom(W, H, bloom * (0.55 + energy * 0.5));
+    // レンズフレア (光源からの筋) — サビ/高エネルギーで強調
+    const flare = (fxActive.flare ?? fx.flare ?? 0);
+    if (flare > 0.04 && this.quality !== 'draft') this._lensFlare(ctx, t, W, H, colors, flare * (0.4 + energy * boost * 0.7));
     this._grade(ctx, W, H, energy);      // カラーグレード + フィルムグレイン
     this._vignette(ctx, W, H);
     if (tl.watermark) this._watermark(ctx, W, H);
     ctx.filter = 'none';
+  }
+
+  /* 前景の被写体(キャラ)レイヤー: アップロード画像をリムライト+浮遊+呼吸で演出 */
+  _drawSubject(ctx, t, W, H, energy, boost) {
+    const sub = this.timeline?.subject;
+    if (!sub || !this._subjImg || !this._subjImg.complete || !this._subjImg.naturalWidth) return;
+    const img = this._subjImg;
+    const scale = (sub.scale || 0.72) * (1 + Math.sin(t * 1.6) * 0.006 + energy * boost * 0.01); // 呼吸
+    const ih = H * scale, iw = ih * (img.naturalWidth / img.naturalHeight);
+    const cx = W * (sub.x ?? 0.5), by = H * (sub.y ?? 0.98);           // 接地位置
+    const floatY = Math.sin(t * 1.1) * H * 0.008;                       // 浮遊
+    const x = cx - iw / 2, y = by - ih + floatY;
+    ctx.save();
+    // 接地の影
+    ctx.globalAlpha = 0.35;
+    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+    ctx.beginPath(); ctx.ellipse(cx, by - H * 0.01, iw * 0.32, H * 0.02, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.globalAlpha = 1;
+    // リムライト (加算で縁を光らせる)
+    if (this.quality !== 'draft') {
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.globalAlpha = 0.35 + energy * 0.3;
+      ctx.filter = `drop-shadow(0 0 ${Math.max(4, W / 240)}px ${this._alpha(this.timeline.colors?.accent || '#00d4ff', 0.9)})`;
+      ctx.drawImage(img, x, y, iw, ih);
+      ctx.restore();
+    }
+    ctx.drawImage(img, x, y, iw, ih);
+    ctx.restore();
+  }
+
+  /* 光芒 (God rays): 光源から扇状に伸びる加算の光の筋 */
+  _godRays(ctx, t, W, H, C, amt) {
+    const lx = W * (this.timeline?.lightX ?? 0.5), ly = H * (this.timeline?.lightY ?? 0.18);
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    const n = 9;
+    for (let i = 0; i < n; i++) {
+      const ang = -Math.PI / 2 + (i - n / 2) * 0.22 + Math.sin(t * 0.2 + i) * 0.02;
+      const len = Math.hypot(W, H);
+      const spread = 0.06 + 0.03 * Math.sin(t * 0.7 + i * 1.7);
+      ctx.save();
+      ctx.translate(lx, ly);
+      ctx.rotate(ang + Math.PI);
+      const g = ctx.createLinearGradient(0, 0, 0, len);
+      g.addColorStop(0, this._alpha(C.accent, 0.0));
+      g.addColorStop(0.04, this._alpha(i % 2 ? C.accent2 : C.accent, amt * 0.16));
+      g.addColorStop(1, this._alpha(C.accent, 0));
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.lineTo(-len * spread, len);
+      ctx.lineTo(len * spread, len);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    }
+    // 光源のグロー
+    const gg = ctx.createRadialGradient(lx, ly, 0, lx, ly, W * 0.25);
+    gg.addColorStop(0, this._alpha('#ffffff', amt * 0.18));
+    gg.addColorStop(0.3, this._alpha(C.accent, amt * 0.12));
+    gg.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = gg;
+    ctx.fillRect(0, 0, W, H);
+    ctx.restore();
+  }
+
+  /* レンズフレア: 光源から画面反対側へ並ぶ光の玉 + アナモルフィックな横筋 */
+  _lensFlare(ctx, t, W, H, C, amt) {
+    const lx = W * (this.timeline?.lightX ?? 0.5), ly = H * (this.timeline?.lightY ?? 0.18);
+    const cx = W / 2, cy = H / 2;
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    // 横方向アナモルフィック筋
+    const streak = ctx.createLinearGradient(0, ly, W, ly);
+    streak.addColorStop(0, 'rgba(0,0,0,0)');
+    streak.addColorStop(0.5, this._alpha(C.accent, amt * 0.5));
+    streak.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = streak;
+    ctx.fillRect(0, ly - H * 0.006, W, H * 0.012);
+    // フレアの玉
+    const dx = cx - lx, dy = cy - ly;
+    const cols = [C.accent, C.accent2, '#ffffff', C.accent2];
+    for (let i = 1; i <= 5; i++) {
+      const f = i * 0.42;
+      const px = lx + dx * f, py = ly + dy * f;
+      const r = (W * 0.02) * (1 + (i % 2) * 0.8) * (0.7 + amt);
+      const g = ctx.createRadialGradient(px, py, 0, px, py, r);
+      g.addColorStop(0, this._alpha(cols[i % cols.length], amt * 0.3));
+      g.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = g;
+      ctx.beginPath(); ctx.arc(px, py, r, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  /* 被写界深度: フォーカス帯(歌詞の高さ)以外をぼかす */
+  _dof(ctx, W, H, amt) {
+    const p = this.pctx;
+    if (this.post.width !== W || this.post.height !== H) { this.post.width = W; this.post.height = H; }
+    p.clearRect(0, 0, W, H);
+    p.filter = `blur(${Math.max(2, amt * W / 140)}px)`;
+    p.drawImage(this.canvas, 0, 0);
+    p.filter = 'none';
+    // フォーカス帯の外(上/下)だけブラー版を重ねる
+    const band = H * 0.30, mid = H * (this.canvas.height > this.canvas.width ? 0.5 : 0.56);
+    ctx.save();
+    const tmp = this.bloom; // 一時流用
+    if (tmp.width !== W || tmp.height !== H) { tmp.width = W; tmp.height = H; }
+    const tctx = this.bctx;
+    const grad = tctx.createLinearGradient(0, 0, 0, H);
+    grad.addColorStop(0, 'rgba(0,0,0,1)');
+    grad.addColorStop(Math.max(0, (mid - band) / H), 'rgba(0,0,0,0)');
+    grad.addColorStop(Math.min(1, (mid + band) / H), 'rgba(0,0,0,0)');
+    grad.addColorStop(1, 'rgba(0,0,0,1)');
+    tctx.globalCompositeOperation = 'source-over';
+    tctx.clearRect(0, 0, W, H);
+    tctx.drawImage(this.post, 0, 0);
+    tctx.globalCompositeOperation = 'destination-in';
+    tctx.fillStyle = grad;
+    tctx.fillRect(0, 0, W, H);
+    tctx.globalCompositeOperation = 'source-over';
+    ctx.drawImage(tmp, 0, 0);
+    ctx.restore();
   }
 
   /* 明部ベースのブルーム: フレームを縮小→自己乗算で明部を強調→ブラー加算。安価だが発光感が出る */
@@ -208,6 +353,66 @@ class FXEngine {
     else if (scene === 'grid') this._sceneGrid(ctx, t, W, H, C, energy * boost);
     else if (scene === 'stars' || scene === 'sky') this._sceneSky(ctx, t, W, H, C, scene === 'stars');
     else if (scene === 'sunset') this._sceneSunset(ctx, t, W, H, C, energy);
+    else if (scene === 'stage') this._sceneStage(ctx, t, W, H, C, energy, boost);
+    ctx.restore();
+  }
+
+  /* コンサートステージ: 反射する床 + 上方からのスポットライト + ヘイズ (アニメMV定番) */
+  _sceneStage(ctx, t, W, H, C, energy, boost) {
+    const horizon = H * 0.66;
+    // 床 (グラデ + 反射のハイライト)
+    const fg = ctx.createLinearGradient(0, horizon, 0, H);
+    fg.addColorStop(0, this._alpha(C.accent2, 0.10));
+    fg.addColorStop(0.5, '#05070d');
+    fg.addColorStop(1, this._alpha(C.accent, 0.06));
+    ctx.fillStyle = fg;
+    ctx.fillRect(0, horizon, W, H - horizon);
+    // 床の反射ライン (奥行き)
+    ctx.save();
+    ctx.strokeStyle = this._alpha(C.accent, 0.10 + energy * 0.1);
+    ctx.lineWidth = Math.max(1, W / 1100);
+    for (let i = 1; i <= 8; i++) {
+      const y = horizon + Math.pow(i / 8, 2) * (H - horizon);
+      ctx.globalAlpha = 1 - i / 10;
+      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+    }
+    ctx.restore();
+    // スポットライト (上方から複数, 加算)
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    const lights = 3;
+    for (let i = 0; i < lights; i++) {
+      const sx = W * (0.28 + 0.22 * i) + Math.sin(t * 0.5 + i * 2) * W * 0.06;
+      const topX = W * (0.3 + 0.2 * i);
+      const col = i === 1 ? C.accent : C.accent2;
+      const g = ctx.createLinearGradient(topX, 0, sx, horizon + H * 0.12);
+      g.addColorStop(0, this._alpha(col, 0.18 + energy * boost * 0.12));
+      g.addColorStop(1, this._alpha(col, 0));
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.moveTo(topX - W * 0.02, 0);
+      ctx.lineTo(topX + W * 0.02, 0);
+      ctx.lineTo(sx + W * 0.14, horizon + H * 0.14);
+      ctx.lineTo(sx - W * 0.14, horizon + H * 0.14);
+      ctx.closePath();
+      ctx.fill();
+      // 床のスポット
+      const fgr = ctx.createRadialGradient(sx, horizon + H * 0.05, 0, sx, horizon + H * 0.05, W * 0.16);
+      fgr.addColorStop(0, this._alpha(col, 0.14 + energy * 0.1));
+      fgr.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = fgr;
+      ctx.beginPath(); ctx.ellipse(sx, horizon + H * 0.06, W * 0.16, H * 0.03, 0, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.restore();
+    // 星/塵
+    const r = this._seededRand(19);
+    ctx.save();
+    for (let i = 0; i < 60; i++) {
+      const x = r() * W, y = r() * horizon;
+      ctx.globalAlpha = (0.3 + 0.6 * Math.abs(Math.sin(t + i))) * 0.6;
+      ctx.fillStyle = i % 5 === 0 ? C.accent : '#dfeaff';
+      ctx.fillRect(x, y, 1.4, 1.4);
+    }
     ctx.restore();
   }
 
@@ -418,35 +623,39 @@ class FXEngine {
 
     const tc = this.tctx;
     tc.clearRect(0, 0, W, H);
-    const fontSize = (style.size || 64) * (W / 1280) * (this.canvas.height > this.canvas.width ? 0.72 : 1);
+    const portrait = this.canvas.height > this.canvas.width;
+    const fontSize = (style.size || 64) * (W / 1280) * (portrait ? 0.72 : 1);
     const font = `900 ${fontSize}px ${style.font || "'Noto Sans JP', sans-serif"}`;
     tc.font = font;
     tc.textBaseline = 'middle';
-
-    // 行内レイアウト (中央寄せ・必要なら折り返し)
-    const gap = fontSize * 0.22;
-    const widths = lineWords.map(w => tc.measureText(w.word).width);
-    const rows = [[]];
-    let rw = 0;
-    const maxW = W * 0.86;
-    lineWords.forEach((w, i) => {
-      if (rw + widths[i] + gap > maxW && rows[rows.length - 1].length) { rows.push([]); rw = 0; }
-      rows[rows.length - 1].push({ ...w, w: widths[i] });
-      rw += widths[i] + gap;
-    });
-    const lineH = fontSize * 1.28;
-    const cy = H * (this.canvas.height > this.canvas.width ? 0.5 : 0.58) - (rows.length - 1) * lineH / 2;
-
     const lineOut = Math.min(1, Math.max(0, (t - lineEnd) / 0.5));
-    rows.forEach((row, ri) => {
-      const totalW = row.reduce((a, w) => a + w.w, 0) + gap * (row.length - 1);
-      let x = (W - totalW) / 2;
-      const y = cy + ri * lineH;
-      for (const w of row) {
-        this._drawWord(tc, w, x, y, t, fontSize, C, style, anim, energy, boost, lineOut, fx);
-        x += w.w + gap;
-      }
-    });
+
+    if ((style.orient || 'horizontal') === 'vertical') {
+      this._drawLyricsVertical(tc, lineWords, t, fontSize, C, style, anim, energy, boost, lineOut, fx, W, H);
+    } else {
+      // 横書き: 行内レイアウト (中央寄せ・必要なら折り返し)
+      const gap = fontSize * 0.22 + (style.tracking || 0) * fontSize;
+      const widths = lineWords.map(w => tc.measureText(w.word).width);
+      const rows = [[]];
+      let rw = 0;
+      const maxW = W * 0.86;
+      lineWords.forEach((w, i) => {
+        if (rw + widths[i] + gap > maxW && rows[rows.length - 1].length) { rows.push([]); rw = 0; }
+        rows[rows.length - 1].push({ ...w, w: widths[i] });
+        rw += widths[i] + gap;
+      });
+      const lineH = fontSize * 1.28;
+      const cy = H * (portrait ? 0.5 : 0.58) - (rows.length - 1) * lineH / 2;
+      rows.forEach((row, ri) => {
+        const totalW = row.reduce((a, w) => a + w.w, 0) + gap * (row.length - 1);
+        let x = (W - totalW) / 2;
+        const y = cy + ri * lineH;
+        for (const w of row) {
+          this._drawWord(tc, w, x, y, t, fontSize, C, style, anim, energy, boost, lineOut, fx);
+          x += w.w + gap;
+        }
+      });
+    }
 
     // 色収差付きで合成
     const chroma = (fx.chroma || 0) * boost * (0.4 + energy);
@@ -472,79 +681,172 @@ class FXEngine {
     }
   }
 
-  _drawWord(tc, w, x, y, t, fs, C, style, anim, energy, boost, lineOut, fx) {
-    const inDur = 0.34;
-    const p = Math.min(1, Math.max(0, (t - w.start) / inDur));   // 出現アニメ進行
-    const active = t >= w.start && t < w.end + 0.1;              // 発声中
-    const upcoming = t < w.start;
+  /* 出現アニメの状態を計算 (縦横で共有) */
+  _wordAnim(w, t, fs, anim, active, energy, lineOut) {
+    const p = Math.min(1, Math.max(0, (t - w.start) / 0.34));
     const ease = 1 - Math.pow(1 - p, 3);
-    if (upcoming && anim !== 'karaoke') {
-      // 未発声はうっすら
-      tc.save();
-      tc.globalAlpha = 0.13 * (1 - lineOut);
-      tc.fillStyle = style.color || C.text;
-      tc.fillText(w.word, x, y);
-      tc.restore();
-      return;
-    }
-    tc.save();
-    const eob = 1 + 2.70158 * Math.pow(p - 1, 3) + 1.70158 * Math.pow(p - 1, 2); // easeOutBack (軽い行き過ぎ)
+    const eob = 1 + 2.70158 * Math.pow(p - 1, 3) + 1.70158 * Math.pow(p - 1, 2);
     let dx = 0, dy = 0, scale = 1, alpha = 1;
     if (anim === 'fade') { alpha = ease; }
     else if (anim === 'fade-up') { alpha = ease; dy = (1 - ease) * fs * 0.5; }
     else if (anim === 'slide-up') { alpha = Math.min(1, ease * 1.4); dy = (1 - ease) * fs * 1.1; }
     else if (anim === 'pop-scale') { scale = 0.5 + eob * 0.5; alpha = Math.min(1, ease * 1.3); }
     else if (anim === 'glow-pop') { scale = 0.78 + eob * 0.22; alpha = Math.min(1, ease * 1.3); }
-    else if (anim === 'glitch-in') {
-      alpha = ease;
-      if (p < 1) { dx = (Math.random() - 0.5) * fs * 0.4 * (1 - p); dy = (Math.random() - 0.5) * fs * 0.2 * (1 - p); }
-    }
-    // 発声中はエネルギーに合わせて微かに脈動
+    else if (anim === 'glitch-in') { alpha = ease; if (p < 1) { dx = (Math.random() - 0.5) * fs * 0.4 * (1 - p); dy = (Math.random() - 0.5) * fs * 0.2 * (1 - p); } }
     if (active) scale += Math.sin(t * 7 + w.start * 3) * 0.02 * (0.5 + energy);
-    alpha *= (1 - lineOut);
-    const cx = x + w.w / 2, cyy = y + dy;
-    tc.translate(cx + dx, cyy); tc.scale(scale, scale); tc.translate(-cx - dx, -cyy);
-    tc.globalAlpha = alpha;
-    const tx = x + dx, ty = y + dy;
-    // 縁取り (可読性 + アニメ的な締まり)
+    return { dx, dy, scale, alpha: alpha * (1 - lineOut), p };
+  }
+
+  /* レタリングのプリセット別スタイルを適用し fillStyle を返す (縦横で共有) */
+  _letterFill(tc, preset, active, C, style, fs, yTop, yBot) {
+    const base = style.color || C.text;
     tc.lineJoin = 'round';
-    tc.lineWidth = fs * 0.085;
-    tc.strokeStyle = 'rgba(5,9,16,0.8)';
-    tc.strokeText(w.word, tx, ty);
-    // グロー (Bloom)
-    const glow = (style.glow ?? 0.6) * boost * (active ? 1 : 0.45);
-    if (glow > 0.05 && this.quality !== 'draft') {
-      tc.shadowColor = active ? C.accent : this._alpha(C.accent2, 0.8);
-      tc.shadowBlur = fs * 0.45 * glow * (0.7 + energy * 0.6);
+    if (preset === 'outline') {
+      tc.lineWidth = fs * 0.12; tc.strokeStyle = active ? C.accent : this._alpha(base, 0.92);
+      return active ? this._alpha(C.bg1 || '#0a0f1a', 0.85) : 'rgba(10,14,22,0.55)';
     }
+    if (preset === 'marker') {
+      tc.lineWidth = fs * 0.05; tc.strokeStyle = 'rgba(5,9,16,0.4)';
+      return '#0a0f18';
+    }
+    if (preset === 'chrome') {
+      tc.lineWidth = fs * 0.08; tc.strokeStyle = 'rgba(5,9,16,0.85)';
+      const g = tc.createLinearGradient(0, yTop, 0, yBot);
+      g.addColorStop(0, '#eaf6ff'); g.addColorStop(0.44, '#9fb6cf'); g.addColorStop(0.5, '#586b82');
+      g.addColorStop(0.56, '#cfdcec'); g.addColorStop(1, '#f4faff');
+      return g;
+    }
+    if (preset === 'brush') {
+      tc.lineWidth = fs * 0.13; tc.strokeStyle = 'rgba(5,9,16,0.88)';
+      return active ? C.accent : this._alpha(base, 0.94);
+    }
+    // neon (default)
+    tc.lineWidth = fs * 0.085; tc.strokeStyle = 'rgba(5,9,16,0.8)';
     if (active) {
-      // 発声中: 縦グラデ (上=セカンダリ, 中=白, 下=アクセント) で立体感
-      const grad = tc.createLinearGradient(0, ty - fs * 0.55, 0, ty + fs * 0.55);
-      grad.addColorStop(0, this._alpha(C.accent2, 0.95));
-      grad.addColorStop(0.45, '#ffffff');
-      grad.addColorStop(1, C.accent);
-      tc.fillStyle = grad;
-    } else {
-      tc.fillStyle = this._alpha(style.color || C.text, 0.9);
+      const g = tc.createLinearGradient(0, yTop, 0, yBot);
+      g.addColorStop(0, this._alpha(C.accent2, 0.95)); g.addColorStop(0.45, '#ffffff'); g.addColorStop(1, C.accent);
+      return g;
     }
-    tc.fillText(w.word, tx, ty);
-    if (active && glow > 0.3) {          // 二重描きで芯の発光を強調
-      tc.shadowBlur = fs * 0.14;
-      tc.fillStyle = '#ffffff';
-      tc.globalAlpha = alpha * 0.5;
-      tc.fillText(w.word, tx, ty);
-      tc.globalAlpha = alpha;
-    }
-    // カラオケ風の進行下線 (発声中)
-    if (active) {
-      tc.shadowBlur = 0;
+    return this._alpha(base, 0.9);
+  }
+
+  /* 1グリフ(または語)を描画: 縁取り→塗り→発光。marker/longshadowの装飾も処理 */
+  _paintGlyph(tc, text, cx, cy, w, fs, preset, active, alpha, glow, C, style, t, w0) {
+    const yTop = cy - fs * 0.55, yBot = cy + fs * 0.55;
+    // marker: 蛍光ペン風の背景ボックス
+    if (preset === 'marker' && active) {
+      tc.save();
       tc.globalAlpha = alpha * 0.9;
-      const grad = tc.createLinearGradient(tx, 0, tx + w.w, 0);
+      const grad = tc.createLinearGradient(cx - w / 2, 0, cx + w / 2, 0);
       grad.addColorStop(0, C.accent); grad.addColorStop(1, C.accent2);
       tc.fillStyle = grad;
-      tc.fillRect(tx, ty + fs * 0.62, w.w * Math.min(1, (t - w.start) / Math.max(0.12, w.end - w.start)), fs * 0.055);
+      tc.fillRect(cx - w / 2 - fs * 0.06, cy - fs * 0.42, w + fs * 0.12, fs * 0.86);
+      tc.restore();
+    }
+    // longshadow: 斜め下へ連続シャドウ
+    if (preset === 'longshadow') {
+      tc.save();
+      tc.globalAlpha = alpha * 0.5;
+      tc.fillStyle = this._alpha(C.accent2, 0.5);
+      for (let s = 2; s <= 14; s += 2) { tc.fillText(text, cx + s, cy + s); }
+      tc.restore();
+      tc.lineWidth = fs * 0.09; tc.strokeStyle = 'rgba(5,9,16,0.85)';
+      tc.strokeText(text, cx, cy);
+      tc.fillStyle = active ? C.accent : this._alpha(style.color || C.text, 0.95);
+      tc.fillText(text, cx, cy);
+      return;
+    }
+    tc.globalAlpha = alpha;
+    const fill = this._letterFill(tc, preset, active, C, style, fs, yTop, yBot);
+    tc.strokeText(text, cx, cy);
+    if (glow > 0.05 && this.quality !== 'draft') {
+      tc.shadowColor = active ? C.accent : this._alpha(C.accent2, 0.8);
+      tc.shadowBlur = fs * 0.45 * glow;
+    }
+    tc.fillStyle = fill;
+    tc.fillText(text, cx, cy);
+    if (active && glow > 0.3 && preset !== 'marker') {   // 芯の発光
+      tc.shadowBlur = fs * 0.14; tc.fillStyle = '#ffffff'; tc.globalAlpha = alpha * 0.5;
+      tc.fillText(text, cx, cy); tc.globalAlpha = alpha;
+    }
+    tc.shadowBlur = 0;
+  }
+
+  _drawWord(tc, w, x, y, t, fs, C, style, anim, energy, boost, lineOut, fx) {
+    const active = t >= w.start && t < w.end + 0.1;
+    const upcoming = t < w.start;
+    const preset = style.lettering || 'neon';
+    if (upcoming) {
+      tc.save();
+      tc.textAlign = 'left';
+      tc.globalAlpha = 0.13 * (1 - lineOut);
+      tc.fillStyle = style.color || C.text;
+      tc.fillText(w.word, x, y);
+      tc.restore();
+      return;
+    }
+    const a = this._wordAnim(w, t, fs, anim, active, energy, lineOut);
+    tc.save();
+    tc.textAlign = 'center';
+    const cx = x + w.w / 2, cyy = y + a.dy;
+    tc.translate(cx + a.dx, cyy); tc.scale(a.scale, a.scale); tc.translate(-cx - a.dx, -cyy);
+    const gx = cx + a.dx, gy = y + a.dy;
+    const glow = (style.glow ?? 0.6) * boost * (active ? 1 : 0.45) * (0.7 + energy * 0.6);
+    this._paintGlyph(tc, w.word, gx, gy, w.w, fs, preset, active, a.alpha, glow, C, style, t, w);
+    // カラオケ進行下線 (neon/brush系のみ)
+    if (active && preset !== 'marker' && preset !== 'longshadow') {
+      tc.globalAlpha = a.alpha * 0.9;
+      const grad = tc.createLinearGradient(gx - w.w / 2, 0, gx + w.w / 2, 0);
+      grad.addColorStop(0, C.accent); grad.addColorStop(1, C.accent2);
+      tc.fillStyle = grad;
+      tc.fillRect(gx - w.w / 2, gy + fs * 0.62, w.w * Math.min(1, (t - w.start) / Math.max(0.12, w.end - w.start)), fs * 0.055);
     }
     tc.restore();
+  }
+
+  /* 縦書き: 各語を縦にスタックし、列を右→左に配置 */
+  _drawLyricsVertical(tc, lineWords, t, fs, C, style, anim, energy, boost, lineOut, fx, W, H) {
+    const preset = style.lettering || 'neon';
+    const charH = fs * 1.02 + (style.tracking || 0) * fs;
+    const colW = fs * 1.34;
+    const maxColChars = Math.floor((H * 0.82) / charH);
+    // 語を列に詰める (縦に溢れたら新しい列へ)
+    const cols = [[]];
+    let used = 0;
+    for (const w of lineWords) {
+      const chars = [...w.word];
+      if (used + chars.length > maxColChars && cols[cols.length - 1].length) { cols.push([]); used = 0; }
+      cols[cols.length - 1].push({ w, chars });
+      used += chars.length;
+    }
+    const totalCols = cols.length;
+    const blockW = totalCols * colW;
+    const startX = W / 2 + blockW / 2 - colW / 2;   // 右端の列から
+    tc.textAlign = 'center';
+    cols.forEach((col, ci) => {
+      const cx = startX - ci * colW;
+      const nChars = col.reduce((a, wc) => a + wc.chars.length, 0);
+      let cy = H * 0.5 - (nChars * charH) / 2 + charH / 2;
+      for (const wc of col) {
+        const w = wc.w;
+        const active = t >= w.start && t < w.end + 0.1;
+        const upcoming = t < w.start;
+        const a = upcoming ? { dx: 0, dy: 0, scale: 1, alpha: 0.13 * (1 - lineOut) }
+          : this._wordAnim(w, t, fs, anim, active, energy, lineOut);
+        for (const ch of wc.chars) {
+          tc.save();
+          tc.translate(cx, cy + a.dy); tc.scale(a.scale, a.scale); tc.translate(-cx, -(cy + a.dy));
+          if (upcoming) {
+            tc.globalAlpha = a.alpha; tc.fillStyle = style.color || C.text; tc.fillText(ch, cx, cy + a.dy);
+          } else {
+            const glow = (style.glow ?? 0.6) * boost * (active ? 1 : 0.45) * (0.7 + energy * 0.6);
+            this._paintGlyph(tc, ch, cx, cy + a.dy, colW * 0.8, fs, preset, active, a.alpha, glow, C, style, t, w);
+          }
+          tc.restore();
+          cy += charH;
+        }
+      }
+    });
   }
 
   /* ---------------- overlays ---------------- */

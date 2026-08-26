@@ -490,33 +490,39 @@ def translate_engine(lyrics_text, target, engine="builtin"):
     return out, "preview"
 
 # ---------------------------------------------------------------- 演出提案 (Creative Director, 仕様 2.4 差別化機能)
-SCENE_OPTS = ["city", "sky", "stars", "grid", "sunset", "flat"]
+SCENE_OPTS = ["city", "sky", "stars", "grid", "sunset", "stage", "flat"]
 PARTICLE_OPTS = ["rain", "sakura", "snow", "stars", "embers", "none"]
 ANIM_OPTS = ["glow-pop", "fade", "fade-up", "slide-up", "pop-scale", "glitch-in"]
+LETTERING_OPTS = ["neon", "outline", "marker", "brush", "chrome", "longshadow"]
+ORIENT_OPTS = ["horizontal", "vertical"]
 
 def suggest_direction(lyrics_text, mood="", engine="builtin"):
     """歌詞の雰囲気から背景シーン・配色・パーティクル・エフェクト強度を提案する。"""
     if engine == "codex" and codex_available():
         try:
             schema = {"type": "object", "additionalProperties": False,
-                      "required": ["scene", "particles", "anim", "colors", "fx", "rationale"],
+                      "required": ["scene", "particles", "anim", "lettering", "orient", "colors", "fx", "rationale"],
                       "properties": {
                           "scene": {"type": "string", "enum": SCENE_OPTS},
                           "particles": {"type": "string", "enum": PARTICLE_OPTS},
                           "anim": {"type": "string", "enum": ANIM_OPTS},
+                          "lettering": {"type": "string", "enum": LETTERING_OPTS},
+                          "orient": {"type": "string", "enum": ORIENT_OPTS},
                           "colors": {"type": "object", "additionalProperties": False,
                                      "required": ["bg1", "bg2", "accent", "accent2", "text"],
                                      "properties": {k: {"type": "string"} for k in ("bg1", "bg2", "accent", "accent2", "text")}},
                           "fx": {"type": "object", "additionalProperties": False,
-                                 "required": ["bloom", "glitch", "chroma", "wave"],
-                                 "properties": {k: {"type": "number"} for k in ("bloom", "glitch", "chroma", "wave")}},
+                                 "required": ["bloom", "glitch", "chroma", "wave", "godray", "flare", "dof"],
+                                 "properties": {k: {"type": "number"} for k in ("bloom", "glitch", "chroma", "wave", "godray", "flare", "dof")}},
                           "rationale": {"type": "string"}}}
-            prompt = ("You are an art director for anime-style lyric music videos. Based on the lyrics' mood, "
+            prompt = ("You are an art director for cinematic anime-style lyric music videos. Based on the lyrics' mood, "
                       "design one cohesive visual look. Choose scene from " + str(SCENE_OPTS) +
-                      ", particles from " + str(PARTICLE_OPTS) + ", lyric animation from " + str(ANIM_OPTS) +
-                      ". Provide 5 hex colors (bg1/bg2 dark background gradient, accent & accent2 neon highlights, "
-                      "text usually #ffffff) and fx intensities 0..1 (bloom, glitch, chroma, wave). "
-                      "Write a one-sentence Japanese rationale. Return JSON only.\n\n"
+                      " ('stage' = concert stage with spotlights), particles from " + str(PARTICLE_OPTS) +
+                      ", lyric animation from " + str(ANIM_OPTS) + ", lettering style from " + str(LETTERING_OPTS) +
+                      ", text orientation from " + str(ORIENT_OPTS) + " (vertical = Japanese tategaki, good for ballads). "
+                      "Provide 5 hex colors (bg1/bg2 dark background gradient, accent & accent2 neon highlights, "
+                      "text usually #ffffff) and fx intensities 0..1 (bloom, glitch, chroma, wave, godray=light shafts, "
+                      "flare=lens flare, dof=depth of field). Write a one-sentence Japanese rationale. Return JSON only.\n\n"
                       + (f"Mood hint: {mood}\n" if mood else "") + "Lyrics:\n" + lyrics_text[:1500])
             res = codex_json(prompt, schema, timeout=120)
             res["engine"] = "codex"
@@ -831,14 +837,34 @@ BUILTIN_TEMPLATES = [
     ("tpl-ember-beat", "Ember Beat", "hibana", 21, {"scene": "grid", "particles": "embers", "anim": "pop-scale",
         "colors": {"bg1": "#160500", "bg2": "#3d0f00", "accent": "#ff9d2e", "accent2": "#ff4e3a", "text": "#fff8f0"},
         "font": "'Noto Sans JP', sans-serif", "fx": {"bloom": 0.85, "glitch": 0.25, "chroma": 0.4, "wave": 0.2}}),
+    ("tpl-cinematic-stage", "Cinematic Stage", "lyricflow", 0, {"scene": "stage", "particles": "embers", "anim": "glow-pop",
+        "lettering": "chrome", "orient": "horizontal",
+        "colors": {"bg1": "#04060e", "bg2": "#140a2e", "accent": "#5fd0ff", "accent2": "#b98cff", "text": "#ffffff"},
+        "font": "'Noto Serif JP', serif", "fx": {"bloom": 0.9, "glitch": 0.05, "chroma": 0.35, "wave": 0.1, "godray": 0.7, "flare": 0.5, "dof": 0.5}}),
+    ("tpl-tategaki-ballad", "縦書きバラード", "lyricflow", 0, {"scene": "sky", "particles": "snow", "anim": "fade-up",
+        "lettering": "brush", "orient": "vertical",
+        "colors": {"bg1": "#0a1020", "bg2": "#231a3a", "accent": "#cbb8ff", "accent2": "#8ab4ff", "text": "#f4f0ff"},
+        "font": "'Noto Serif JP', serif", "fx": {"bloom": 0.55, "glitch": 0, "chroma": 0.15, "wave": 0.1, "godray": 0.35, "flare": 0.2, "dof": 0.55}}),
 ]
 
 DEMO_LYRICS = "星が降り注ぐ夜に\n君の声が心を照らす\n遠く霞む街の灯り\n夢の先で僕らは出会う\nきらめきを集めて\n夜空へ放つメロディー\n何度でも歌うよ\n君に届くまで"
+
+def ensure_builtin_templates(con):
+    """既存DBにも新しいビルトインテンプレートを冪等に追加する。"""
+    now = time.time()
+    for tid, title, author, price, cfg in BUILTIN_TEMPLATES:
+        row = con.execute("SELECT 1 FROM templates WHERE id=?", (tid,)).fetchone()
+        if not row:
+            con.execute("INSERT INTO templates VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                        (tid, None, title, author, None, json.dumps(cfg), 1, price,
+                         round(4.2 + (hash(tid) % 8) / 10, 1), 40 + hash(title) % 300, now))
+    con.commit()
 
 def seed():
     con = db()
     con.executescript(SCHEMA)
     if con.execute("SELECT COUNT(*) c FROM users").fetchone()["c"]:
+        ensure_builtin_templates(con)   # 既存DBにも新テンプレを反映
         con.close()
         return
     now = time.time()
@@ -1230,7 +1256,9 @@ class Handler(BaseHTTPRequestHandler):
                                     "sceneDefault": cfg["scene"],
                                     "lyrics_text": b.get("lyrics_text", ""), "language": b.get("language", "ja"),
                                     "lyricStyle": {"font": cfg["font"], "size": 64, "color": cfg["colors"]["text"],
-                                                   "anim": cfg["anim"], "glow": cfg["fx"]["bloom"]},
+                                                   "anim": cfg["anim"], "glow": cfg["fx"]["bloom"],
+                                                   "lettering": cfg.get("lettering", "neon"),
+                                                   "orient": cfg.get("orient", "horizontal")},
                                     "tracks": {"lyrics": [], "background": [], "effects": [], "overlay": []},
                                     "scenes": [], "fx": cfg["fx"], "colors": cfg["colors"], "particles": cfg["particles"]}
                         con.execute("INSERT INTO projects VALUES(?,?,?,?,?,?,?,?,?)",
