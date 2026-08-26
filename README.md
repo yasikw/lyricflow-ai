@@ -14,6 +14,20 @@ python3 server.py        # http://localhost:4189
 - 初回起動時にデモ楽曲(オリジナル合成曲・約44秒)とサンプルプロジェクト「星空のメロディー」をシードします。
 - データ初期化: `rm -rf data/` してから再起動。
 
+### 高精度歌詞同期 (Whisper・任意)
+
+実音声を認識して歌詞を実タイミングへ割り付ける本物の強制アライメント。導入すると「AI自動同期」が自動的にWhisperを使います（未導入ならヒューリスティックへフォールバック）。
+
+```bash
+# 専用conda環境 (Python 3.11) に faster-whisper を入れる (torch不要・CTranslate2)
+conda create -y -n lyricflow-whisper python=3.11
+conda run -n lyricflow-whisper pip install faster-whisper
+```
+
+- サーバーは `/opt/homebrew/Caskroom/miniconda/base/envs/lyricflow-whisper/bin/python` を自動検出（`WHISPER_PY` 環境変数で上書き可）。
+- モデルは既定 `base`（`WHISPER_MODEL=small` 等で変更可、初回のみ自動DL）。`scripts/whisper_align.py` がアライメント本体。
+- サーバー本体はstdlibのまま。Whisperは**サブプロセス**で呼ぶため未導入でも通常起動できます。
+
 ## 実装済み機能 (仕様書対応)
 
 | 仕様 | 実装 |
@@ -21,7 +35,7 @@ python3 server.py        # http://localhost:4189
 | 2.1 認証 | メール/パスワード + JWT (access 1h / refresh 30d, 自動リフレッシュ)。RBAC (Owner/Admin/Editor/Viewer)。**MFA (TOTP, RFC 6238)**。**ログイン試行制限 (5回失敗で15分ロック, 仕様8.3)** |
 | 2.2 プロジェクト管理 | 作成/複製/削除、状態 (draft/rendering/exported/archived)、30秒オートセーブ。**バージョン履歴50件の閲覧＋任意版へのロールバックUI**、**アーカイブ/復元** |
 | 2.3 アセット | MP3/WAV/画像/動画/フォントのアップロード、ストレージ使用量メーター。**マジックバイトによるMIME検証 (拡張子偽装を拒否, 仕様8.3)**、**プラン別1ファイルサイズ上限 (Free 100MB / Pro+ 500MB)** |
-| 2.4.1 AI歌詞同期 | 非同期ジョブ。クライアントでRMSエンベロープ抽出→サーバーで歌唱区間検出+単語レベル割付 (Demucs/Whisper/MFA相当のヒューリスティック)。**言語自動判定つき** |
+| 2.4.1 AI歌詞同期 | **Whisper強制アライメント (faster-whisper)** で実音声を認識し歌詞を実タイミングへ割付。未導入時はヒューリスティック(無音除外+フレーズ対応+オンセットスナップ)へ自動フォールバック。さらに**タップ同期**(再生中に行/語の頭でタップ=最も正確)。**言語自動判定つき** |
 | 2.4.2 シーン解析AI | エネルギー解析でIntro/Verse/Chorus/Bridge/Outroを検出、サビで演出自動ブースト+FXクリップ自動配置 |
 | 2.4.3 アニメFXエンジン | Bloom / Glitch / 色収差 / パーティクル(桜・雪・雨・星・火の粉) / Wave歪み。Canvas 2Dリアルタイムレンダリング |
 | 2.4.4 AI翻訳 | エンジン選択制。**Codec(ローカル`codex exec`)** / DeepL(`DEEPL_API_KEY`) / プレビュー翻訳。**言語自動判定 + RTL(アラビア語/ヘブライ語)判定** |

@@ -48,6 +48,51 @@ for p in ("/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "ffmpeg"):
     except Exception:
         continue
 
+# ---------------------------------------------------------------- Whisper 強制アライメント (faster-whisper, 専用conda環境)
+WHISPER_PY = next((p for p in [os.environ.get("WHISPER_PY", ""),
+                               "/opt/homebrew/Caskroom/miniconda/base/envs/lyricflow-whisper/bin/python"]
+                   if p and os.path.exists(p)), None)
+WHISPER_SCRIPT = os.path.join(ROOT, "scripts", "whisper_align.py")
+WHISPER_MODEL = os.environ.get("WHISPER_MODEL", "base")
+
+def whisper_available():
+    return bool(WHISPER_PY and os.path.exists(WHISPER_SCRIPT))
+
+def run_whisper_align(audio_path, lyrics_text, language, progress_cb=None, timeout=1800):
+    """専用環境のfaster-whisperをサブプロセス実行し、歌詞をアライメントしたタイムスタンプを返す。"""
+    if not whisper_available():
+        raise RuntimeError("whisper未導入")
+    with tempfile.TemporaryDirectory() as td:
+        lf = os.path.join(td, "lyrics.txt")
+        with open(lf, "w", encoding="utf-8") as f:
+            f.write(lyrics_text)
+        cmd = [WHISPER_PY, WHISPER_SCRIPT, audio_path, lf, language or "auto", WHISPER_MODEL]
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+        def pump():
+            for line in proc.stderr:
+                m = re.match(r"PROGRESS (\d+) (.*)", line.strip())
+                if m and progress_cb:
+                    try:
+                        progress_cb(int(m.group(1)), m.group(2))
+                    except Exception:
+                        pass
+        th = threading.Thread(target=pump, daemon=True)
+        th.start()
+        out = proc.stdout.read()
+        try:
+            proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            raise RuntimeError("whisper タイムアウト")
+        th.join(timeout=2)
+        if proc.returncode != 0:
+            raise RuntimeError("whisper 実行に失敗しました")
+        js = [l for l in (out or "").strip().splitlines() if l.strip().startswith("{")]
+        if not js:
+            raise RuntimeError("whisper 出力が空です")
+        return json.loads(js[-1])
+
 # ---------------------------------------------------------------- Codex CLI (選択式AIエンジン)
 CODEX_BIN = shutil.which("codex") or next(
     (p for p in ("/opt/homebrew/bin/codex", "/usr/local/bin/codex") if os.path.exists(p)), None)
@@ -667,15 +712,42 @@ def run_ai_job(job_id):
         time.sleep(0.35)
     try:
         if kind == "sync-lyrics":
-            upd(12, "ボーカル分離 (Demucs)")
-            upd(38, "音声認識 (Whisper)")
-            upd(66, "強制アライメント (MFA)")
-            ts = sync_lyrics_engine(payload.get("lyrics_text", ""), payload.get("envelope"),
-                                    payload.get("hop", 0.1), float(payload.get("duration", 0)))
-            v_start, v_end = detect_vocal_range(payload.get("envelope") or [], payload.get("hop", 0.1),
-                                                float(payload.get("duration", 0)))
-            lang = payload.get("language") or detect_language(payload.get("lyrics_text", ""))
-            result = {"timestamps": ts, "vocal_start": v_start, "vocal_end": v_end, "language": lang}
+            engine = payload.get("engine", "builtin")
+            result = None
+            # Whisperエンジン: 実音声を認識して歌詞を強制アライメント (最も正確)
+            if engine == "whisper" and whisper_available():
+                aid = payload.get("audio_asset_id")
+                arow = con.execute("SELECT url FROM assets WHERE id=?", (aid,)).fetchone() if aid else None
+                apath = os.path.join(DATA, arow["url"].replace("/media/", "", 1).lstrip("/")) if arow else None
+                if apath and os.path.exists(apath):
+                    def wprog(p, st):
+                        pc = db()
+                        pc.execute("UPDATE ai_jobs SET status='processing',progress_pct=?,stage=? WHERE id=?", (p, st, job_id))
+                        pc.commit()
+                        pc.close()
+                    try:
+                        wr = run_whisper_align(apath, payload.get("lyrics_text", ""),
+                                               payload.get("language"), progress_cb=wprog)
+                        ts = wr.get("timestamps", [])
+                        for w in ts:
+                            w["id"] = uuid.uuid4().hex[:8]
+                        result = {"timestamps": ts, "vocal_start": ts[0]["start"] if ts else 0,
+                                  "vocal_end": ts[-1]["end"] if ts else 0,
+                                  "language": wr.get("language"), "engine": "whisper"}
+                    except Exception as e:
+                        print("  whisper fallback:", e)
+                else:
+                    print("  whisper: audio not found, fallback")
+            if result is None:               # builtinヒューリスティック (無音除外+オンセットスナップ)
+                upd(20, "アクティブ区間検出")
+                upd(55, "フレーズ対応付け")
+                upd(80, "オンセットにスナップ")
+                ts = sync_lyrics_engine(payload.get("lyrics_text", ""), payload.get("envelope"),
+                                        payload.get("hop", 0.1), float(payload.get("duration", 0)))
+                v_start, v_end = detect_vocal_range(payload.get("envelope") or [], payload.get("hop", 0.1),
+                                                    float(payload.get("duration", 0)))
+                lang = payload.get("language") or detect_language(payload.get("lyrics_text", ""))
+                result = {"timestamps": ts, "vocal_start": v_start, "vocal_end": v_end, "language": lang, "engine": "builtin"}
         elif kind == "analyze-scene":
             upd(20, "BPM・スペクトル解析 (Librosa)")
             upd(60, "シーン境界検出")
@@ -1282,7 +1354,8 @@ class Handler(BaseHTTPRequestHandler):
                                 "storage_limit": lim["storage"], "limits": lim, "usage": usage})
                 return self.send_json({"user": {"id": u["id"], "email": u["email"], "name": u["name"],
                                                 "mfa_enabled": bool(u["mfa_enabled"])},
-                                       "workspaces": out, "ffmpeg": bool(FFMPEG), "codex_available": codex_available()})
+                                       "workspaces": out, "ffmpeg": bool(FFMPEG), "codex_available": codex_available(),
+                                       "whisper_available": whisper_available()})
 
             # ---------- MFA (TOTP) ----------
             if s[0] == "mfa":

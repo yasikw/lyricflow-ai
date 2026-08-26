@@ -426,7 +426,7 @@ class Editor {
         </div>
         <div class="ai-tools">
           <button class="ai-btn" id="ai-tap"><span class="ic">🎯</span><span>タップ同期<small>再生しながら行頭でタップ＝最も正確</small></span></button>
-          <button class="ai-btn" id="ai-sync"><span class="ic">♪</span><span>AI自動同期<small>無音を除外しオンセットにスナップ(近似)</small></span></button>
+          <button class="ai-btn" id="ai-sync"><span class="ic">♪</span><span>${App.whisperAvailable ? 'AI自動同期 (Whisper)' : 'AI自動同期'}<small>${App.whisperAvailable ? '実音声を認識し強制アライメント(高精度)' : '無音を除外しオンセットにスナップ(近似)'}</small></span></button>
           <button class="ai-btn" id="ai-suggest"><span class="ic">✨</span><span>演出提案 (AI Director)<small>歌詞から背景・配色・演出を提案</small></span></button>
           <button class="ai-btn" id="ai-scene"><span class="ic">◈</span><span>シーン解析AI<small>曲構成を検出し演出を自動適用</small></span></button>
           <button class="ai-btn" id="ai-trans"><span class="ic">文</span><span>AI多言語翻訳<small>50言語以上 / DeepL・Codex</small></span></button>
@@ -735,15 +735,22 @@ class Editor {
   async runSync() {
     if (!this.tl.lyrics_text?.trim()) return toast('先に歌詞を入力してください(左の歌詞タブ)', 'err');
     if (!this.tl.duration) return toast('先に音源を設定してください', 'err');
+    const useWhisper = App.whisperAvailable;
+    if (useWhisper) toast('Whisperで音声認識中… 曲の長さに応じて数十秒かかります', '');
     const { job_id } = await API.post('/ai/sync-lyrics', {
       workspace_id: this.project.workspace_id, audio_asset_id: this.tl.audio_asset_id,
       lyrics_text: this.tl.lyrics_text, language: this.tl.language || 'ja',
       envelope: this.tl.envelope, hop: this.tl.hop || 0.1, duration: this.tl.duration,
+      engine: useWhisper ? 'whisper' : 'builtin',
     });
-    const res = await API.waitJob(job_id, j => this.showJob(j.stage, j.progress_pct));
+    let res;
+    try { res = await API.waitJob(job_id, j => this.showJob(j.stage, j.progress_pct)); }
+    catch (e) { return toast('同期に失敗: ' + e.message, 'err'); }
+    if (!res.timestamps || !res.timestamps.length) return toast('タイムスタンプを生成できませんでした', 'err');
     this.tl.tracks.lyrics = res.timestamps;
     this.markDirty(); this.renderTimeline();
-    toast(`AI歌詞同期 完了: ${res.timestamps.length}語 (vocal ${res.vocal_start}s〜)`, 'ok');
+    const eng = res.engine === 'whisper' ? 'Whisper' : '近似';
+    toast(`AI自動同期 完了 (${eng}): ${res.timestamps.length}語`, 'ok');
   }
 
   async runSceneAnalysis() {

@@ -6,6 +6,7 @@ const App = {
   user: null, ws: null, workspaces: [], me: null, editor: null,
 
   get codexAvailable() { return !!(this.me && this.me.codex_available); },
+  get whisperAvailable() { return !!(this.me && this.me.whisper_available); },
 
   async boot() {
     window.addEventListener('hashchange', () => this.route());
