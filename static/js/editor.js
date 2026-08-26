@@ -51,6 +51,7 @@ class Editor {
     this.loop();
     this.autosaveTimer = setInterval(() => this.save(true), 30000); // 仕様: 30秒オートセーブ
     this.keyHandler = e => {
+      if (this._tapActive) return;                 // タップ同期中はSpaceを譲る
       if (e.target.matches('input,textarea,select')) return;
       if (e.code === 'Space') { e.preventDefault(); this.togglePlay(); }
       if (e.code === 'Delete' || e.code === 'Backspace') this.deleteSel();
@@ -424,8 +425,9 @@ class Editor {
           </select>
         </div>
         <div class="ai-tools">
+          <button class="ai-btn" id="ai-tap"><span class="ic">🎯</span><span>タップ同期<small>再生しながら行頭でタップ＝最も正確</small></span></button>
+          <button class="ai-btn" id="ai-sync"><span class="ic">♪</span><span>AI自動同期<small>無音を除外しオンセットにスナップ(近似)</small></span></button>
           <button class="ai-btn" id="ai-suggest"><span class="ic">✨</span><span>演出提案 (AI Director)<small>歌詞から背景・配色・演出を提案</small></span></button>
-          <button class="ai-btn" id="ai-sync"><span class="ic">♪</span><span>AI歌詞同期<small>Demucs + Whisper + MFA</small></span></button>
           <button class="ai-btn" id="ai-scene"><span class="ic">◈</span><span>シーン解析AI<small>曲構成を検出し演出を自動適用</small></span></button>
           <button class="ai-btn" id="ai-trans"><span class="ic">文</span><span>AI多言語翻訳<small>50言語以上 / DeepL・Codex</small></span></button>
         </div>
@@ -497,6 +499,7 @@ class Editor {
     engSel.value = this.aiEngine();
     engSel.onchange = e => { localStorage.setItem('lf_ai_engine', e.target.value); };
     $('#ai-suggest').onclick = () => this.runSuggest();
+    $('#ai-tap').onclick = () => this.openTapSync();
     $('#ai-sync').onclick = () => this.runSync();
     $('#ai-scene').onclick = () => this.runSceneAnalysis();
     $('#ai-trans').onclick = () => this.runTranslate();
@@ -585,6 +588,148 @@ class Editor {
     this.engine.setTimeline(this.tl);
     this.markDirty(); this.renderRight(); this.renderTimeline();
     toast(`演出提案を適用しました (${res.engine})`, 'ok');
+  }
+
+  /* ---------------- タップ同期 (最も正確な手動同期) ---------------- */
+  openTapSync() {
+    if (!this.tl.duration || !this.audio.src) return toast('先に音源を設定してください', 'err');
+    const rawLines = (this.tl.lyrics_text || '').split('\n').map(s => s.trim()).filter(Boolean);
+    if (!rawLines.length) return toast('先に歌詞を入力してください(左の歌詞タブ)', 'err');
+    this.pause();
+    const state = { mode: 'line', idx: 0, taps: [], units: [], playing: false, done: false };
+    const buildUnits = () => {
+      state.units = [];
+      rawLines.forEach((ln, li) => {
+        if (state.mode === 'line') state.units.push({ text: ln, line: li });
+        else splitWordsJS(ln).forEach(w => state.units.push({ text: w, line: li }));
+      });
+    };
+    buildUnits();
+    const bg = document.createElement('div');
+    bg.className = 'modal-bg';
+    bg.innerHTML = `
+      <div class="modal wide">
+        <div class="m-head"><h2>🎯 タップ同期</h2><button class="x-btn">×</button></div>
+        <div class="m-body">
+          <p class="p-sub">曲を再生し、各${state.mode === 'line' ? '行' : '語'}の歌い出しの瞬間に <b style="color:var(--cyan)">スペース</b> または <b style="color:var(--cyan)">TAPボタン</b> を押してください。最後まで押したら「適用」。</p>
+          <div style="display:flex;gap:8px;margin-bottom:12px">
+            <div class="seg">
+              <button class="seg-b ${state.mode === 'line' ? 'sel' : ''}" data-mode="line">行ごと</button>
+              <button class="seg-b ${state.mode === 'word' ? 'sel' : ''}" data-mode="word">語ごと(高精度)</button>
+            </div>
+            <span class="tap-prog" id="tap-prog"></span>
+          </div>
+          <div class="tap-stage" id="tap-stage"></div>
+          <div class="tap-transport">
+            <button class="btn" id="tap-play">▶ 再生してタップ開始</button>
+            <button class="btn" id="tap-undo">↩ 1つ戻る</button>
+            <button class="btn" id="tap-reset">やり直し</button>
+            <span class="t-time" id="tap-time" style="margin-left:auto">00:00.00</span>
+          </div>
+          <button class="btn primary tap-big" id="tap-hit">TAP (Space)</button>
+        </div>
+        <div class="m-foot">
+          <button class="btn" id="tap-cancel">キャンセル</button>
+          <button class="btn primary" id="tap-apply" disabled>適用</button>
+        </div>
+      </div>`;
+    document.body.appendChild(bg);
+    const $ = s => bg.querySelector(s);
+    const stageEl = $('#tap-stage'), progEl = $('#tap-prog');
+    const renderStage = () => {
+      const cur = state.units[state.idx];
+      const nxt = state.units[state.idx + 1];
+      const done = state.idx >= state.units.length;
+      stageEl.innerHTML = done
+        ? `<div class="tap-done">✓ 全${state.units.length}${state.mode === 'line' ? '行' : '語'}をタップしました。「適用」で確定します。</div>`
+        : `<div class="tap-cur">${esc(cur.text)}</div>${nxt ? `<div class="tap-next">次: ${esc(nxt.text)}</div>` : '<div class="tap-next">（最後）</div>'}`;
+      progEl.textContent = `${Math.min(state.idx, state.units.length)} / ${state.units.length}`;
+      $('#tap-apply').disabled = state.idx < 1;
+    };
+    renderStage();
+    // タイマー表示
+    const timer = setInterval(() => { if (bg.isConnected) $('#tap-time').textContent = fmtTime(this.audio.currentTime); }, 60);
+    const hit = () => {
+      if (state.idx >= state.units.length) return;
+      state.taps[state.idx] = this.audio.currentTime;
+      state.idx++;
+      renderStage();
+      if (state.idx >= state.units.length) { this.audio.pause(); state.playing = false; $('#tap-play').textContent = '▶ 再生'; }
+    };
+    const keyHandler = e => {
+      if (!bg.isConnected) return;
+      if (e.code === 'Space' || e.code === 'Enter') { e.preventDefault(); e.stopPropagation(); hit(); }
+    };
+    document.addEventListener('keydown', keyHandler, true);
+    this._tapActive = true;
+    const close = () => {
+      clearInterval(timer);
+      document.removeEventListener('keydown', keyHandler, true);
+      this._tapActive = false;
+      this.audio.pause();
+      bg.remove();
+    };
+    $('.x-btn').onclick = close;
+    $('#tap-cancel').onclick = close;
+    $('#tap-hit').onclick = hit;
+    $('#tap-play').onclick = () => {
+      if (state.playing) { this.audio.pause(); state.playing = false; $('#tap-play').textContent = '▶ 再生'; }
+      else { this.audio.play().catch(() => {}); state.playing = true; $('#tap-play').textContent = '⏸ 一時停止'; }
+    };
+    $('#tap-undo').onclick = () => { if (state.idx > 0) { state.idx--; state.taps.pop(); renderStage(); } };
+    $('#tap-reset').onclick = () => { this.audio.pause(); this.audio.currentTime = 0; state.idx = 0; state.taps = []; state.playing = false; $('#tap-play').textContent = '▶ 再生してタップ開始'; renderStage(); };
+    bg.querySelectorAll('[data-mode]').forEach(b => b.onclick = () => {
+      if (state.mode === b.dataset.mode) return;
+      state.mode = b.dataset.mode; buildUnits(); state.idx = 0; state.taps = [];
+      bg.querySelectorAll('.seg-b').forEach(x => x.classList.toggle('sel', x === b));
+      renderStage();
+    });
+    $('#tap-apply').onclick = () => {
+      const words = this._tapsToTimestamps(rawLines, state);
+      if (!words.length) return toast('タップが不足しています', 'err');
+      this.tl.tracks.lyrics = words;
+      this.markDirty(); this.renderTimeline();
+      close();
+      toast(`タップ同期を適用しました (${words.length}語)`, 'ok');
+    };
+  }
+
+  _tapsToTimestamps(rawLines, state) {
+    const dur = this.tl.duration;
+    const out = [];
+    if (state.mode === 'line') {
+      rawLines.forEach((ln, li) => {
+        if (state.taps[li] == null) return;
+        const start = state.taps[li];
+        let end = state.taps[li + 1] != null ? state.taps[li + 1] : Math.min(dur, start + 3.5);
+        if (end <= start) end = Math.min(dur, start + 1.2);
+        const chunks = splitWordsJS(ln);
+        const wsum = chunks.reduce((a, c) => a + Math.max(1, c.length), 0) || 1;
+        const gap = Math.min(0.4, (end - start) * 0.1);
+        const usable = (end - start) - gap;
+        let t = start;
+        for (const c of chunks) {
+          const wd = usable * Math.max(1, c.length) / wsum;
+          out.push({ id: Math.random().toString(36).slice(2, 10), word: c, line: li, start: +t.toFixed(2), end: +(t + wd).toFixed(2) });
+          t += wd;
+        }
+      });
+    } else {
+      // 語ごと: units は全語。各語 start=tap, end=次tap or +0.5
+      let ui = 0;
+      rawLines.forEach((ln, li) => {
+        for (const c of splitWordsJS(ln)) {
+          if (state.taps[ui] != null) {
+            const start = state.taps[ui];
+            let end = state.taps[ui + 1] != null ? state.taps[ui + 1] : Math.min(dur, start + 0.6);
+            if (end <= start) end = Math.min(dur, start + 0.3);
+            out.push({ id: Math.random().toString(36).slice(2, 10), word: c, line: li, start: +start.toFixed(2), end: +end.toFixed(2) });
+          }
+          ui++;
+        }
+      });
+    }
+    return out;
   }
 
   async runSync() {

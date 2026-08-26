@@ -360,29 +360,119 @@ def split_words(line):
         return chunks
     return [line]
 
+def _smooth(env, win):
+    n = len(env)
+    out = []
+    for i in range(n):
+        a, b = max(0, i - win), min(n, i + win + 1)
+        out.append(sum(env[a:b]) / (b - a))
+    return out
+
+def active_intervals(env, hop, duration):
+    """エネルギーが立っている(=歌/演奏している)区間を検出。無音/間奏は除外する。"""
+    if not env:
+        return [(round(duration * 0.05, 2), round(duration * 0.97, 2))]
+    sm = _smooth(env, max(1, int(0.15 / hop)))
+    mx = max(sm) or 1
+    sm = [v / mx for v in sm]
+    thr = max(0.12, _percentile(sorted(sm), 0.45))
+    active = [v >= thr for v in sm]
+    n = len(active)
+    min_gap = max(1, int(0.22 / hop))    # これ未満の谷は繋ぐ
+    min_run = max(1, int(0.30 / hop))    # これ未満の山は捨てる
+    j = 0
+    while j < n:                          # 短い無音を埋める
+        if not active[j]:
+            k = j
+            while k < n and not active[k]:
+                k += 1
+            if 0 < j and k < n and k - j < min_gap:
+                for x in range(j, k):
+                    active[x] = True
+            j = k
+        else:
+            j += 1
+    intervals, j = [], 0
+    while j < n:
+        if active[j]:
+            k = j
+            while k < n and active[k]:
+                k += 1
+            if k - j >= min_run:
+                intervals.append((round(j * hop, 3), round(min(duration, k * hop), 3)))
+            j = k
+        else:
+            j += 1
+    if not intervals:
+        intervals = [(round(duration * 0.05, 2), round(duration * 0.97, 2))]
+    return intervals
+
+def detect_onsets(env, hop):
+    """エネルギーの立ち上がり(フレーズ/ビート/発声の頭)を検出。行頭スナップに使う。"""
+    if not env:
+        return []
+    sm = _smooth(env, max(1, int(0.08 / hop)))
+    mx = max(sm) or 1
+    sm = [v / mx for v in sm]
+    onsets, win = [], max(1, int(0.2 / hop))
+    for i in range(1, len(sm)):
+        base = sum(sm[max(0, i - win):i]) / max(1, min(i, win))
+        if sm[i] - sm[i - 1] > 0.05 and sm[i] > base * 1.2 and sm[i] > 0.16:
+            if not onsets or i * hop - onsets[-1] > 0.12:
+                onsets.append(round(i * hop, 3))
+    return onsets
+
 def sync_lyrics_engine(lyrics_text, env, hop, duration):
-    """Word-levelタイムスタンプ生成 (Demucs/Whisper/MFA相当のヒューリスティック)。"""
+    """Word-levelタイムスタンプ生成。無音/間奏を飛ばしアクティブ区間へ配分、行頭をオンセットにスナップ。
+    ※本物のASRアライメント(Whisper/MFA)ではないため近似。正確な同期はタップ同期を推奨。"""
     lines = [l.strip() for l in lyrics_text.splitlines() if l.strip()]
     if not lines or duration <= 0:
         return []
-    v_start, v_end = detect_vocal_range(env or [], hop or 0.1, duration)
-    span = v_end - v_start
-    weights = [max(1, len(l)) + 4 for l in lines]  # +4 = 行間ブレス分
-    total = sum(weights)
-    out, t = [], v_start
+    hop = hop or 0.1
+    phrases = active_intervals(env or [], hop, duration)
+    onsets = detect_onsets(env or [], hop)
+    N, P = len(lines), len(phrases)
+
+    def snap(tsec):                       # 近傍0.3s以内のオンセットへスナップ
+        best, bd = None, 0.3
+        for o in onsets:
+            if abs(o - tsec) < bd:
+                bd, best = abs(o - tsec), o
+        return best if best is not None else tsec
+
+    # 行↔フレーズを対応付け: フレーズが多ければ連続グループ化、少なければフレーズ内を分割
+    line_span = []
+    if P >= N:
+        for i in range(N):
+            gs, ge = i * P // N, (i + 1) * P // N
+            ge = max(ge, gs + 1)
+            line_span.append((phrases[gs][0], phrases[min(ge, P) - 1][1]))
+    else:
+        for i in range(N):
+            pi = i * P // N
+            s, e = phrases[pi]
+            first = next(j for j in range(N) if j * P // N == pi)
+            cnt = sum(1 for j in range(N) if j * P // N == pi)
+            order = i - first
+            seg = (e - s) / cnt
+            line_span.append((s + order * seg, s + (order + 1) * seg))
+    out = []
     for li, line in enumerate(lines):
-        line_dur = span * weights[li] / total
-        gap = min(0.6, line_dur * 0.16)
+        ls, le = line_span[li]
+        ls = snap(ls)
+        le = min(le, duration)
+        if le <= ls:
+            le = min(duration, ls + 1.2)
         words = split_words(line)
         wsum = sum(max(1, len(w)) for w in words) or 1
-        usable = line_dur - gap
-        wt = t
+        gap = min(0.5, (le - ls) * 0.12)
+        usable = (le - ls) - gap
+        wt = ls
         for w in words:
             wd = usable * max(1, len(w)) / wsum
             out.append({"id": uuid.uuid4().hex[:8], "word": w, "line": li,
                         "start": round(wt, 2), "end": round(min(wt + wd, duration), 2)})
             wt += wd
-        t += line_dur
     return out
 
 def analyze_scene_engine(env, hop, duration):
