@@ -63,6 +63,7 @@ class Editor {
     this.destroyed = true;
     clearInterval(this.autosaveTimer);
     document.removeEventListener('keydown', this.keyHandler);
+    try { this._clock && this._clock.terminate(); } catch (e) {}
     this.audio.pause();
     if (this.dirty) this.save(true);
   }
@@ -194,9 +195,27 @@ class Editor {
   renderAll() { this.renderLeft(); this.renderRight(); this.renderTimeline(); this.fitStage(); }
 
   /* ---------------- playback ---------------- */
+  /* 再生クロックはWeb Workerのタイマーで駆動する。
+     rAFやsetIntervalはタブ/ペインが非表示だと絞られ、音声(=audio.currentTime)だけ進んで
+     歌詞が取り残される(遅延・ドリフト)。Workerのタイマーは可視性で絞られないため常に追従する。 */
   loop() {
+    if (this._clock) return;              // 既に開始済み
+    const tick = () => this.frame();
+    try {
+      const code = 'let id;onmessage=e=>{if(e.data==="start"){id=setInterval(()=>postMessage(0),16)}else{clearInterval(id)}}';
+      this._clock = new Worker(URL.createObjectURL(new Blob([code], { type: 'application/javascript' })));
+      this._clock.onmessage = tick;
+      this._clock.postMessage('start');
+    } catch (e) {
+      // Worker不可の環境ではrAFにフォールバック
+      const raf = () => { if (this.destroyed) return; tick(); requestAnimationFrame(raf); };
+      this._clock = { terminate() {} };
+      requestAnimationFrame(raf);
+    }
+  }
+
+  frame() {
     if (this.destroyed) return;
-    requestAnimationFrame(() => this.loop());
     if (this.playing && this.audio.src) this.t = this.audio.currentTime;
     else if (this.playing) this.t += 1 / 60;
     if (this.playing && this.t >= (this.tl.duration || 0)) { this.pause(); this.t = this.tl.duration || 0; }
@@ -653,7 +672,8 @@ class Editor {
     const timer = setInterval(() => { if (bg.isConnected) $('#tap-time').textContent = fmtTime(this.audio.currentTime); }, 60);
     const hit = () => {
       if (state.idx >= state.units.length) return;
-      state.taps[state.idx] = this.audio.currentTime;
+      // 人は音を聞いてから押すので約0.14s遅れる。その分だけ前に補正
+      state.taps[state.idx] = Math.max(0, this.audio.currentTime - 0.14);
       state.idx++;
       renderStage();
       if (state.idx >= state.units.length) { this.audio.pause(); state.playing = false; $('#tap-play').textContent = '▶ 再生'; }
@@ -1151,12 +1171,13 @@ class Editor {
     rec.start(250);
     this.play();
     const t0 = performance.now();
+    // 監視は setTimeout で(rAFは非表示時に停止するため)。実描画はWorker駆動のframe()が60Hzで行う
     const tick = () => {
       if (!this.recording) return;
       const p = Math.min(1, this.t / dur);
       setP(`リアルタイムキャプチャ中… ${fmtTime(this.t)} / ${fmtTime(dur)}`, p * 60);
       if (this.t >= dur - 0.05 || (performance.now() - t0) / 1000 > dur + 5) rec.stop();
-      else requestAnimationFrame(tick);
+      else setTimeout(tick, 100);
     };
     tick();
   }

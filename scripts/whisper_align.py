@@ -80,17 +80,39 @@ def main():
                 bd, best = abs(o - t), o
         return best if best is not None else t
 
-    # 行頭を字数按分で span 全域に散らし、近傍オンセットへスナップ (=詰め込み防止)
-    weights = [max(1, len(l)) for l in lines]
-    tot_w = sum(weights) or 1
-    starts, cum = [], 0.0
-    for i in range(N):
-        starts.append(snap(span_s + (span_e - span_s) * cum / tot_w))
-        cum += weights[i]
+    # 行頭の決め方:
+    #  (A) 認識が曲全体をカバー(頭〜終盤に発話がある) → セグメント境界を直接使う=実タイミングで高精度
+    #  (B) 認識が曲の一部に偏る → 字数按分でspan全域に散らし詰め込みを防止(近似)
+    coverage_ok = bool(segments) and segments[0]["start"] <= dur * 0.4 and segments[-1]["end"] >= dur * 0.55
+    starts = []
+    if coverage_ok:
+        segs = segments
+        Pn = len(segs)
+        if Pn >= N:
+            for i in range(N):
+                starts.append(segs[i * Pn // N]["start"])
+            end_sentinel = segs[-1]["end"]
+        else:
+            for i in range(N):
+                pi = i * Pn // N
+                seg = segs[pi]
+                first = next(j for j in range(N) if j * Pn // N == pi)
+                cnt = sum(1 for j in range(N) if j * Pn // N == pi)
+                order = i - first
+                starts.append(seg["start"] + (seg["end"] - seg["start"]) * order / cnt)
+            end_sentinel = segs[-1]["end"]
+    else:
+        weights = [max(1, len(l)) for l in lines]
+        tot_w = sum(weights) or 1
+        cum = 0.0
+        for i in range(N):
+            starts.append(snap(span_s + (span_e - span_s) * cum / tot_w))
+            cum += weights[i]
+        end_sentinel = span_e
     for i in range(1, N):                 # 単調増加を保証
-        if starts[i] <= starts[i - 1] + 0.25:
-            starts[i] = starts[i - 1] + 0.35
-    starts.append(min(dur, span_e))
+        if starts[i] <= starts[i - 1] + 0.2:
+            starts[i] = starts[i - 1] + 0.3
+    starts.append(min(dur, max(end_sentinel, starts[-1] + 0.6)))
 
     for li, line in enumerate(lines):
         ls = starts[li]
