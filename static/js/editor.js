@@ -231,6 +231,12 @@ class Editor {
   togglePlay() { this.playing ? this.pause() : this.play(); }
   play() {
     if (!this.tl.duration) return toast('先に音源を設定してください', 'err');
+    // 埋め込みプレビュー等 visibilityState=hidden の環境ではブラウザが画面更新を絞り、
+    // 描画は正しくても表示だけがカクつく。初回のみ案内する(書き出しは正しく同期される)。
+    if (document.visibilityState === 'hidden' && !this._hiddenWarned) {
+      this._hiddenWarned = true;
+      toast('この表示環境ではプレビューがカクつく場合があります。滑らかに見るには localhost:4189 をブラウザの別タブで開いてください（書き出しは正しく同期されます）', '');
+    }
     this.playing = true;
     if (this.audio.src) { this.audio.currentTime = this.t; this.audio.play().catch(() => {}); }
     this.root.querySelector('#tp-play').textContent = '⏸';
