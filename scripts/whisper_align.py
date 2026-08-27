@@ -43,8 +43,10 @@ def main():
     model = WhisperModel(model_size, device="cpu", compute_type="int8")
 
     prog(25, "音声認識 (Whisper)")
+    # speech_pad_ms は既定400msあり区間頭を前に広げて先頭が早くズレる。100msに縮小して頭出しを正す
     seg_iter, info = model.transcribe(audio, language=language, word_timestamps=True,
-                                      vad_filter=True, vad_parameters={"min_silence_duration_ms": 400})
+                                      vad_filter=True,
+                                      vad_parameters={"min_silence_duration_ms": 400, "speech_pad_ms": 100})
     duration = info.duration or 0.0
     segments = []
     for s in seg_iter:
@@ -60,12 +62,17 @@ def main():
     N, P = len(lines), len(segments)
     out = []
 
-    # 全単語をフラット化 (行頭スナップ用のオンセット群)
+    # 全単語をフラット化。オンセットは単語開始のみ(セグメント境界はVADパディングで甘いため使わない)
     flat = [w for seg in segments for w in seg["words"] if w.get("start") is not None]
     flat.sort(key=lambda w: w["start"])
-    onsets = sorted(set([round(w["start"], 3) for w in flat] +
-                        [round(seg["start"], 3) for seg in segments]))
+    onsets = sorted(set(round(w["start"], 3) for w in flat))
     dur = duration or (flat[-1]["end"] if flat else 30.0)
+
+    def seg_start(seg):   # 区間の実頭 = 最初の単語開始(無ければ区間開始)
+        return seg["words"][0]["start"] if seg["words"] else seg["start"]
+
+    def seg_end(seg):
+        return seg["words"][-1]["end"] if seg["words"] else seg["end"]
 
     # 配分レンジ: 認識できた発話全域。ただし認識が疎(全体の40%未満)なら曲全体へ広げる
     if flat and (flat[-1]["end"] - flat[0]["start"]) >= dur * 0.4:
@@ -83,24 +90,25 @@ def main():
     # 行頭の決め方:
     #  (A) 認識が曲全体をカバー(頭〜終盤に発話がある) → セグメント境界を直接使う=実タイミングで高精度
     #  (B) 認識が曲の一部に偏る → 字数按分でspan全域に散らし詰め込みを防止(近似)
-    coverage_ok = bool(segments) and segments[0]["start"] <= dur * 0.4 and segments[-1]["end"] >= dur * 0.55
+    coverage_ok = bool(flat) and flat[0]["start"] <= dur * 0.4 and flat[-1]["end"] >= dur * 0.55
     starts = []
     if coverage_ok:
         segs = segments
         Pn = len(segs)
         if Pn >= N:
             for i in range(N):
-                starts.append(segs[i * Pn // N]["start"])
-            end_sentinel = segs[-1]["end"]
+                starts.append(seg_start(segs[i * Pn // N]))
+            end_sentinel = seg_end(segs[-1])
         else:
             for i in range(N):
                 pi = i * Pn // N
                 seg = segs[pi]
+                s0, e0 = seg_start(seg), seg_end(seg)
                 first = next(j for j in range(N) if j * Pn // N == pi)
                 cnt = sum(1 for j in range(N) if j * Pn // N == pi)
                 order = i - first
-                starts.append(seg["start"] + (seg["end"] - seg["start"]) * order / cnt)
-            end_sentinel = segs[-1]["end"]
+                starts.append(s0 + (e0 - s0) * order / cnt)
+            end_sentinel = seg_end(segs[-1])
     else:
         weights = [max(1, len(l)) for l in lines]
         tot_w = sum(weights) or 1
