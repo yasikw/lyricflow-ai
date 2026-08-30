@@ -11,9 +11,29 @@ import base64, hashlib, hmac, json, math, mimetypes, os, random, re, secrets, sh
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
+
+
+def _load_dotenv():
+    """`.env` (KEY=VALUE) を読み込む。既存の実環境変数は上書きしない。"""
+    fp = os.path.join(ROOT, ".env")
+    if not os.path.isfile(fp):
+        return
+    for line in open(fp, encoding="utf-8"):
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        k, v = k.strip(), v.strip().strip('"').strip("'")
+        if k and k not in os.environ:
+            os.environ[k] = v
+
+
+_load_dotenv()
+
 DATA = os.path.join(ROOT, "data")
 UPLOADS = os.path.join(DATA, "uploads")
 RENDERS = os.path.join(DATA, "renders")
+BGLIB = os.path.join(DATA, "bglib")     # 曲をまたいで再利用する背景画像ライブラリ
 DB_PATH = os.path.join(DATA, "lyricflow.db")
 STATIC = os.path.join(ROOT, "static")
 PORT = int(os.environ.get("PORT", "4189"))
@@ -32,6 +52,61 @@ RES_HEIGHTS = {"720p": 720, "1080p": 1080, "4k": 2160}
 
 os.makedirs(UPLOADS, exist_ok=True)
 os.makedirs(RENDERS, exist_ok=True)
+os.makedirs(BGLIB, exist_ok=True)
+
+# ---------------------------------------------------------------- Atlas Cloud (GPT Image 2) 背景生成
+ATLAS_BASE = "https://api.atlascloud.ai/api/v1"
+ATLAS_KEY = os.environ.get("ATLASCLOUD_API_KEY", "")
+ATLAS_IMAGE_MODEL = os.environ.get("ATLASCLOUD_IMAGE_MODEL", "openai/gpt-image-2/text-to-image")
+BG_DAILY_LIMIT = int(os.environ.get("LYRICFLOW_BG_DAILY_LIMIT", "80"))   # APIキー濫用対策の日次上限/ユーザー
+
+
+def _atlas_req(url, payload=None):
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode() if payload is not None else None,
+        headers={"Authorization": f"Bearer {ATLAS_KEY}", "Content-Type": "application/json",
+                 "User-Agent": "LyricFlow/1.0"},
+        method="POST" if payload is not None else "GET",
+    )
+    with urllib.request.urlopen(req, timeout=60) as r:
+        return json.loads(r.read().decode())
+
+
+# 汎用性の高い(=どの曲にも合う)ムード。歌詞や固有名詞を含めず、雰囲気のある“壁紙”として設計。
+# key: (日本語ラベル, 代表パレット[bg1,bg2,accent,accent2], プロンプト核)
+BG_MOODS = {
+    "neon_city":     ("ネオン都市",   ["#0a0e1a", "#1a1040", "#00d4ff", "#ff2e97"], "a moody cinematic neon city at night, rain-slick streets, glowing signs, deep blue and magenta, bokeh lights, wide establishing shot"),
+    "night_sky":     ("夜空・星",     ["#05060f", "#111634", "#7db4ff", "#b98cff"], "a vast starry night sky over silhouetted mountains, milky way, deep blue, subtle nebula glow, serene and cinematic"),
+    "sunset":        ("夕焼け",       ["#2a1230", "#5a2440", "#ff8a5b", "#ffd36e"], "a dreamy gradient sunset sky over the ocean horizon, warm orange to purple, soft clouds, cinematic golden hour"),
+    "ocean":         ("海・水面",     ["#04121e", "#0a2a44", "#37c8e6", "#7bf0d0"], "calm ocean water surface with gentle reflections under twilight, teal and deep blue, cinematic, minimal"),
+    "forest":        ("森・自然光",   ["#0a1710", "#12331f", "#6fe08a", "#d8ff9e"], "a misty forest with soft god rays through the trees, green and gold, atmospheric depth, cinematic nature"),
+    "sakura":        ("桜",           ["#1a0f1e", "#3a1730", "#ff9ec4", "#ffd0e4"], "soft pink cherry blossom branches with falling petals, dreamy bokeh, pastel pink, gentle and cinematic"),
+    "snow":          ("雪・冬",       ["#0c1420", "#1e2c40", "#bfe0ff", "#eaf4ff"], "quiet snowy landscape at blue hour, falling snow, cool blue and white, soft and cinematic, minimal"),
+    "rainy_window":  ("雨の窓",       ["#0a0f18", "#182238", "#6aa6d8", "#9ad0ff"], "raindrops on a window with blurred city lights behind, melancholic, blue tones, shallow focus, cinematic mood"),
+    "abstract_fluid":("抽象・流体",   ["#0b0a1e", "#241452", "#7b6bff", "#ff6ec7"], "abstract flowing liquid gradient waves, iridescent purple and pink, smooth dreamy motion-blur look, wallpaper"),
+    "aurora":        ("オーロラ",     ["#03101a", "#082436", "#3df0c0", "#6a8cff"], "northern lights aurora over a dark arctic landscape, green and violet ribbons, starry sky, cinematic"),
+    "cyber_grid":    ("サイバー",     ["#080312", "#1a0636", "#ff2e97", "#00e0ff"], "retro synthwave neon grid stretching to a glowing horizon sun, magenta and cyan, 80s cinematic, wallpaper"),
+    "city_bokeh":    ("都会ボケ",     ["#0a0c14", "#191d2e", "#ffcf6e", "#ff8a5b"], "defocused warm city bokeh lights at night, golden and amber circles, blurred, cozy cinematic background"),
+    "stage_lights":  ("ステージ",     ["#07060f", "#160a2a", "#00d4ff", "#ff3e8a"], "concert stage with dramatic spotlights and haze, silhouettes, volumetric light beams, energetic cinematic"),
+    "cosmic":        ("宇宙・星雲",   ["#05030f", "#140830", "#8a7bff", "#ff6ec7"], "a colorful deep space nebula with stars, purple pink and blue clouds, cosmic, ethereal, cinematic wallpaper"),
+    "minimal_grad":  ("ミニマル",     ["#0d1117", "#1a2040", "#00d4ff", "#7b2ff7"], "a smooth minimal dark gradient background with soft light glow and subtle grain, elegant, cinematic, plain"),
+    "mountain_fog":  ("山と霧",       ["#0b131c", "#1c2c3a", "#8fb8d8", "#c9e4ff"], "layered mountain ridges in morning fog, cool blue atmospheric depth, minimal and cinematic, wide"),
+}
+BG_ORIENT_SIZE = {"landscape": "1536x1024", "portrait": "1024x1536", "square": "1024x1024"}
+
+
+def bg_prompt_for(mood, seed):
+    base = BG_MOODS.get(mood)
+    core = base[2] if base else "a cinematic atmospheric abstract background, moody lighting"
+    # バリエーションを増やすための軽い言い回し変化 (決定論: seedで選ぶ)
+    variants = [
+        "no text, no watermark, no people in focus, high detail, 8k wallpaper, film grain, cinematic color grade",
+        "no text, empty scene, atmospheric haze, depth of field, painterly, cinematic lighting, wallpaper",
+        "no text, negative space for a title, soft vignette, dramatic mood, ultra wide, cinematic",
+        "no text, dreamy soft focus, volumetric light, rich contrast, music-video backdrop, cinematic",
+    ]
+    return f"{core}. {variants[seed % len(variants)]}"
 
 _secret_path = os.path.join(DATA, "secret.key")
 if not os.path.exists(_secret_path):
@@ -188,6 +263,14 @@ CREATE TABLE IF NOT EXISTS templates(
   sales INTEGER DEFAULT 0, created_at REAL);
 CREATE TABLE IF NOT EXISTS api_keys(
   id TEXT PRIMARY KEY, workspace_id TEXT, name TEXT, key TEXT UNIQUE, created_at REAL, last_used_at REAL);
+-- 背景画像ライブラリ: ユーザー単位で全プロジェクト共通。使うほど蓄積・再利用できる
+CREATE TABLE IF NOT EXISTS bg_library(
+  id TEXT PRIMARY KEY, user_id TEXT NOT NULL, mood TEXT, prompt TEXT, file TEXT NOT NULL,
+  orient TEXT DEFAULT 'landscape', palette_json TEXT, source TEXT DEFAULT 'gpt-image-2', created_at REAL);
+CREATE INDEX IF NOT EXISTS idx_bglib_user ON bg_library(user_id, created_at);
+CREATE TABLE IF NOT EXISTS bg_jobs(
+  id TEXT PRIMARY KEY, user_id TEXT NOT NULL, mood TEXT, orient TEXT, status TEXT DEFAULT 'pending',
+  prediction_id TEXT, image_id TEXT, error TEXT, created_at REAL);
 """
 
 # ---------------------------------------------------------------- auth helpers
@@ -699,6 +782,81 @@ def suggest_direction(lyrics_text, mood="", engine="builtin"):
     pick["rationale"] = "歌詞のキーワードから雰囲気を推定し、配色とエフェクトを自動選定しました。"
     pick["engine"] = "builtin"
     return pick
+
+# ---------------------------------------------------------------- background image library
+def run_bg_job(job_id):
+    """AtlasCloud(GPT Image 2)で汎用背景を1枚生成し bg_library に追加する。"""
+    con = db()
+    job = con.execute("SELECT * FROM bg_jobs WHERE id=?", (job_id,)).fetchone()
+    if not job:
+        con.close()
+        return
+    try:
+        if not ATLAS_KEY:
+            raise RuntimeError("ATLASCLOUD_API_KEY が未設定です")
+        mood = job["mood"]
+        orient = job["orient"] or "landscape"
+        size = BG_ORIENT_SIZE.get(orient, "1536x1024")
+        seed = int((job["created_at"] or 0) * 1000) % 997
+        prompt = bg_prompt_for(mood, seed)
+        con.execute("UPDATE bg_jobs SET status='processing' WHERE id=?", (job_id,))
+        con.commit()
+        # 生成ジョブ開始
+        j = _atlas_req(f"{ATLAS_BASE}/model/generateImage",
+                       {"model": ATLAS_IMAGE_MODEL, "prompt": prompt, "size": size, "quality": "medium"})
+        pid = (j.get("data") or {}).get("id")
+        if not pid:
+            raise RuntimeError(f"prediction id が取得できません: {j}")
+        con.execute("UPDATE bg_jobs SET prediction_id=? WHERE id=?", (pid, job_id))
+        con.commit()
+        # ポーリング (最大 ~3分)
+        url = None
+        for _ in range(90):
+            time.sleep(2)
+            st = _atlas_req(f"{ATLAS_BASE}/model/prediction/{pid}")
+            d = st.get("data") or {}
+            status = (d.get("status") or "").lower()
+            if status in ("failed", "error", "canceled"):
+                raise RuntimeError(f"生成失敗: {d.get('error') or d}")
+            if status in ("completed", "succeeded", "success"):
+                outs = d.get("outputs") or []
+                if not outs:
+                    raise RuntimeError("出力が空です")
+                url = outs[0]
+                break
+        if not url:
+            raise RuntimeError("生成がタイムアウトしました")
+        img_id = str(uuid.uuid4())
+        fname = f"{img_id}.png"
+        dl = urllib.request.Request(url, headers={"User-Agent": "LyricFlow/1.0"})
+        with urllib.request.urlopen(dl, timeout=120) as r:
+            data = r.read()
+        with open(os.path.join(BGLIB, fname), "wb") as f:
+            f.write(data)
+        palette = (BG_MOODS.get(mood) or (None, ["#0d1117", "#1a2040", "#00d4ff", "#7b2ff7"], None))[1]
+        now = time.time()
+        con.execute("INSERT INTO bg_library(id,user_id,mood,prompt,file,orient,palette_json,source,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
+                    (img_id, job["user_id"], mood, prompt, fname, orient, json.dumps(palette), "gpt-image-2", now))
+        con.execute("UPDATE bg_jobs SET status='completed',image_id=? WHERE id=?", (img_id, job_id))
+        con.commit()
+    except Exception as e:
+        con.execute("UPDATE bg_jobs SET status='failed',error=? WHERE id=?", (str(e), job_id))
+        con.commit()
+    finally:
+        con.close()
+
+
+def bglib_row_json(r):
+    return {"id": r["id"], "url": f"/media/bglib/{r['file']}", "mood": r["mood"],
+            "mood_label": (BG_MOODS.get(r["mood"]) or (r["mood"],))[0], "orient": r["orient"],
+            "palette": json.loads(r["palette_json"] or "null"), "created_at": r["created_at"]}
+
+
+def bg_daily_used(con, uid):
+    since = time.time() - 86400
+    return con.execute("SELECT COUNT(*) c FROM bg_jobs WHERE user_id=? AND created_at>=? AND status!='failed'",
+                       (uid, since)).fetchone()["c"]
+
 
 # ---------------------------------------------------------------- job workers
 def run_ai_job(job_id):
@@ -1447,6 +1605,68 @@ class Handler(BaseHTTPRequestHandler):
                                                 "mfa_enabled": bool(u["mfa_enabled"])},
                                        "workspaces": out, "ffmpeg": bool(FFMPEG), "codex_available": codex_available(),
                                        "whisper_available": whisper_available()})
+
+            # ---------- 背景画像ライブラリ (曲をまたいで再利用・GPT Image 2) ----------
+            if s[0] == "bglib":
+                if len(s) == 1 and method == "GET":
+                    rows = con.execute("SELECT * FROM bg_library WHERE user_id=? ORDER BY created_at DESC", (uid,)).fetchall()
+                    moods = [{"key": k, "label": v[0], "palette": v[1]} for k, v in BG_MOODS.items()]
+                    return self.send_json({"enabled": bool(ATLAS_KEY), "images": [bglib_row_json(r) for r in rows],
+                                           "moods": moods, "daily": {"used": bg_daily_used(con, uid), "limit": BG_DAILY_LIMIT}})
+                if len(s) == 2 and s[1] == "generate" and method == "POST":
+                    if not ATLAS_KEY:
+                        return self.err(503, "ai_unavailable", "背景生成は未設定です (.env に ATLASCLOUD_API_KEY を追加してください)")
+                    b = self.json_body()
+                    orient = b.get("orient") or "landscape"
+                    if orient not in BG_ORIENT_SIZE:
+                        orient = "landscape"
+                    count = max(1, min(8, int(b.get("count") or 1)))
+                    moods = b.get("moods") or ([b["mood"]] if b.get("mood") else [])
+                    moods = [m for m in moods if m in BG_MOODS]
+                    if not moods:
+                        moods = list(BG_MOODS.keys())      # 指定なし=バラエティ重視でランダム
+                    used = bg_daily_used(con, uid)
+                    if used + count > BG_DAILY_LIMIT:
+                        return self.err(429, "daily_limit", f"本日の背景生成上限({BG_DAILY_LIMIT}枚)に達します。残り {max(0, BG_DAILY_LIMIT - used)} 枚です。")
+                    jobs = []
+                    now = time.time()
+                    for i in range(count):
+                        mood = moods[i % len(moods)] if len(moods) > 1 else moods[0]
+                        if len(moods) == 1 and b.get("mood") is None:
+                            mood = random.choice(list(BG_MOODS.keys()))
+                        jid = str(uuid.uuid4())
+                        con.execute("INSERT INTO bg_jobs(id,user_id,mood,orient,status,created_at) VALUES(?,?,?,?,?,?)",
+                                    (jid, uid, mood, orient, "pending", now + i * 0.001))
+                        jobs.append({"id": jid, "mood": mood})
+                    con.commit()
+                    for j in jobs:
+                        threading.Thread(target=run_bg_job, args=(j["id"],), daemon=True).start()
+                    return self.send_json({"jobs": jobs}, 202)
+                if len(s) == 2 and s[1] == "jobs" and method == "GET":
+                    since = time.time() - 3600
+                    rows = con.execute("SELECT * FROM bg_jobs WHERE user_id=? AND created_at>=? ORDER BY created_at DESC LIMIT 60",
+                                       (uid, since)).fetchall()
+                    out = []
+                    for r in rows:
+                        item = {"id": r["id"], "mood": r["mood"], "status": r["status"], "error": r["error"]}
+                        if r["image_id"]:
+                            img = con.execute("SELECT * FROM bg_library WHERE id=?", (r["image_id"],)).fetchone()
+                            if img:
+                                item["image"] = bglib_row_json(img)
+                        out.append(item)
+                    return self.send_json({"jobs": out})
+                if len(s) == 2 and method == "DELETE":
+                    row = con.execute("SELECT * FROM bg_library WHERE id=? AND user_id=?", (s[1], uid)).fetchone()
+                    if not row:
+                        return self.err(404, "not_found", "画像が見つかりません")
+                    try:
+                        os.remove(os.path.join(BGLIB, row["file"]))
+                    except OSError:
+                        pass
+                    con.execute("DELETE FROM bg_library WHERE id=?", (s[1],))
+                    con.commit()
+                    return self.send_json({"ok": True})
+                return self.err(404, "not_found", "unknown bglib endpoint")
 
             # ---------- MFA (TOTP) ----------
             if s[0] == "mfa":

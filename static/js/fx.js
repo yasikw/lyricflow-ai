@@ -332,28 +332,102 @@ class FXEngine {
   }
 
   /* ---------------- scenes ---------------- */
+  // 背景画像を取得(キャッシュ)。未ロードなら読み込み開始してnullを返す。
+  _bgImage(url) {
+    if (!url) return null;
+    this._bgCache = this._bgCache || {};
+    let im = this._bgCache[url];
+    if (!im) {
+      im = new Image(); im.crossOrigin = 'anonymous'; im.src = url;
+      this._bgCache[url] = im;
+    }
+    return (im.complete && im.naturalWidth) ? im : null;
+  }
+
   _drawScene(ctx, t, W, H, C, energy, boost) {
-    const scene = (this.timeline.tracks?.background || []).find(b => t >= b.start && t < b.end)?.scene
-      || this.timeline.sceneDefault || 'city';
-    // 背景グラデーション(全面・変形なし)
+    const segs = this.timeline.tracks?.background || [];
+    const idx = segs.findIndex(b => t >= b.start && t < b.end);
+    const seg = idx >= 0 ? segs[idx] : null;
+    // 曲の展開ごとの静止画背景 (MV風): セクションに画像が割り当てられていれば画像、無ければプロシージャル
+    const hasImg = seg && seg.image && this._bgImage(seg.image);
+    // ベースのグラデ(画像が抜けても暗転しないよう常に敷く)
     const g = ctx.createLinearGradient(0, 0, 0, H);
     g.addColorStop(0, C.bg1); g.addColorStop(1, C.bg2);
-    ctx.fillStyle = g;
-    ctx.fillRect(0, 0, W, H);
-    if (scene === 'flat') return;
-    // ゆっくりしたカメラドリフト(Ken Burns)。サビでビート連動のズームを僅かに強める
-    ctx.save();
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+
+    // カメラドリフト(Ken Burns)。サビでビート連動のズームを僅かに強める(画像/プロシージャル共通)
     const beat = 1 + energy * boost * 0.012;
     const zoom = (1.06 + 0.025 * Math.sin(t * 0.09)) * beat;
     const px = Math.sin(t * 0.05) * W * 0.012, py = Math.cos(t * 0.043) * H * 0.012;
-    ctx.translate(W / 2 + px, H / 2 + py);
-    ctx.scale(zoom, zoom);
-    ctx.translate(-W / 2, -H / 2);
+    const applyCam = () => { ctx.translate(W / 2 + px, H / 2 + py); ctx.scale(zoom, zoom); ctx.translate(-W / 2, -H / 2); };
+
+    if (hasImg) {
+      const seed = this._hash01(seg.image);   // セクションごとにパン方向を変える
+      this._drawBgImage(ctx, hasImg, t, W, H, seg, seed, zoom, energy, boost, 1);
+      // セクション境界でのクロスフェード(次のセクションの画像を重ねてMV的に切替)
+      const fade = 1.0;
+      const nxt = segs[idx + 1];
+      if (nxt && nxt.image && t > seg.end - fade) {
+        const ni = this._bgImage(nxt.image);
+        if (ni) {
+          const a = Math.min(1, (t - (seg.end - fade)) / fade);
+          this._drawBgImage(ctx, ni, t, W, H, nxt, this._hash01(nxt.image), zoom, energy, boost, a);
+        }
+      }
+      // 可読性と統一感のための暗幕 + パレット・ティント
+      this._bgOverlay(ctx, W, H, C, energy);
+      return;
+    }
+
+    const scene = (seg && seg.scene) || this.timeline.sceneDefault || 'city';
+    if (scene === 'flat') return;
+    ctx.save();
+    applyCam();
     if (scene === 'city') this._sceneCity(ctx, t, W, H, C, energy);
     else if (scene === 'grid') this._sceneGrid(ctx, t, W, H, C, energy * boost);
     else if (scene === 'stars' || scene === 'sky') this._sceneSky(ctx, t, W, H, C, scene === 'stars');
     else if (scene === 'sunset') this._sceneSunset(ctx, t, W, H, C, energy);
     else if (scene === 'stage') this._sceneStage(ctx, t, W, H, C, energy, boost);
+    ctx.restore();
+  }
+
+  /* 背景画像を cover 配置 + Ken Burns で描画 (alpha=クロスフェード用) */
+  _drawBgImage(ctx, img, t, W, H, seg, seed, zoom, energy, boost, alpha) {
+    const iw = img.naturalWidth, ih = img.naturalHeight;
+    const cover = Math.max(W / iw, H / ih);
+    // セクション内で 1.0→1.10 へゆっくりズーム(進行度) + 全体ドリフト
+    const dur = Math.max(1, (seg.end || t + 8) - (seg.start || 0));
+    const prog = Math.min(1, Math.max(0, (t - (seg.start || 0)) / dur));
+    const kb = 1 + prog * 0.10;
+    const s = cover * zoom * kb;
+    const dw = iw * s, dh = ih * s;
+    // パン: セクションごとに方向を変える(seedで決定的)
+    const panX = (seed - 0.5) * (dw - W) * 0.5 + Math.sin(t * 0.05) * W * 0.01;
+    const panY = (this._hash01(seg.image + ':y') - 0.5) * (dh - H) * 0.4 + Math.cos(t * 0.043) * H * 0.01;
+    const dx = (W - dw) / 2 + panX, dy = (H - dh) / 2 + panY;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    if (this.quality !== 'draft') ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(img, dx, dy, dw, dh);
+    ctx.restore();
+  }
+
+  /* 背景画像の上に敷く暗幕 + パレット・ティント(歌詞可読性 + 統一感) */
+  _bgOverlay(ctx, W, H, C, energy) {
+    ctx.save();
+    // 上下を締める(中央の歌詞を読みやすく)
+    const v = ctx.createLinearGradient(0, 0, 0, H);
+    v.addColorStop(0, this._alpha('#05070d', 0.42));
+    v.addColorStop(0.5, this._alpha('#05070d', 0.14));
+    v.addColorStop(1, this._alpha('#05070d', 0.5));
+    ctx.fillStyle = v; ctx.fillRect(0, 0, W, H);
+    // パレットのアクセントを僅かに乗せて曲の配色と馴染ませる
+    ctx.globalCompositeOperation = 'soft-light';
+    ctx.globalAlpha = 0.25 + energy * 0.1;
+    const tint = ctx.createLinearGradient(0, 0, W, H);
+    tint.addColorStop(0, this._alpha(C.accent2 || '#7b2ff7', 0.5));
+    tint.addColorStop(1, this._alpha(C.accent || '#00d4ff', 0.5));
+    ctx.fillStyle = tint; ctx.fillRect(0, 0, W, H);
     ctx.restore();
   }
 

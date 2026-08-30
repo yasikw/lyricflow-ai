@@ -450,3 +450,51 @@ pre.code {
   .ed-mid { grid-template-columns: 1fr; }
   .ed-left, .ed-right { display: none; }
 }
+
+/* ---- 背景MVスタジオ ---- */
+.modal.bgm { max-width: 1080px; width: 94vw; }
+.bgm-body { display: flex; gap: 16px; max-height: 72vh; }
+.bgm-left { flex: 1.4; min-width: 0; display: flex; flex-direction: column; }
+.bgm-right { flex: 1; min-width: 260px; display: flex; flex-direction: column; }
+.bgm-h { font-size: 12px; font-weight: 700; color: var(--text); margin: 2px 0 8px; letter-spacing: .02em; }
+.bgm-h small { font-weight: 500; color: var(--muted); margin-left: 8px; }
+.bgm-panel { border: 1px solid var(--border); border-radius: var(--r); padding: 12px; background: var(--panel-2); }
+.bgm-moods { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.bgm-chip { font-size: 11.5px; padding: 5px 10px; border-radius: 999px; border: 1px solid var(--border);
+  background: var(--panel-3); color: var(--muted); cursor: pointer; transition: .12s; }
+.bgm-chip:hover { color: var(--text); border-color: var(--border-hi); }
+.bgm-chip.on { color: #fff; font-weight: 600; }
+.bgm-genrow { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.bgm-genrow label { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+.input.sm { width: auto; padding: 5px 8px; font-size: 12px; }
+.btn.sm { padding: 6px 12px; font-size: 12px; }
+.bgm-hint { font-size: 11px; color: var(--muted); margin-top: 9px; line-height: 1.5; }
+.bgm-hint code { color: var(--cyan); }
+.bgm-prog { margin-top: 9px; font-size: 12px; color: var(--cyan); font-weight: 600; }
+.bgm-gallery { flex: 1; overflow-y: auto; display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;
+  padding: 4px; border: 1px solid var(--border); border-radius: var(--r); background: var(--bg-deep); min-height: 120px; }
+.bgm-cell { position: relative; aspect-ratio: 16/9; border-radius: 7px; overflow: hidden; cursor: pointer;
+  border: 2px solid transparent; background: var(--panel-3); }
+.bgm-cell:hover { border-color: var(--cyan); }
+.bgm-cell img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.bgm-tag { position: absolute; left: 4px; bottom: 4px; font-size: 10px; padding: 1px 6px; border-radius: 4px;
+  background: rgba(0,0,0,.6); color: #fff; }
+.bgm-del { position: absolute; top: 3px; right: 3px; width: 20px; height: 20px; border-radius: 50%; border: none;
+  background: rgba(0,0,0,.55); color: #fff; cursor: pointer; font-size: 14px; line-height: 1; opacity: 0; transition: .12s; }
+.bgm-cell:hover .bgm-del { opacity: 1; }
+.bgm-del:hover { background: #e0475f; }
+.bgm-empty { grid-column: 1 / -1; padding: 24px 14px; text-align: center; color: var(--muted); font-size: 12px; line-height: 1.6; }
+.bgm-sections { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 7px; padding-right: 2px; }
+.bgm-sec { display: flex; align-items: center; gap: 10px; padding: 7px; border: 1px solid var(--border);
+  border-radius: var(--r); background: var(--panel-2); cursor: pointer; position: relative; transition: .12s; }
+.bgm-sec:hover { border-color: var(--border-hi); }
+.bgm-sec.sel { border-color: var(--cyan); box-shadow: 0 0 0 2px rgba(0,212,255,.16); }
+.bgm-sec-th { width: 64px; height: 36px; border-radius: 5px; background: var(--panel-3) center/cover no-repeat;
+  display: flex; align-items: center; justify-content: center; font-size: 10px; color: var(--muted); flex: none; }
+.bgm-sec-meta { display: flex; flex-direction: column; gap: 1px; }
+.bgm-sec-meta b { font-size: 13px; }
+.bgm-sec-meta small { font-size: 11px; color: var(--muted); }
+.bgm-sec-clr { margin-left: auto; width: 22px; height: 22px; border-radius: 50%; border: 1px solid var(--border);
+  background: var(--panel-3); color: var(--muted); cursor: pointer; font-size: 14px; }
+.bgm-sec-clr:hover { color: #fff; border-color: #e0475f; background: #e0475f; }
+.bgm-actions { display: flex; gap: 8px; margin-top: 10px; }

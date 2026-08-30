@@ -465,6 +465,7 @@ class Editor {
           <button class="ai-btn" id="ai-sync"><span class="ic">♪</span><span>${App.whisperAvailable ? 'AI自動同期 (Whisper)' : 'AI自動同期'}<small>${App.whisperAvailable ? '実音声を認識し強制アライメント(高精度)' : '無音を除外しオンセットにスナップ(近似)'}</small></span></button>
           <button class="ai-btn" id="ai-suggest"><span class="ic">✨</span><span>演出提案 (AI Director)<small>歌詞から背景・配色・演出を提案</small></span></button>
           <button class="ai-btn" id="ai-scene"><span class="ic">◈</span><span>シーン解析AI<small>曲構成を検出し演出を自動適用</small></span></button>
+          <button class="ai-btn" id="ai-bg"><span class="ic">🎬</span><span>背景MVスタジオ<small>展開ごとに静止画背景 / GPT Image 2で生成・蓄積</small></span></button>
           <button class="ai-btn" id="ai-trans"><span class="ic">文</span><span>AI多言語翻訳<small>50言語以上 / DeepL・Codex</small></span></button>
         </div>
         <div class="job-bar" id="job-bar" style="display:none">
@@ -539,6 +540,7 @@ class Editor {
     $('#ai-tap').onclick = () => this.openTapSync();
     $('#ai-sync').onclick = () => this.runSync();
     $('#ai-scene').onclick = () => this.runSceneAnalysis();
+    $('#ai-bg').onclick = () => this.openBgStudio();
     $('#ai-trans').onclick = () => this.runTranslate();
     $('#st-font').onchange = e => { this.tl.lyricStyle.font = e.target.value; this.markDirty(); };
     $('#st-size').oninput = e => { this.tl.lyricStyle.size = +e.target.value; this.markDirty(); };
@@ -816,6 +818,197 @@ class Editor {
       { id: 'fxc' + i, type: 'bloom', start: s.start, end: s.end, intensity: Math.min(1, (this.tl.fx.bloom || 0.5) + 0.3) }));
     this.markDirty(); this.renderTimeline();
     toast(`シーン解析 完了: ${res.sections.map(s => s.label).join(' → ')}`, 'ok');
+  }
+
+  // ---- 背景MVスタジオ: 曲の展開ごとに静止画背景を割り当て + GPT Image 2で生成・蓄積 ----
+  async openBgStudio() {
+    let data;
+    try { data = await API.get('/bglib'); }
+    catch (e) { return toast('背景ライブラリを取得できません: ' + e.message, 'err'); }
+
+    // 曲の展開(セクション)。シーン解析済みならそれを、無ければ曲全体を1区間として扱う
+    const secs = (this.tl.scenes && this.tl.scenes.length)
+      ? this.tl.scenes.map(s => ({ ...s }))
+      : [{ label: '曲全体', start: 0, end: this.tl.duration || 60, energy: 0.6 }];
+    // 既存の背景トラックから画像割り当てを復元
+    const assign = secs.map(s => {
+      const seg = (this.tl.tracks.background || []).find(b => Math.abs((b.start || 0) - s.start) < 0.5 && b.image);
+      return seg ? seg.image : null;
+    });
+    let images = data.images || [];
+    let sel = 0;                    // 割り当て先として選択中のセクション
+    const genSel = new Set();       // 生成対象に選んだムード
+    let polling = null;
+
+    const fmt = x => { const m = Math.floor(x / 60), s = Math.floor(x % 60); return `${m}:${String(s).padStart(2, '0')}`; };
+
+    const bg = document.createElement('div');
+    bg.className = 'modal-bg';
+    document.body.appendChild(bg);
+    const close = () => { if (polling) clearInterval(polling); bg.remove(); this.engine.hideLyrics = false; this.engine.render(this.t); };
+
+    const applyToTimeline = () => {
+      const def = this.tl.sceneDefault || (this.tl.tracks.background && this.tl.tracks.background[0]?.scene) || 'city';
+      this.tl.tracks.background = secs.map((s, i) => ({ id: 'bg' + i, start: s.start, end: s.end, scene: def, image: assign[i] || null }));
+      this.engine.setTimeline(this.tl);
+      this.markDirty();
+    };
+
+    const draw = () => {
+      const enabled = data.enabled;
+      const moodChips = (data.moods || []).map(m => {
+        const on = genSel.has(m.key);
+        const c = (m.palette && m.palette[2]) || '#00d4ff';
+        return `<button class="bgm-chip ${on ? 'on' : ''}" data-mood="${m.key}" style="border-color:${on ? c : 'var(--border)'};${on ? `background:${c}22;color:#fff` : ''}">${m.label}</button>`;
+      }).join('');
+      const gallery = images.length ? images.map(im => `
+        <div class="bgm-cell" data-img="${im.url}" title="${im.mood_label || ''}">
+          <img src="${im.url}" loading="lazy">
+          <span class="bgm-tag">${im.mood_label || ''}</span>
+          <button class="bgm-del" data-del="${im.id}" title="削除">×</button>
+        </div>`).join('')
+        : `<div class="bgm-empty">まだ画像がありません。上でムードを選び「生成」すると、どの曲にも使える背景がここに蓄積されます。</div>`;
+      const sections = secs.map((s, i) => {
+        const url = assign[i];
+        const c = SCENE_COLORS[s.label] || '#8b96a8';
+        return `<div class="bgm-sec ${i === sel ? 'sel' : ''}" data-sec="${i}">
+          <div class="bgm-sec-th" style="${url ? `background-image:url('${url}')` : ''}">${url ? '' : '自動'}</div>
+          <div class="bgm-sec-meta"><b style="color:${c}">${s.label}</b><small>${fmt(s.start)}–${fmt(s.end)}</small></div>
+          ${url ? `<button class="bgm-sec-clr" data-clr="${i}" title="クリア">×</button>` : ''}
+        </div>`;
+      }).join('');
+      bg.innerHTML = `
+      <div class="modal wide bgm">
+        <div class="m-head"><h2>🎬 背景MVスタジオ</h2><button class="x-btn">×</button></div>
+        <div class="m-body bgm-body">
+          <div class="bgm-left">
+            <div class="bgm-panel">
+              <div class="bgm-h">背景を生成 <small>${enabled ? `本日 ${data.daily.used}/${data.daily.limit} 枚` : '未設定'}</small></div>
+              ${enabled ? `
+              <div class="bgm-moods">${moodChips}</div>
+              <div class="bgm-genrow">
+                <label>枚数<select class="input sm" id="bgm-count"><option>1</option><option>2</option><option selected>4</option><option>6</option><option>8</option></select></label>
+                <label>向き<select class="input sm" id="bgm-orient">
+                  <option value="landscape" ${this.tl.aspect !== '9:16' ? 'selected' : ''}>横 16:9</option>
+                  <option value="portrait" ${this.tl.aspect === '9:16' ? 'selected' : ''}>縦 9:16</option>
+                  <option value="square">正方 1:1</option></select></label>
+                <button class="btn primary sm" id="bgm-gen">✨ 生成</button>
+              </div>
+              <div class="bgm-hint">ムード未選択なら「おまかせ(全ムード)」でバラエティ生成。選ぶほどライブラリが増え、他の曲でも再利用できます。</div>
+              <div class="bgm-prog" id="bgm-prog" style="display:none"></div>
+              ` : `<div class="bgm-hint">背景生成には <code>ATLASCLOUD_API_KEY</code> の設定が必要です。設定済みのライブラリ画像は下から割り当てできます。</div>`}
+            </div>
+            <div class="bgm-h" style="margin-top:6px">ライブラリ <small>クリックで選択中のセクションへ割り当て</small></div>
+            <div class="bgm-gallery" id="bgm-gallery">${gallery}</div>
+          </div>
+          <div class="bgm-right">
+            <div class="bgm-h">曲の展開ごとの背景 <small>${(this.tl.scenes && this.tl.scenes.length) ? '' : 'シーン解析AIで細かく分割できます'}</small></div>
+            <div class="bgm-sections">${sections}</div>
+            <div class="bgm-actions">
+              <button class="btn sm" id="bgm-auto">🎲 自動割り当て</button>
+              <button class="btn sm" id="bgm-clearall">全てクリア</button>
+            </div>
+          </div>
+        </div>
+        <div class="m-foot"><button class="btn" id="bgm-close">閉じる</button></div>
+      </div>`;
+      wire();
+    };
+
+    const refreshLib = async () => {
+      try { const d = await API.get('/bglib'); images = d.images || []; data.daily = d.daily; } catch (e) {}
+    };
+
+    const startPolling = () => {
+      if (polling) clearInterval(polling);
+      polling = setInterval(async () => {
+        let jd; try { jd = await API.get('/bglib/jobs'); } catch (e) { return; }
+        const pend = jd.jobs.filter(j => j.status === 'pending' || j.status === 'processing').length;
+        const fail = jd.jobs.filter(j => j.status === 'failed');
+        const prog = bg.querySelector('#bgm-prog');
+        if (prog) {
+          prog.style.display = 'block';
+          prog.textContent = pend ? `生成中… 残り ${pend} 枚` : (fail.length ? `完了 (${fail.length}件失敗)` : '生成完了');
+        }
+        if (pend === 0) {
+          clearInterval(polling); polling = null;
+          await refreshLib(); draw();
+          toast(fail.length ? `背景生成: ${fail.length}件失敗しました` : '背景を生成しました', fail.length ? 'err' : 'ok');
+        } else {
+          await refreshLib();
+          const gal = bg.querySelector('#bgm-gallery');
+          if (gal && images.length) gal.innerHTML = images.map(im => `
+            <div class="bgm-cell" data-img="${im.url}" title="${im.mood_label || ''}"><img src="${im.url}" loading="lazy"><span class="bgm-tag">${im.mood_label || ''}</span><button class="bgm-del" data-del="${im.id}">×</button></div>`).join('');
+        }
+      }, 3000);
+    };
+
+    const wire = () => {
+      bg.querySelector('.x-btn').onclick = close;
+      bg.querySelector('#bgm-close').onclick = close;
+      bg.onclick = e => { if (e.target === bg) close(); };
+      bg.querySelectorAll('.bgm-chip').forEach(b => b.onclick = () => {
+        const k = b.dataset.mood; genSel.has(k) ? genSel.delete(k) : genSel.add(k); draw();
+      });
+      bg.querySelectorAll('.bgm-sec').forEach(el => el.onclick = e => {
+        if (e.target.dataset.clr != null) { assign[+e.target.dataset.clr] = null; applyToTimeline(); draw(); return; }
+        sel = +el.dataset.sec; draw();
+      });
+      bg.querySelectorAll('.bgm-cell').forEach(el => el.onclick = e => {
+        if (e.target.dataset.del != null) return;   // 削除ボタンは別処理
+        assign[sel] = el.dataset.img;
+        if (this.tl.duration) this.seek(secs[sel].start + 0.1);   // 割り当て先セクションへプレビュー移動
+        applyToTimeline();
+        sel = Math.min(secs.length - 1, sel + (assign.slice(0, sel + 1).every(Boolean) ? 1 : 0));
+        draw();
+      });
+      bg.querySelectorAll('.bgm-del').forEach(b => b.onclick = async e => {
+        e.stopPropagation();
+        if (!confirm('この背景をライブラリから削除しますか？')) return;
+        try { await API.del('/bglib/' + b.dataset.del); } catch (err) { return toast('削除失敗: ' + err.message, 'err'); }
+        const url = images.find(i => i.id === b.dataset.del)?.url;
+        images = images.filter(i => i.id !== b.dataset.del);
+        assign.forEach((a, i) => { if (a === url) assign[i] = null; });
+        applyToTimeline(); draw();
+      });
+      const genBtn = bg.querySelector('#bgm-gen');
+      if (genBtn) genBtn.onclick = async () => {
+        const count = +bg.querySelector('#bgm-count').value;
+        const orient = bg.querySelector('#bgm-orient').value;
+        const moods = [...genSel];
+        genBtn.disabled = true;
+        try {
+          await API.post('/bglib/generate', { moods, count, orient });
+          const prog = bg.querySelector('#bgm-prog'); if (prog) { prog.style.display = 'block'; prog.textContent = `生成開始… ${count}枚`; }
+          startPolling();
+        } catch (e) { toast('生成できません: ' + e.message, 'err'); }
+        genBtn.disabled = false;
+      };
+      const autoBtn = bg.querySelector('#bgm-auto');
+      if (autoBtn) autoBtn.onclick = () => {
+        if (!images.length) return toast('先に背景を生成してください', 'err');
+        // エネルギーの高いセクション=派手なムード、低い=静かなムードを優先し、被りを避けて循環
+        const energetic = ['stage_lights', 'cyber_grid', 'neon_city', 'cosmic', 'aurora'];
+        const calm = ['night_sky', 'snow', 'rainy_window', 'minimal_grad', 'mountain_fog', 'ocean'];
+        const pool = images.slice();
+        secs.forEach((s, i) => {
+          const want = (s.energy || 0.5) >= 0.6 ? energetic : calm;
+          let cand = pool.filter(im => want.includes(im.mood));
+          if (!cand.length) cand = pool;
+          const pick = cand[i % cand.length];
+          assign[i] = pick ? pick.url : null;
+        });
+        applyToTimeline(); draw();
+        toast('展開に合わせて背景を自動割り当てしました', 'ok');
+      };
+      const clr = bg.querySelector('#bgm-clearall');
+      if (clr) clr.onclick = () => { assign.fill(null); applyToTimeline(); draw(); };
+    };
+
+    this.engine.hideLyrics = false;
+    draw();
+    // 生成中ジョブがあれば復帰時にポーリング再開
+    try { const jd = await API.get('/bglib/jobs'); if (jd.jobs.some(j => j.status === 'pending' || j.status === 'processing')) startPolling(); } catch (e) {}
   }
 
   async runTranslate() {
@@ -1161,6 +1354,17 @@ class Editor {
     this.engine.resize(W, H);
     const canvas = this.root.querySelector('#stage');
     const ext = { mp4: 'mp4', webm: 'webm', prores: 'mov', gif: 'gif' }[state.fmt] || 'mp4';
+    // 背景画像を事前ロード(決定論レンダで1フレーム目から背景が出るように)
+    const bgUrls = [...new Set((this.tl.tracks.background || []).map(b => b.image).filter(Boolean))];
+    if (bgUrls.length) {
+      setP('背景画像を読み込み中…', 0);
+      bgUrls.forEach(u => this.engine._bgImage(u));
+      await Promise.all(bgUrls.map(u => new Promise(res => {
+        const im = this.engine._bgCache[u];
+        if (im && im.complete && im.naturalWidth) return res();
+        im.onload = res; im.onerror = res; setTimeout(res, 8000);
+      })));
+    }
     try {
       const { job_id } = await API.post('/render/frames/start', {
         project_id: this.pid,
