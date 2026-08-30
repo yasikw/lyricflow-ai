@@ -624,36 +624,44 @@ class FXEngine {
     const tc = this.tctx;
     tc.clearRect(0, 0, W, H);
     const portrait = this.canvas.height > this.canvas.width;
-    const fontSize = (style.size || 64) * (W / 1280) * (portrait ? 0.72 : 1);
-    const font = `900 ${fontSize}px ${style.font || "'Noto Sans JP', sans-serif"}`;
-    tc.font = font;
+    let fontSize = (style.size || 64) * (W / 1280) * (portrait ? 0.72 : 1);
+    const fam = style.font || "'Noto Sans JP', sans-serif";
     tc.textBaseline = 'middle';
     const lineOut = Math.min(1, Math.max(0, (t - lineEnd) / 0.5));
 
     if ((style.orient || 'horizontal') === 'vertical') {
+      tc.font = `900 ${fontSize}px ${fam}`;
       this._drawLyricsVertical(tc, lineWords, t, fontSize, C, style, anim, energy, boost, lineOut, fx, W, H);
     } else {
-      // 横書き: 行内レイアウト (中央寄せ・必要なら折り返し)
-      const tracking = (style.tracking || 0) * fontSize;   // 文字ごとの字間(px)
-      const gap = fontSize * 0.18 + tracking;               // 単語間
-      const headId = lineWords[0] && lineWords[0].id;        // 先頭の単語
-      const widths = lineWords.map(w => this._measureWord(tc, w.word, tracking));
-      const rows = [[]];
-      let rw = 0;
-      const maxW = W * 0.92;
-      lineWords.forEach((w, i) => {
-        if (rw + widths[i] + gap > maxW && rows[rows.length - 1].length) { rows.push([]); rw = 0; }
-        rows[rows.length - 1].push({ ...w, w: widths[i] });
-        rw += widths[i] + gap;
-      });
-      const lineH = fontSize * 1.34;
+      // 横書き: 行内レイアウト。長い行はフレームに収まるようフォントを自動縮小(auto-fit)
+      const headId = lineWords[0] && lineWords[0].id;
+      const lineStart = lineWords[0] ? lineWords[0].start : 0;
+      const maxW = W * 0.9, maxBlockH = H * (portrait ? 0.6 : 0.66);
+      let rows, tracking, gap, lineH;
+      for (let iter = 0; iter < 12; iter++) {
+        tc.font = `900 ${fontSize}px ${fam}`;
+        tracking = (style.tracking || 0) * fontSize;
+        gap = fontSize * 0.18 + tracking;
+        const widths = lineWords.map(w => this._measureWord(tc, w.word, tracking));
+        rows = [[]]; let rw = 0;
+        lineWords.forEach((w, i) => {
+          if (rw + widths[i] + gap > maxW && rows[rows.length - 1].length) { rows.push([]); rw = 0; }
+          rows[rows.length - 1].push({ ...w, w: widths[i] });
+          rw += widths[i] + gap;
+        });
+        lineH = fontSize * 1.34;
+        const blockH = rows.length * lineH;
+        const maxRowW = Math.max(...rows.map(row => row.reduce((a, w) => a + w.w, 0) + gap * (row.length - 1)));
+        if ((blockH <= maxBlockH && maxRowW <= maxW) || fontSize < 22) break;
+        fontSize *= 0.9;
+      }
       const cy = H * (portrait ? 0.5 : 0.58) - (rows.length - 1) * lineH / 2;
       rows.forEach((row, ri) => {
         const totalW = row.reduce((a, w) => a + w.w, 0) + gap * (row.length - 1);
         let x = (W - totalW) / 2;
         const y = cy + ri * lineH;
         for (const w of row) {
-          this._drawWord(tc, w, x, y, t, fontSize, C, style, anim, energy, boost, lineOut, fx, tracking, w.id === headId);
+          this._drawWord(tc, w, x, y, t, fontSize, C, style, anim, energy, boost, lineOut, fx, tracking, w.id === headId, lineStart);
           x += w.w + gap;
         }
       });
@@ -684,8 +692,9 @@ class FXEngine {
   }
 
   /* 出現アニメの状態を計算 (縦横で共有) */
-  _wordAnim(w, t, fs, anim, active, energy, lineOut) {
-    const p = Math.min(1, Math.max(0, (t - w.start) / 0.34));
+  // entranceStart = 行の開始時刻。行が出た瞬間に全語が素早く一緒に入場(YouTube風・カラオケ無し)。
+  _wordAnim(entranceStart, w, t, fs, anim, active, energy, lineOut) {
+    const p = Math.min(1, Math.max(0, (t - (entranceStart - 0.12)) / 0.2));  // 歌い出しの少し前から素早く表示
     const ease = 1 - Math.pow(1 - p, 3);
     const eob = 1 + 2.70158 * Math.pow(p - 1, 3) + 1.70158 * Math.pow(p - 1, 2);
     let dx = 0, dy = 0, scale = 1, alpha = 1;
@@ -781,28 +790,18 @@ class FXEngine {
     return wsum;
   }
 
-  _drawWord(tc, w, x, y, t, fs, C, style, anim, energy, boost, lineOut, fx, tracking, isHead) {
+  _drawWord(tc, w, x, y, t, fs, C, style, anim, energy, boost, lineOut, fx, tracking, isHead, lineStart) {
     tracking = tracking || 0;
-    const active = t >= w.start && t < w.end + 0.1;
-    const upcoming = t < w.start;
     const preset = style.lettering || 'neon';
-    if (upcoming) {
-      tc.save();
-      tc.textAlign = 'left';
-      tc.globalAlpha = 0.13 * (1 - lineOut);
-      tc.fillStyle = style.color || C.text;
-      tc.fillText(w.word, x, y);
-      tc.restore();
-      return;
-    }
-    const a = this._wordAnim(w, t, fs, anim, active, energy, lineOut);
+    // YouTube風リリックビデオ: 行が出た瞬間に全語が一緒に入場し、行全体が均一に光る(カラオケ無し)
+    const a = this._wordAnim(lineStart != null ? lineStart : w.start, w, t, fs, anim, false, energy, lineOut);
     tc.save();
     tc.textAlign = 'center';
     const cx = x + w.w / 2, cyy = y + a.dy;
     tc.translate(cx + a.dx, cyy); tc.scale(a.scale, a.scale); tc.translate(-cx - a.dx, -cyy);
     const gx = cx + a.dx, gy = y + a.dy;
-    const glow = (style.glow ?? 0.6) * boost * (active ? 1 : 0.45) * (0.7 + energy * 0.6);
-    // 常に一文字ずつ描画 (字間トラッキング + ランダムサイズ対応)
+    const glow = (style.glow ?? 0.6) * boost * (0.75 + energy * 0.5);
+    // 一文字ずつ描画 (字間トラッキング + ランダムサイズ対応)。行内は均一の見た目
     const chars = [...w.word];
     let lx = gx - w.w / 2;
     chars.forEach((ch, i) => {
@@ -811,22 +810,13 @@ class FXEngine {
       let f = 1;
       if (style.randomSize) {
         const h = this._hash01(w.id + ':' + i);
-        // 先頭の単語は縮小しない (1.0〜1.7)。それ以外は 0.7〜1.9
         f = isHead ? (1.0 + h * 0.7) : (0.7 + h * 1.2);
       }
       if (f !== 1) { tc.save(); tc.translate(center, gy); tc.scale(f, f); tc.translate(-center, -gy); }
-      this._paintGlyph(tc, ch, center, gy, cw, fs, preset, active, a.alpha, glow, C, style, t, w);
+      this._paintGlyph(tc, ch, center, gy, cw, fs, preset, true, a.alpha, glow, C, style, t, w);
       if (f !== 1) tc.restore();
       lx += cw + (i < chars.length - 1 ? tracking : 0);
     });
-    // カラオケ進行下線 (neon/brush系のみ)
-    if (active && preset !== 'marker' && preset !== 'longshadow') {
-      tc.globalAlpha = a.alpha * 0.9;
-      const grad = tc.createLinearGradient(gx - w.w / 2, 0, gx + w.w / 2, 0);
-      grad.addColorStop(0, C.accent); grad.addColorStop(1, C.accent2);
-      tc.fillStyle = grad;
-      tc.fillRect(gx - w.w / 2, gy + fs * 0.62, w.w * Math.min(1, (t - w.start) / Math.max(0.12, w.end - w.start)), fs * 0.055);
-    }
     tc.restore();
   }
 
@@ -834,6 +824,7 @@ class FXEngine {
   _drawLyricsVertical(tc, lineWords, t, fs, C, style, anim, energy, boost, lineOut, fx, W, H) {
     const preset = style.lettering || 'neon';
     const headId = lineWords[0] && lineWords[0].id;
+    const lineStartV = lineWords[0] ? lineWords[0].start : 0;
     const charH = fs * 1.04 + (style.tracking || 0) * fs;
     const colW = fs * 1.34;
     const maxColChars = Math.floor((H * 0.82) / charH);
@@ -856,23 +847,16 @@ class FXEngine {
       let cy = H * 0.5 - (nChars * charH) / 2 + charH / 2;
       for (const wc of col) {
         const w = wc.w;
-        const active = t >= w.start && t < w.end + 0.1;
-        const upcoming = t < w.start;
-        const a = upcoming ? { dx: 0, dy: 0, scale: 1, alpha: 0.13 * (1 - lineOut) }
-          : this._wordAnim(w, t, fs, anim, active, energy, lineOut);
+        const a = this._wordAnim(lineStartV, w, t, fs, anim, false, energy, lineOut);
         const isHead = w.id === headId;
+        const glow = (style.glow ?? 0.6) * boost * (0.75 + energy * 0.5);
         wc.chars.forEach((ch, ci) => {
           const h = this._hash01(w.id + ':' + ci);
           const jf = style.randomSize ? (isHead ? 1.0 + h * 0.7 : 0.7 + h * 1.2) : 1;
           tc.save();
           const sc = a.scale * jf;
           tc.translate(cx, cy + a.dy); tc.scale(sc, sc); tc.translate(-cx, -(cy + a.dy));
-          if (upcoming) {
-            tc.globalAlpha = a.alpha; tc.fillStyle = style.color || C.text; tc.fillText(ch, cx, cy + a.dy);
-          } else {
-            const glow = (style.glow ?? 0.6) * boost * (active ? 1 : 0.45) * (0.7 + energy * 0.6);
-            this._paintGlyph(tc, ch, cx, cy + a.dy, colW * 0.8, fs, preset, active, a.alpha, glow, C, style, t, w);
-          }
+          this._paintGlyph(tc, ch, cx, cy + a.dy, colW * 0.8, fs, preset, true, a.alpha, glow, C, style, t, w);
           tc.restore();
           cy += charH;
         });
