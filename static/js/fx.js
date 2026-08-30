@@ -114,7 +114,7 @@ class FXEngine {
     if (dof > 0.05 && this.quality !== 'draft') this._dof(ctx, W, H, dof);
     // 前景キャラ/被写体レイヤー (任意アップロード素材)
     this._drawSubject(ctx, t, W, H, energy, boost);
-    this._drawLyrics(t, W, H, colors, energy, boost, fx);
+    if (!this.hideLyrics) this._drawLyrics(t, W, H, colors, energy, boost, fx);   // タップ同期中は歌詞を隠す
     this._drawOverlays(ctx, t, W, H, colors);
 
     // ---- post processing ----

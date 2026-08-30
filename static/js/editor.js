@@ -623,6 +623,9 @@ class Editor {
     const rawLines = (this.tl.lyrics_text || '').split('\n').map(s => s.trim()).filter(Boolean);
     if (!rawLines.length) return toast('先に歌詞を入力してください(左の歌詞タブ)', 'err');
     this.pause();
+    this.seek(0);                          // 必ず先頭から
+    this.engine.hideLyrics = true;         // タップ中は既存の歌詞表示を隠す(基準にならないため)
+    this.engine.render(0);
     const state = { mode: 'line', idx: 0, taps: [], units: [], playing: false, done: false };
     const buildUnits = () => {
       state.units = [];
@@ -694,7 +697,9 @@ class Editor {
       clearInterval(timer);
       document.removeEventListener('keydown', keyHandler, true);
       this._tapActive = false;
+      this.engine.hideLyrics = false;      // 歌詞表示を戻す
       this.audio.pause();
+      this.engine.render(this.t);
       bg.remove();
     };
     $('.x-btn').onclick = close;
