@@ -693,19 +693,39 @@ class FXEngine {
 
   /* 出現アニメの状態を計算 (縦横で共有) */
   // entranceStart = 行の開始時刻。行が出た瞬間に全語が素早く一緒に入場(YouTube風・カラオケ無し)。
-  _wordAnim(entranceStart, w, t, fs, anim, active, energy, lineOut) {
-    const p = Math.min(1, Math.max(0, (t - (entranceStart - 0.12)) / 0.2));  // 歌い出しの少し前から素早く表示
+  _wordAnim(entranceStart, w, t, fs, anim, active, energy, lineOut, ci, cn) {
+    ci = ci || 0; cn = cn || 1;
+    // 一字ずつ入場する系(タイプライター/カスケード/タンブル)は文字ごとに開始をずらす
+    const perCharStep = anim === 'typewriter' ? 0.055 : (anim === 'cascade' || anim === 'tumble') ? 0.04 : 0;
+    const dur = anim === 'typewriter' ? 0.05 : 0.2;
+    const start = entranceStart - 0.12 + ci * perCharStep;
+    const p = Math.min(1, Math.max(0, (t - start) / dur));
     const ease = 1 - Math.pow(1 - p, 3);
-    const eob = 1 + 2.70158 * Math.pow(p - 1, 3) + 1.70158 * Math.pow(p - 1, 2);
-    let dx = 0, dy = 0, scale = 1, alpha = 1;
+    const eob = 1 + 2.70158 * Math.pow(p - 1, 3) + 1.70158 * Math.pow(p - 1, 2);   // easeOutBack
+    // 減衰振動(スイング/バウンス用)
+    const damp = p < 1 ? Math.cos(p * Math.PI * 2.2) * (1 - p) : 0;
+    let dx = 0, dy = 0, scale = 1, alpha = 1, rot = 0, sx = 1, sy = 1, blur = 0;
     if (anim === 'fade') { alpha = ease; }
     else if (anim === 'fade-up') { alpha = ease; dy = (1 - ease) * fs * 0.5; }
     else if (anim === 'slide-up') { alpha = Math.min(1, ease * 1.4); dy = (1 - ease) * fs * 1.1; }
     else if (anim === 'pop-scale') { scale = 0.5 + eob * 0.5; alpha = Math.min(1, ease * 1.3); }
     else if (anim === 'glow-pop') { scale = 0.78 + eob * 0.22; alpha = Math.min(1, ease * 1.3); }
-    else if (anim === 'glitch-in') { alpha = ease; if (p < 1) { dx = (Math.random() - 0.5) * fs * 0.4 * (1 - p); dy = (Math.random() - 0.5) * fs * 0.2 * (1 - p); } }
+    else if (anim === 'glitch-in') { alpha = ease; if (p < 1) { dx = (this._hash01(w.id + ':gx' + Math.floor(t * 30)) - 0.5) * fs * 0.4 * (1 - p); dy = (this._hash01(w.id + ':gy' + Math.floor(t * 30)) - 0.5) * fs * 0.2 * (1 - p); } }
+    else if (anim === 'zoom-in') { scale = 1.7 - 0.7 * ease; alpha = Math.min(1, ease * 1.5); }
+    else if (anim === 'drop-in') { alpha = Math.min(1, ease * 1.6); dy = -(1 - eob) * fs * 1.3; }
+    else if (anim === 'rise-soft') { alpha = ease; dy = (1 - ease) * fs * 0.8; scale = 0.9 + ease * 0.1; }
+    else if (anim === 'spin-in') { alpha = Math.min(1, ease * 1.4); scale = 0.5 + eob * 0.5; rot = (1 - ease) * -0.6; }
+    else if (anim === 'flip-in') { alpha = Math.min(1, ease * 1.6); sx = Math.max(0.05, ease); }
+    else if (anim === 'swing-in') { alpha = Math.min(1, ease * 1.5); rot = damp * 0.4; }
+    else if (anim === 'stretch-in') { alpha = Math.min(1, ease * 1.4); sx = 1.5 - 0.5 * ease; sy = 0.6 + 0.4 * ease; }
+    else if (anim === 'blur-in') { alpha = ease; blur = (1 - ease) * fs * 0.28; scale = 1.06 - ease * 0.06; }
+    else if (anim === 'typewriter') { alpha = p >= 1 ? 1 : (p > 0 ? 1 : 0); }   // 一字ずつ即時表示
+    else if (anim === 'cascade') { alpha = ease; dy = (1 - ease) * fs * 0.6; }
+    else if (anim === 'tumble') { alpha = Math.min(1, ease * 1.4); dy = -(1 - eob) * fs * 0.9; rot = (1 - ease) * (ci % 2 ? 0.7 : -0.7); }
+    else if (anim === 'wave') { alpha = ease; dy = Math.sin(t * 4 + ci * 0.7) * fs * 0.12; }   // 入場後もずっと波打つ
+    else { alpha = ease; }   // 不明な指定はフェード
     if (active) scale += Math.sin(t * 7 + w.start * 3) * 0.02 * (0.5 + energy);
-    return { dx, dy, scale, alpha: alpha * (1 - lineOut), p };
+    return { dx, dy, scale, alpha: alpha * (1 - lineOut), rot, sx, sy, blur, p };
   }
 
   /* レタリングのプリセット別スタイルを適用し fillStyle を返す (縦横で共有) */
@@ -731,6 +751,42 @@ class FXEngine {
       tc.lineWidth = fs * 0.13; tc.strokeStyle = 'rgba(5,9,16,0.88)';
       return active ? C.accent : this._alpha(base, 0.94);
     }
+    if (preset === 'gold') {
+      tc.lineWidth = fs * 0.08; tc.strokeStyle = 'rgba(60,40,5,0.9)';
+      const g = tc.createLinearGradient(0, yTop, 0, yBot);
+      g.addColorStop(0, '#fff3c4'); g.addColorStop(0.4, '#f5c542'); g.addColorStop(0.52, '#a97512');
+      g.addColorStop(0.62, '#ffe07a'); g.addColorStop(1, '#c8951f');
+      return g;
+    }
+    if (preset === 'gradient') {
+      tc.lineWidth = fs * 0.08; tc.strokeStyle = 'rgba(5,9,16,0.75)';
+      const g = tc.createLinearGradient(0, yTop, 0, yBot);
+      g.addColorStop(0, C.accent2 || '#7b2ff7'); g.addColorStop(1, C.accent || '#00d4ff');
+      return g;
+    }
+    if (preset === 'rainbow') {
+      tc.lineWidth = fs * 0.06; tc.strokeStyle = 'rgba(5,9,16,0.7)';
+      const g = tc.createLinearGradient(0, yTop, 0, yBot);
+      g.addColorStop(0, '#ff5d8f'); g.addColorStop(0.3, '#ffd25d'); g.addColorStop(0.55, '#5dff9b');
+      g.addColorStop(0.78, '#5dc8ff'); g.addColorStop(1, '#b45dff');
+      return g;
+    }
+    if (preset === 'fire') {
+      tc.lineWidth = fs * 0.07; tc.strokeStyle = 'rgba(60,10,0,0.85)';
+      const g = tc.createLinearGradient(0, yTop, 0, yBot);
+      g.addColorStop(0, '#fff2b0'); g.addColorStop(0.4, '#ffcf3f'); g.addColorStop(0.72, '#ff6a1f'); g.addColorStop(1, '#e01f1f');
+      return g;
+    }
+    if (preset === 'ice') {
+      tc.lineWidth = fs * 0.07; tc.strokeStyle = 'rgba(20,50,80,0.7)';
+      const g = tc.createLinearGradient(0, yTop, 0, yBot);
+      g.addColorStop(0, '#ffffff'); g.addColorStop(0.5, '#bfe9ff'); g.addColorStop(1, '#5fb4e6');
+      return g;
+    }
+    if (preset === 'sticker') {
+      tc.lineWidth = fs * 0.22; tc.strokeStyle = '#ffffff';   // 太い白フチ(ステッカー)
+      return active ? (C.accent || '#00d4ff') : this._alpha(base, 0.96);
+    }
     // neon (default)
     tc.lineWidth = fs * 0.085; tc.strokeStyle = 'rgba(5,9,16,0.8)';
     if (active) {
@@ -754,6 +810,64 @@ class FXEngine {
       tc.fillRect(cx - w / 2 - fs * 0.06, cy - fs * 0.42, w + fs * 0.12, fs * 0.86);
       tc.restore();
     }
+    // pill: 角丸の背景ピル + 濃色文字
+    if (preset === 'pill') {
+      tc.save();
+      tc.globalAlpha = alpha * 0.95;
+      const grad = tc.createLinearGradient(cx - w / 2, 0, cx + w / 2, 0);
+      grad.addColorStop(0, C.accent); grad.addColorStop(1, C.accent2 || C.accent);
+      tc.fillStyle = grad;
+      const bx = cx - w / 2 - fs * 0.12, bw = w + fs * 0.24, bh = fs * 0.98, by = cy - bh * 0.52, r = bh / 2;
+      tc.beginPath();
+      if (tc.roundRect) tc.roundRect(bx, by, bw, bh, r);
+      else { tc.moveTo(bx + r, by); tc.arcTo(bx + bw, by, bx + bw, by + bh, r); tc.arcTo(bx + bw, by + bh, bx, by + bh, r); tc.arcTo(bx, by + bh, bx, by, r); tc.arcTo(bx, by, bx + bw, by, r); }
+      tc.fill();
+      tc.restore();
+      tc.globalAlpha = alpha;
+      tc.fillStyle = '#0a0f18';
+      tc.fillText(text, cx, cy);
+      return;
+    }
+    // shadow3d: 濃色を斜め下へ短く積んで立体ブロック風
+    if (preset === 'shadow3d') {
+      tc.save();
+      tc.globalAlpha = alpha;
+      const dep = this._alpha(C.accent2 || '#3a2a6a', 0.9);
+      tc.fillStyle = dep;
+      for (let s = 1; s <= 7; s++) { tc.fillText(text, cx + s, cy + s); }
+      tc.restore();
+      tc.globalAlpha = alpha;
+      tc.lineWidth = fs * 0.06; tc.strokeStyle = 'rgba(5,9,16,0.9)';
+      tc.strokeText(text, cx, cy);
+      tc.fillStyle = active ? (C.accent || '#00d4ff') : this._alpha(style.color || C.text, 0.97);
+      tc.fillText(text, cx, cy);
+      return;
+    }
+    // glitch: R/Cにずらした残像 + 白い芯 (RGBスプリット)
+    if (preset === 'glitch') {
+      const j = (this._hash01(w0.id + ':' + Math.floor(t * 24)) - 0.5) * fs * 0.14;
+      tc.save();
+      tc.globalAlpha = alpha * 0.85; tc.globalCompositeOperation = 'lighter';
+      tc.fillStyle = '#ff2e6b'; tc.fillText(text, cx - fs * 0.05 + j, cy);
+      tc.fillStyle = '#26f0ff'; tc.fillText(text, cx + fs * 0.05 - j, cy);
+      tc.restore();
+      tc.globalAlpha = alpha;
+      tc.lineWidth = fs * 0.05; tc.strokeStyle = 'rgba(5,9,16,0.6)'; tc.strokeText(text, cx, cy);
+      tc.fillStyle = '#f2fbff'; tc.fillText(text, cx, cy);
+      return;
+    }
+    // retro: マゼンタ/シアンの二重オフセット(80s)
+    if (preset === 'retro') {
+      tc.save();
+      tc.globalAlpha = alpha * 0.9;
+      tc.fillStyle = '#ff3ea5'; tc.fillText(text, cx + fs * 0.05, cy + fs * 0.05);
+      tc.fillStyle = '#28e7ff'; tc.fillText(text, cx - fs * 0.05, cy - fs * 0.05);
+      tc.restore();
+      tc.globalAlpha = alpha;
+      tc.lineWidth = fs * 0.07; tc.strokeStyle = 'rgba(5,9,16,0.85)'; tc.strokeText(text, cx, cy);
+      tc.fillStyle = '#fff4fb'; tc.fillText(text, cx, cy);
+      return;
+    }
     // longshadow: 斜め下へ連続シャドウ
     if (preset === 'longshadow') {
       tc.save();
@@ -770,13 +884,17 @@ class FXEngine {
     tc.globalAlpha = alpha;
     const fill = this._letterFill(tc, preset, active, C, style, fs, yTop, yBot);
     tc.strokeText(text, cx, cy);
+    // 色付きプリセットはグロー色を本体色に合わせ、白い芯で色が飛ばないようにする
+    const TINTED = { gold: '#ffb638', fire: '#ff6a1f', rainbow: '#ff6ec7', gradient: C.accent2 || '#9b6bff', ice: '#bfe9ff' };
+    const colored = preset in TINTED;
     if (glow > 0.05 && this.quality !== 'draft') {
-      tc.shadowColor = active ? C.accent : this._alpha(C.accent2, 0.8);
-      tc.shadowBlur = fs * 0.45 * glow;
+      tc.shadowColor = TINTED[preset] || (active ? C.accent : this._alpha(C.accent2, 0.8));
+      tc.shadowBlur = fs * 0.45 * glow * (colored ? 0.8 : 1);
     }
     tc.fillStyle = fill;
     tc.fillText(text, cx, cy);
-    if (active && glow > 0.3 && preset !== 'marker') {   // 芯の発光
+    // 芯の発光(白): 色を飛ばさないよう色付きプリセットとmarkerでは省く
+    if (active && glow > 0.3 && preset !== 'marker' && !colored) {
       tc.shadowBlur = fs * 0.14; tc.fillStyle = '#ffffff'; tc.globalAlpha = alpha * 0.5;
       tc.fillText(text, cx, cy); tc.globalAlpha = alpha;
     }
@@ -793,17 +911,19 @@ class FXEngine {
   _drawWord(tc, w, x, y, t, fs, C, style, anim, energy, boost, lineOut, fx, tracking, isHead, lineStart) {
     tracking = tracking || 0;
     const preset = style.lettering || 'neon';
-    // YouTube風リリックビデオ: 行が出た瞬間に全語が一緒に入場し、行全体が均一に光る(カラオケ無し)
-    const a = this._wordAnim(lineStart != null ? lineStart : w.start, w, t, fs, anim, false, energy, lineOut);
+    const entrance = lineStart != null ? lineStart : w.start;
+    const perChar = anim === 'typewriter' || anim === 'cascade' || anim === 'wave' || anim === 'tumble';
+    const glow = (style.glow ?? 0.6) * boost * (0.75 + energy * 0.5);
+    const chars = [...w.word];
+    const cn = chars.length;
+    // 語まとめアニメ(既定): 語ごとに一括変形。per-charアニメは各文字を個別に変形。
+    const aw = perChar ? null : this._wordAnim(entrance, w, t, fs, anim, false, energy, lineOut);
     tc.save();
     tc.textAlign = 'center';
-    const cx = x + w.w / 2, cyy = y + a.dy;
-    tc.translate(cx + a.dx, cyy); tc.scale(a.scale, a.scale); tc.translate(-cx - a.dx, -cyy);
-    const gx = cx + a.dx, gy = y + a.dy;
-    const glow = (style.glow ?? 0.6) * boost * (0.75 + energy * 0.5);
-    // 一文字ずつ描画 (字間トラッキング + ランダムサイズ対応)。行内は均一の見た目
-    const chars = [...w.word];
-    let lx = gx - w.w / 2;
+    const cx = x + w.w / 2;
+    if (aw) this._applyAnimTransform(tc, aw, cx, y);
+    const gy = y + (aw ? aw.dy : 0);
+    let lx = (cx + (aw ? aw.dx : 0)) - w.w / 2;
     chars.forEach((ch, i) => {
       const cw = tc.measureText(ch).width;
       const center = lx + cw / 2;
@@ -812,12 +932,26 @@ class FXEngine {
         const h = this._hash01(w.id + ':' + i);
         f = isHead ? (1.0 + h * 0.7) : (0.7 + h * 1.2);
       }
-      if (f !== 1) { tc.save(); tc.translate(center, gy); tc.scale(f, f); tc.translate(-center, -gy); }
-      this._paintGlyph(tc, ch, center, gy, cw, fs, preset, true, a.alpha, glow, C, style, t, w);
-      if (f !== 1) tc.restore();
+      const ac = perChar ? this._wordAnim(entrance, w, t, fs, anim, false, energy, lineOut, i, cn) : aw;
+      tc.save();
+      const py = gy + (perChar ? ac.dy : 0);
+      if (perChar) this._applyAnimTransform(tc, ac, center, py);
+      if (f !== 1) { tc.translate(center, py); tc.scale(f, f); tc.translate(-center, -py); }
+      this._paintGlyph(tc, ch, center, py, cw, fs, preset, true, ac.alpha, glow, C, style, t, w);
+      tc.restore();
       lx += cw + (i < chars.length - 1 ? tracking : 0);
     });
     tc.restore();
+  }
+
+  /* 出現アニメの変形(平行移動/回転/スケール/非等倍/ブラー)を中心(cx,cy)基準で適用 */
+  _applyAnimTransform(tc, a, cx, cy) {
+    const px = cx + (a.dx || 0), py = cy;
+    tc.translate(px, py);
+    if (a.rot) tc.rotate(a.rot);
+    tc.scale(a.scale * (a.sx || 1), a.scale * (a.sy || 1));
+    tc.translate(-px, -py);
+    if (a.blur && this.quality !== 'draft') { try { tc.filter = `blur(${a.blur.toFixed(1)}px)`; } catch (e) {} }
   }
 
   /* 縦書き: 各語を縦にスタックし、列を右→左に配置 */
@@ -847,16 +981,24 @@ class FXEngine {
       let cy = H * 0.5 - (nChars * charH) / 2 + charH / 2;
       for (const wc of col) {
         const w = wc.w;
-        const a = this._wordAnim(lineStartV, w, t, fs, anim, false, energy, lineOut);
         const isHead = w.id === headId;
         const glow = (style.glow ?? 0.6) * boost * (0.75 + energy * 0.5);
-        wc.chars.forEach((ch, ci) => {
-          const h = this._hash01(w.id + ':' + ci);
+        const perChar = anim === 'typewriter' || anim === 'cascade' || anim === 'wave' || anim === 'tumble';
+        const aw = perChar ? null : this._wordAnim(lineStartV, w, t, fs, anim, false, energy, lineOut);
+        const cn = wc.chars.length;
+        wc.chars.forEach((ch, i) => {
+          const h = this._hash01(w.id + ':' + i);
           const jf = style.randomSize ? (isHead ? 1.0 + h * 0.7 : 0.7 + h * 1.2) : 1;
+          const a = perChar ? this._wordAnim(lineStartV, w, t, fs, anim, false, energy, lineOut, i, cn) : aw;
           tc.save();
-          const sc = a.scale * jf;
-          tc.translate(cx, cy + a.dy); tc.scale(sc, sc); tc.translate(-cx, -(cy + a.dy));
-          this._paintGlyph(tc, ch, cx, cy + a.dy, colW * 0.8, fs, preset, true, a.alpha, glow, C, style, t, w);
+          const gy = cy + a.dy;
+          const px = cx + (a.dx || 0);
+          tc.translate(px, gy);
+          if (a.rot) tc.rotate(a.rot);
+          tc.scale(a.scale * (a.sx || 1) * jf, a.scale * (a.sy || 1) * jf);
+          tc.translate(-px, -gy);
+          if (a.blur && this.quality !== 'draft') { try { tc.filter = `blur(${a.blur.toFixed(1)}px)`; } catch (e) {} }
+          this._paintGlyph(tc, ch, cx, gy, colW * 0.8, fs, preset, true, a.alpha, glow, C, style, t, w);
           tc.restore();
           cy += charH;
         });

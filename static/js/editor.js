@@ -9,9 +9,20 @@ const EXPORT_RES = {
   '1080p': { '16:9': [1920, 1080], '9:16': [1080, 1920], '1:1': [1080, 1080], '4:5': [1080, 1350] },
   '4k': { '16:9': [3840, 2160], '9:16': [2160, 3840], '1:1': [2160, 2160], '4:5': [2160, 2700] },
 };
-const ANIMS = [['glow-pop', 'グロウポップ'], ['fade', 'フェード'], ['fade-up', 'フェードアップ'], ['slide-up', 'スライドアップ'], ['pop-scale', 'ポップスケール'], ['glitch-in', 'グリッチイン']];
+const ANIMS = [
+  ['glow-pop', 'グロウポップ'], ['fade', 'フェード'], ['fade-up', 'フェードアップ'], ['slide-up', 'スライドアップ'],
+  ['pop-scale', 'ポップスケール'], ['glitch-in', 'グリッチイン'], ['zoom-in', 'ズームイン'], ['drop-in', 'ドロップ(弾む)'],
+  ['rise-soft', 'ふわり上昇'], ['spin-in', 'スピンイン'], ['flip-in', 'フリップ(横)'], ['swing-in', 'スイング'],
+  ['blur-in', 'ブラーイン'], ['stretch-in', 'ストレッチ'], ['typewriter', 'タイプライター'], ['cascade', 'カスケード(一字ずつ)'],
+  ['wave', 'ウェーブ(波打ち)'], ['tumble', 'タンブル(一字ずつ回転)'],
+];
 const SCENES = [['city', 'ネオン都市'], ['sky', '夜空'], ['stars', '星空(高密度)'], ['grid', 'サイバーグリッド'], ['sunset', 'レトロサンセット'], ['stage', 'ステージ(照明)'], ['flat', 'フラット']];
-const LETTERINGS = [['neon', 'ネオン(グラデ)'], ['outline', 'アウトライン'], ['marker', 'マーカー'], ['brush', '筆(太字)'], ['chrome', 'クローム(金属)'], ['longshadow', 'ロングシャドウ']];
+const LETTERINGS = [
+  ['neon', 'ネオン(グラデ)'], ['outline', 'アウトライン'], ['marker', 'マーカー'], ['brush', '筆(太字)'],
+  ['chrome', 'クローム(金属)'], ['longshadow', 'ロングシャドウ'], ['gold', 'ゴールド'], ['gradient', 'グラデ(2色)'],
+  ['rainbow', 'レインボー'], ['fire', 'ファイア(炎)'], ['ice', 'アイス(氷)'], ['shadow3d', '3D押し出し'],
+  ['glitch', 'グリッチ(RGBずれ)'], ['retro', 'レトロ(80s)'], ['sticker', 'ステッカー'], ['pill', 'ピル(丸背景)'],
+];
 const ORIENTS = [['horizontal', '横書き'], ['vertical', '縦書き']];
 const PARTICLES = [['rain', '雨'], ['sakura', '桜'], ['snow', '雪'], ['stars', '光の粒'], ['embers', '火の粉'], ['none', 'なし']];
 const SCENE_COLORS = { Intro: '#8b96a8', Verse: '#00d4ff', 'Pre-Chorus': '#3fd58f', Chorus: '#ff7edb', Bridge: '#ffb03a', Outro: '#8b96a8' };

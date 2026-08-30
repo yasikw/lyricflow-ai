@@ -627,8 +627,12 @@ def translate_engine(lyrics_text, target, engine="builtin"):
 # ---------------------------------------------------------------- 演出提案 (Creative Director, 仕様 2.4 差別化機能)
 SCENE_OPTS = ["city", "sky", "stars", "grid", "sunset", "stage", "flat"]
 PARTICLE_OPTS = ["rain", "sakura", "snow", "stars", "embers", "none"]
-ANIM_OPTS = ["glow-pop", "fade", "fade-up", "slide-up", "pop-scale", "glitch-in"]
-LETTERING_OPTS = ["neon", "outline", "marker", "brush", "chrome", "longshadow"]
+ANIM_OPTS = ["glow-pop", "fade", "fade-up", "slide-up", "pop-scale", "glitch-in",
+             "zoom-in", "drop-in", "rise-soft", "spin-in", "flip-in", "swing-in",
+             "blur-in", "stretch-in", "typewriter", "cascade", "wave", "tumble"]
+LETTERING_OPTS = ["neon", "outline", "marker", "brush", "chrome", "longshadow",
+                  "gold", "gradient", "rainbow", "fire", "ice", "shadow3d",
+                  "glitch", "retro", "sticker", "pill"]
 ORIENT_OPTS = ["horizontal", "vertical"]
 
 def suggest_direction(lyrics_text, mood="", engine="builtin"):
