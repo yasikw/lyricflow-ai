@@ -1019,7 +1019,7 @@ class Editor {
     const maxRes = lim.max_res || 2160;
     const allowFmts = lim.formats || ['mp4', 'webm', 'gif', 'prores'];
     const heights = { '720p': 720, '1080p': 1080, '4k': 2160 };
-    const state = { res: maxRes >= 1080 ? '1080p' : '720p', fmt: 'mp4', aspect: this.project.aspect_ratio };
+    const state = { res: maxRes >= 1080 ? '1080p' : '720p', fmt: 'mp4', aspect: this.project.aspect_ratio, fps: 30 };
     const resOpt = (id, title, sub) => {
       const locked = heights[id] > maxRes;
       return `<div class="exp-opt ${id === state.res ? 'sel' : ''} ${locked ? 'locked' : ''}" data-res="${id}" ${locked ? 'data-locked="1"' : ''}><b>${title}${locked ? ' 🔒' : ''}</b><small>${locked ? 'Pro以上' : sub}</small></div>`;
@@ -1045,6 +1045,11 @@ class Editor {
             ${fmtOpt('prores', 'ProRes 422', '映像制作 (.mov)')}
             ${fmtOpt('gif', 'GIF', 'SNSサムネイル')}
           </div>
+          <label class="fld"><span>フレームレート</span></label>
+          <div class="exp-grid" id="fps-grid" style="grid-template-columns:1fr 1fr">
+            <div class="exp-opt sel" data-fps="30"><b>30 fps</b><small>標準・高速</small></div>
+            <div class="exp-opt" data-fps="60"><b>60 fps</b><small>より滑らか</small></div>
+          </div>
           <label class="fld"><span>アスペクト比 (${state.aspect} — エディターで変更)</span></label>
           <label class="fld"><span>歌詞ファイル同時出力</span></label>
           <div class="sub-dl">
@@ -1058,7 +1063,7 @@ class Editor {
             <div class="pbar"><i id="exp-fill" style="width:0%"></i></div>
           </div>
           <div id="exp-done" style="display:none;margin-top:14px"></div>
-          <div class="empty-note" style="text-align:left;padding:10px 2px 0">リアルタイムキャプチャ方式のため、曲の長さぶんの時間がかかります。レンダリング中はタブを前面に保ってください。</div>
+          <div class="empty-note" style="text-align:left;padding:10px 2px 0">決定論的レンダリング方式：全フレームを正確な時刻で1枚ずつ描画しffmpegで高品質エンコードします。フレーム落ち・タイミングずれが原理的に無く、商用品質です（曲の長さ・解像度に応じて時間がかかります）。</div>
         </div>
         <div class="m-foot">
           <button class="btn" id="exp-cancel">キャンセル</button>
@@ -1066,10 +1071,14 @@ class Editor {
         </div>
       </div>`;
     document.body.appendChild(bg);
-    const close = () => { bg.remove(); this.recording && this.stopRecording(); };
+    const close = () => { this._exporting = false; bg.remove(); this.fitStage(); };
     bg.querySelector('.x-btn').onclick = close;
     bg.querySelector('#exp-cancel').onclick = close;
     bg.onclick = e => { if (e.target === bg) close(); };
+    bg.querySelectorAll('#fps-grid .exp-opt').forEach(o => o.onclick = () => {
+      bg.querySelectorAll('#fps-grid .exp-opt').forEach(x => x.classList.toggle('sel', x === o));
+      state.fps = +o.dataset.fps;
+    });
     bg.querySelectorAll('#res-grid .exp-opt').forEach(o => o.onclick = () => {
       if (o.dataset.locked) return toast('この解像度はProプラン以上で利用できます', 'err');
       bg.querySelectorAll('#res-grid .exp-opt').forEach(x => x.classList.toggle('sel', x === o));
@@ -1112,87 +1121,72 @@ class Editor {
     toast(`${kind.toUpperCase()}を書き出しました`, 'ok');
   }
 
+  /* 決定論的レンダリング: 各フレームを正確な時刻で1枚ずつ描画してサーバーへ送信し、
+     ffmpegで高品質エンコード+元音源ミックス。リアルタイム録画と違いフレーム落ち・ズレが無い。 */
   async startRender(bg, state) {
     const startBtn = bg.querySelector('#exp-start');
     startBtn.disabled = true;
-    const bar = bg.querySelector('#exp-bar');
-    bar.style.display = 'block';
+    bg.querySelector('#exp-bar').style.display = 'block';
     const setP = (stage, pct) => {
-      bg.querySelector('#exp-stage').textContent = stage;
-      bg.querySelector('#exp-pct').textContent = Math.floor(pct) + '%';
-      bg.querySelector('#exp-fill').style.width = pct + '%';
+      const s = bg.querySelector('#exp-stage'), p = bg.querySelector('#exp-pct'), f = bg.querySelector('#exp-fill');
+      if (s) s.textContent = stage; if (p) p.textContent = Math.floor(pct) + '%'; if (f) f.style.width = pct + '%';
     };
-    // 高解像度キャンバスへ切替 (60fps)
     const [W, H] = EXPORT_RES[state.res][state.aspect] || EXPORT_RES[state.res]['16:9'];
-    const FPS = 60;
-    this.pause();
-    this.engine.resize(W, H);
-    this.engine.quality = 'full';
-    // 映像のみをキャプチャ。音声は劣化を避けるためサーバー側で元音源を直接ミックスする
-    const canvasStream = this.root.querySelector('#stage').captureStream(FPS);
-    const stream = new MediaStream(canvasStream.getVideoTracks());
-    const mime = MediaRecorder.isTypeSupported('video/webm;codecs=vp9') ? 'video/webm;codecs=vp9' : 'video/webm';
-    const bitrate = state.res === '4k' ? 55_000_000 : state.res === '1080p' ? 18_000_000 : 10_000_000;
-    const rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: bitrate });
-    const chunks = [];
-    rec.ondataavailable = e => e.data.size && chunks.push(e.data);
-    this.recording = rec;
+    const FPS = state.fps || 30;
     const dur = this.tl.duration;
-    rec.onstop = async () => {
-      this.recording = null;
-      this.pause();
-      this.fitStage(); // プレビュー解像度に戻す
-      if (!bg.isConnected) return;
-      setP('サーバーでエンコード中 (ffmpeg)…', 62);
-      const blob = new Blob(chunks, { type: 'video/webm' });
-      const fd = new FormData();
-      fd.append('file', blob, 'capture.webm');
-      fd.append('project_id', this.pid);
-      fd.append('settings', JSON.stringify({ format: state.fmt, resolution: state.res, aspect: state.aspect, width: W, height: H, fps: FPS, mux_source_audio: true }));
-      try {
-        const { job_id } = await API.upload('/render', fd);
-        for (;;) {
-          const j = await API.req('GET', '/render/' + job_id);
-          setP('サーバーでエンコード中 (ffmpeg)…', 62 + j.progress_pct * 0.38);
-          if (j.status === 'completed') {
-            setP('完了', 100);
-            const ext = { mp4: 'mp4', webm: 'webm', prores: 'mov', gif: 'gif' }[state.fmt] || 'mp4';
-            const done = bg.querySelector('#exp-done');
-            done.style.display = 'block';
-            done.innerHTML = `<a class="btn primary" href="${j.output_url}" download="${esc(this.project.title)}.${ext}" style="width:100%;justify-content:center">⬇ ${esc(this.project.title)}.${ext} をダウンロード</a>`;
-            this.project.status = 'exported';
-            const badge = this.root.querySelector('#status-badge');
-            if (badge) { badge.textContent = 'exported'; badge.className = 'badge exported'; }
-            toast('レンダリング完了', 'ok');
-            break;
-          }
-          if (j.status === 'failed') throw new Error(j.error_message || 'エンコード失敗');
-          await new Promise(r => setTimeout(r, 700));
-        }
-      } catch (e) { toast('レンダリング失敗: ' + e.message, 'err'); setP('失敗: ' + e.message, 0); }
-      startBtn.disabled = false;
-    };
-    // 再生しながらキャプチャ
-    this.seek(0);
-    rec.start(250);
-    this.play();
-    const t0 = performance.now();
-    // 監視は setTimeout で(rAFは非表示時に停止するため)。実描画はWorker駆動のframe()が60Hzで行う
-    const tick = () => {
-      if (!this.recording) return;
-      const p = Math.min(1, this.t / dur);
-      setP(`リアルタイムキャプチャ中… ${fmtTime(this.t)} / ${fmtTime(dur)}`, p * 60);
-      if (this.t >= dur - 0.05 || (performance.now() - t0) / 1000 > dur + 5) rec.stop();
-      else setTimeout(tick, 100);
-    };
-    tick();
-  }
-
-  stopRecording() {
-    try { this.recording?.stop(); } catch (e) {}
-    this.recording = null;
+    const total = Math.max(1, Math.round(dur * FPS));
     this.pause();
-    this.fitStage();
+    this._exporting = true;
+    const prevQ = this.engine.quality;
+    this.engine.quality = 'full';
+    this.engine.resize(W, H);
+    const canvas = this.root.querySelector('#stage');
+    const ext = { mp4: 'mp4', webm: 'webm', prores: 'mov', gif: 'gif' }[state.fmt] || 'mp4';
+    try {
+      const { job_id } = await API.post('/render/frames/start', {
+        project_id: this.pid,
+        settings: { format: state.fmt, resolution: state.res, aspect: state.aspect, width: W, height: H, fps: FPS },
+      });
+      for (let i = 0; i < total; i++) {
+        if (!bg.isConnected || !this._exporting) throw new Error('cancelled');
+        this.engine.render(i / FPS);                      // 正確な時刻で1フレーム描画
+        const blob = await new Promise(r => canvas.toBlob(r, 'image/jpeg', 0.92));
+        const res = await fetch(`/api/v1/render/frames/${job_id}/${i}`, {
+          method: 'POST',
+          headers: { Authorization: 'Bearer ' + API.token, 'Content-Type': 'image/jpeg', 'X-Total-Frames': String(total) },
+          body: blob,
+        });
+        if (!res.ok) throw new Error('フレーム送信に失敗しました');
+        if (i % 4 === 0) { setP(`フレーム描画中… ${i}/${total}`, (i / total) * 60); await new Promise(r => setTimeout(r)); }
+      }
+      setP('サーバーでエンコード中 (ffmpeg)…', 62);
+      await API.post(`/render/frames/${job_id}/finish`, {});
+      for (;;) {
+        const j = await API.req('GET', '/render/' + job_id);
+        setP('サーバーでエンコード中 (ffmpeg)…', 62 + (j.progress_pct || 0) * 0.38);
+        if (j.status === 'completed') {
+          setP('完了', 100);
+          const done = bg.querySelector('#exp-done');
+          done.style.display = 'block';
+          done.innerHTML = `<a class="btn primary" href="${j.output_url}" download="${esc(this.project.title)}.${ext}" style="width:100%;justify-content:center">⬇ ${esc(this.project.title)}.${ext} をダウンロード</a>`;
+          this.project.status = 'exported';
+          const badge = this.root.querySelector('#status-badge');
+          if (badge) { badge.textContent = 'exported'; badge.className = 'badge exported'; }
+          toast('レンダリング完了', 'ok');
+          break;
+        }
+        if (j.status === 'failed') throw new Error(j.error_message || 'エンコード失敗');
+        await new Promise(r => setTimeout(r, 600));
+      }
+    } catch (e) {
+      if (e.message !== 'cancelled') { toast('レンダリング失敗: ' + e.message, 'err'); setP('失敗: ' + e.message, 0); }
+      else setP('中止しました', 0);
+    } finally {
+      this._exporting = false;
+      this.engine.quality = prevQ;
+      this.fitStage();
+      startBtn.disabled = false;
+    }
   }
 }
 

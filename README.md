@@ -56,7 +56,7 @@ conda run -n lyricflow-whisper pip install faster-whisper
 | 2.4 演出提案 (AI Director) | 歌詞のムードから背景シーン・配色5色・パーティクル・エフェクト強度・歌詞アニメを提案し1クリック適用。**Codex** or Built-in(キーワードヒューリスティック) |
 | AIエンジン | 翻訳・演出提案は **Built-in / Codex** を選択可 (エディターAIツール & アカウントpage)。Codexは `codex exec --output-schema` で構造化出力、read-onlyサンドボックス実行、失敗時はBuilt-inへ自動フォールバック。歌詞同期・シーン解析は音声解析必須のため常にBuilt-in |
 | 2.5 エディター | 4ペイン構成。5トラックタイムライン (Audio波形/Lyrics/BG/FX/Overlay)、単語クリップのドラッグ/リサイズ、ズーム、プレビュー品質切替 |
-| 2.6 出力 | 16:9 / 9:16 / 1:1 / 4:5、**720p/1080p/4K**、**MP4 (H.264) / WebM (VP9) / ProRes 422 / GIF** (ffmpeg変換・進捗表示)、SRT/LRC/VTT/ASS同時出力 |
+| 2.6 出力 | 16:9 / 9:16 / 1:1 / 4:5、**720p/1080p/4K**、30/60fps、**MP4 (H.264 crf16) / WebM (VP9) / ProRes 422 HQ / GIF**。**決定論的レンダリング**(全フレームを正確な時刻で1枚ずつ描画→ffmpegで高品質エンコード+元音源ミックス)=フレーム落ち・タイミングずれが原理的に無く商用品質。SRT/LRC/VTT/ASS同時出力 |
 | 2.7 B2B | テンプレートマーケットプレイス (**検索・ジャンル/価格/評価フィルタ・ソート**)、**プロジェクトからのテンプレート出品**、ブランドキット、ホワイトラベルAPI (X-API-Key, **プラン別レート制限**) |
 | 9.1 課金/プラン | **Free/Pro/Team のプラン制限を強制** (プロジェクト数・月間エクスポート・月間AI同期・解像度上限・フォーマット・ストレージ・カスタムフォント・ブランドキット)、**Freeプランは透かし表示**。アカウントページでプラン切替 (本番はStripe想定) |
 | マルチワークスペース | トップバーのワークスペース切替UI |
@@ -64,13 +64,13 @@ conda run -n lyricflow-whisper pip install faster-whisper
 
 ## エクスポートの仕組み
 
-プレビュー(Canvas)を **60fps** の `captureStream` + `MediaRecorder` で**映像のみ**リアルタイムキャプチャ (曲の実時間かかります) → VP9をサーバーへ → ffmpegで**元音源(WAV)を直接ミックス**して各フォーマットに変換。音声はWebAudio再エンコードを経由しないため劣化ゼロ・完全同期。
-- **MP4**: H.264 (`-crf 18 -tune animation` = アニメ調に最適) + AAC 256k
+**決定論的レンダリング**方式。エディター(Canvas)で各フレームを**正確な時刻(`i/fps`)で1枚ずつ描画**→ JPEGでサーバーへ連番送信(`POST /render/frames/{job_id}/{i}`)→ ffmpegで連番をエンコードし**元音源(WAV)を直接ミックス**(`/render/frames/{job_id}/finish`)。リアルタイム録画と違い**フレーム落ち・タイミングずれが原理的に無く、可視状態に依存しない**(商用品質)。
+- **MP4**: H.264 (`-crf 16 -tune animation` = 高品質・アニメ調に最適) + AAC 320k
 - **ProRes 422 HQ**: `.mov` (prores_ks profile 3) + PCM
-- **WebM**: VP9を無変換コピー + Opus (音声のみ付与)
+- **WebM**: VP9 (`-crf 24`) + Opus
 - **GIF**: palettegen (max 224色 + sierra2_4a ディザ)
 
-レンダリングジョブは進捗ポーリング (`GET /api/v1/render/{job_id}`)。プラン別に解像度・フォーマット・月間回数を検証。
+30/60fps 選択可。レンダリングジョブは進捗ポーリング (`GET /api/v1/render/{job_id}`)。プラン別に解像度・フォーマット・月間回数を検証。
 
 ## 映像品質 (アニメ調FXエンジン)
 

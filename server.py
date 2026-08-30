@@ -867,6 +867,93 @@ def run_render_job(job_id, src_path):
     finally:
         con.close()
 
+def resolve_project_audio(con, project_id):
+    prj = con.execute("SELECT timeline_data_json FROM projects WHERE id=?", (project_id,)).fetchone()
+    if not prj:
+        return None
+    aid = (json.loads(prj["timeline_data_json"]) or {}).get("audio_asset_id")
+    if not aid:
+        return None
+    arow = con.execute("SELECT url FROM assets WHERE id=?", (aid,)).fetchone()
+    if not arow:
+        return None
+    ap = os.path.join(DATA, arow["url"].replace("/media/", "", 1).lstrip("/"))
+    return ap if os.path.exists(ap) else None
+
+def run_frames_encode(job_id):
+    """決定論的レンダリング: クライアントが1フレームずつ正確な時刻で描いて送ったJPEG連番を、
+    ffmpegで高品質(H.264 crf16 / ProRes422 HQ 等)に無劣化エンコードし元音源をミックスする。
+    リアルタイムキャプチャと違いフレーム落ち・ズレが原理的に無い。"""
+    con = db()
+    job = con.execute("SELECT * FROM render_jobs WHERE id=?", (job_id,)).fetchone()
+    if not job:
+        con.close()
+        return
+    settings = json.loads(job["output_settings_json"] or "{}")
+    fmt = settings.get("format", "mp4")
+    fps = float(settings.get("fps", 30)) or 30
+    ext = {"mp4": "mp4", "webm": "webm", "prores": "mov", "gif": "gif"}.get(fmt, "mp4")
+    frames_dir = os.path.join(RENDERS, f"frames_{job_id}")
+    out_name = f"{job_id}.{ext}"
+    out_path = os.path.join(RENDERS, out_name)
+    audio_path = resolve_project_audio(con, job["project_id"]) if fmt != "gif" else None
+    try:
+        con.execute("UPDATE render_jobs SET status='processing' WHERE id=?", (job_id,))
+        con.commit()
+        n = len([f for f in os.listdir(frames_dir) if f.endswith(".jpg")]) if os.path.isdir(frames_dir) else 0
+        if not FFMPEG or n == 0:
+            raise RuntimeError("フレームがありません" if n == 0 else "ffmpegが見つかりません")
+        dur = n / fps
+        inputs = ["-framerate", str(fps), "-i", os.path.join(frames_dir, "%06d.jpg")]
+        maps, ac, tail = [], [], []
+        if audio_path:
+            inputs += ["-i", audio_path]
+            maps = ["-map", "0:v:0", "-map", "1:a:0"]
+            tail = ["-shortest"]
+        if fmt == "prores":
+            vc = ["-c:v", "prores_ks", "-profile:v", "3", "-vendor", "apl0", "-pix_fmt", "yuv422p10le"]
+            if audio_path:
+                ac = ["-c:a", "pcm_s16le"]
+        elif fmt == "gif":
+            inputs = ["-framerate", str(fps), "-i", os.path.join(frames_dir, "%06d.jpg")]
+            maps = []; tail = []
+            vc = ["-vf", "fps=15,scale=720:-1:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=224[p];[s1][p]paletteuse=dither=sierra2_4a",
+                  "-loop", "0"]
+        elif fmt == "webm":
+            vc = ["-c:v", "libvpx-vp9", "-b:v", "0", "-crf", "24", "-pix_fmt", "yuv420p", "-row-mt", "1"]
+            if audio_path:
+                ac = ["-c:a", "libopus", "-b:a", "192k"]
+        else:                          # MP4 H.264 高品質 (crf16, アニメ向けtune)
+            preset = "medium" if settings.get("height", 1080) < 2160 else "faster"
+            vc = ["-c:v", "libx264", "-preset", preset, "-crf", "16", "-tune", "animation",
+                  "-pix_fmt", "yuv420p", "-movflags", "+faststart"]
+            if audio_path:
+                ac = ["-c:a", "aac", "-b:a", "320k"]
+        cmd = [FFMPEG, "-y", *inputs, *maps, *vc, *ac, *tail, "-progress", "pipe:1", "-nostats", out_path]
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+        for line in proc.stdout:
+            m = re.match(r"out_time_ms=(\d+)", line.strip())
+            if m and dur > 0:
+                pct = min(99, int(int(m.group(1)) / 1_000_000 / dur * 100))
+                con.execute("UPDATE render_jobs SET progress_pct=? WHERE id=?", (pct, job_id))
+                con.commit()
+        proc.wait()
+        if proc.returncode != 0:
+            raise RuntimeError("ffmpegエンコードに失敗しました")
+        con.execute("UPDATE render_jobs SET status='completed',progress_pct=100,output_url=?,completed_at=? WHERE id=?",
+                    (f"/media/renders/{out_name}", time.time(), job_id))
+        con.execute("UPDATE projects SET status='exported',updated_at=? WHERE id=?", (time.time(), job["project_id"]))
+        con.commit()
+    except Exception as e:
+        con.execute("UPDATE render_jobs SET status='failed',error_message=? WHERE id=?", (str(e), job_id))
+        con.commit()
+    finally:
+        con.close()
+        try:
+            shutil.rmtree(frames_dir, ignore_errors=True)   # フレーム連番を掃除
+        except Exception:
+            pass
+
 # ---------------------------------------------------------------- demo song synthesis
 def synth_demo_song(path):
     """デモ用のオリジナル楽曲(約42秒, J-POP進行 IV-V-iii-vi)をWAVで生成。"""
@@ -1675,6 +1762,47 @@ class Handler(BaseHTTPRequestHandler):
 
             # ---------- render ----------
             if s[0] == "render":
+                # 決定論的フレームレンダリング (高品質): start → frame×N → finish
+                if len(s) == 3 and s[1] == "frames" and s[2] == "start" and method == "POST":
+                    b = self.json_body()
+                    pid = b.get("project_id")
+                    settings = b.get("settings") or {}
+                    prj = con.execute("SELECT * FROM projects WHERE id=?", (pid,)).fetchone()
+                    if not prj or not ws_role(prj["workspace_id"]):
+                        return self.err(403, "forbidden", "アクセス権がありません")
+                    plan, lim, usage = usage_snapshot(con, prj["workspace_id"])
+                    if lim["exports_month"] is not None and usage["exports_month"] >= lim["exports_month"]:
+                        return self.err(402, "plan_limit", f"{plan.upper()}プランの月間エクスポート数（{lim['exports_month']}回）に達しました。")
+                    if settings.get("format", "mp4") not in lim["formats"]:
+                        return self.err(402, "plan_limit", f"{settings.get('format','mp4').upper()}出力は現在のプラン（{plan.upper()}）では利用できません。")
+                    if int(settings.get("height", 720)) > lim["max_res"]:
+                        return self.err(402, "plan_limit", f"{plan.upper()}プランの最大解像度は{lim['max_res']}pです。")
+                    jid = str(uuid.uuid4())
+                    os.makedirs(os.path.join(RENDERS, f"frames_{jid}"), exist_ok=True)
+                    con.execute("INSERT INTO render_jobs VALUES(?,?,?,?,?,?,?,?,?,?)",
+                                (jid, pid, uid, "processing", json.dumps(settings), None, 0, None, time.time(), None))
+                    con.execute("UPDATE projects SET status='rendering',updated_at=? WHERE id=?", (time.time(), pid))
+                    con.commit()
+                    return self.send_json({"job_id": jid}, 201)
+                if len(s) == 4 and s[1] == "frames" and s[3].isdigit() and method == "POST":
+                    jid, idx = s[2], int(s[3])
+                    fd = os.path.join(RENDERS, f"frames_{jid}")
+                    if not os.path.isdir(fd):
+                        return self.err(404, "not_found", "レンダリングジョブが見つかりません")
+                    with open(os.path.join(fd, f"{idx:06d}.jpg"), "wb") as fh:
+                        fh.write(self.body())
+                    n = len(os.listdir(fd))
+                    con.execute("UPDATE render_jobs SET progress_pct=? WHERE id=?", (min(60, n * 60 // max(1, int(self.headers.get('X-Total-Frames', n)))), jid))
+                    con.commit()
+                    return self.send_json({"ok": True})
+                if len(s) == 4 and s[1] == "frames" and s[3] == "finish" and method == "POST":
+                    self.body()          # ボディを読み捨て(keep-alive混線防止)
+                    jid = s[2]
+                    row = con.execute("SELECT * FROM render_jobs WHERE id=?", (jid,)).fetchone()
+                    if not row:
+                        return self.err(404, "not_found", "ジョブが見つかりません")
+                    threading.Thread(target=run_frames_encode, args=(jid,), daemon=True).start()
+                    return self.send_json({"ok": True}, 202)
                 if len(s) == 1 and method == "POST":
                     fields, files = parse_multipart(self.body(), self.headers.get("Content-Type", ""))
                     f = files.get("file")
