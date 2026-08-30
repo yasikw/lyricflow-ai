@@ -667,12 +667,13 @@ class Editor {
     const $ = s => bg.querySelector(s);
     const stageEl = $('#tap-stage'), progEl = $('#tap-prog');
     const renderStage = () => {
-      const cur = state.units[state.idx];
-      const nxt = state.units[state.idx + 1];
       const done = state.idx >= state.units.length;
+      const last = state.idx > 0 ? state.units[state.idx - 1] : null;  // 直前にタップした行(タップした瞬間に表示)
       stageEl.innerHTML = done
         ? `<div class="tap-done">✓ 全${state.units.length}${state.mode === 'line' ? '行' : '語'}をタップしました。「適用」で確定します。</div>`
-        : `<div class="tap-cur">${esc(cur.text)}</div>${nxt ? `<div class="tap-next">次: ${esc(nxt.text)}</div>` : '<div class="tap-next">（最後）</div>'}`;
+        : last
+          ? `<div class="tap-cur">${esc(last.text)}</div>`
+          : `<div class="tap-next">▶ 再生し、最初の歌い出しでタップしてください</div>`;
       progEl.textContent = `${Math.min(state.idx, state.units.length)} / ${state.units.length}`;
       $('#tap-apply').disabled = state.idx < 1;
     };
