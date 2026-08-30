@@ -95,6 +95,7 @@ class Editor {
     await this.loadAudio();
     this.renderAll();
     if (this.tl.lyricStyle?.font) this.ensureFont(this.tl.lyricStyle.font);   // 保存済みフォントを確実に読込→再描画
+    this.setupStageDrag();
     this.loop();
     this.autosaveTimer = setInterval(() => this.save(true), 30000); // 仕様: 30秒オートセーブ
     this.keyHandler = e => {
@@ -229,6 +230,48 @@ class Editor {
     });
     this.fitStage();
     window.addEventListener('resize', this.fitHandler = () => this.fitStage());
+  }
+
+  // プレビュー上で歌詞を掴んでリアルタイムに移動(自由配置)
+  setupStageDrag() {
+    const c = this.root.querySelector('#stage');
+    if (!c || c._dragBound) return;
+    c._dragBound = true;
+    const toCanvas = e => {
+      const r = c.getBoundingClientRect();
+      return { x: (e.clientX - r.left) * (c.width / r.width), y: (e.clientY - r.top) * (c.height / r.height) };
+    };
+    const inBox = (p) => {
+      const b = this.engine && this.engine._lyricBox;
+      if (!b) return false;
+      const pad = Math.min(c.width, c.height) * 0.03;
+      return p.x >= b.x - pad && p.x <= b.x + b.w + pad && p.y >= b.y - pad && p.y <= b.y + b.h + pad;
+    };
+    let drag = null;
+    c.addEventListener('pointermove', e => {
+      if (!drag) { c.style.cursor = inBox(toCanvas(e)) ? 'move' : 'default'; return; }
+      const p = toCanvas(e);
+      const st = this.tl.lyricStyle;
+      st.posX = Math.min(0.96, Math.max(0.04, (p.x + drag.ox) / c.width));
+      st.posY = Math.min(0.96, Math.max(0.04, (p.y + drag.oy) / c.height));
+      this.engine.render(this.t);
+      const sx = this.root.querySelector('#st-posx'), sy = this.root.querySelector('#st-posy');
+      if (sx) sx.value = Math.round(st.posX * 100);
+      if (sy) sy.value = Math.round(st.posY * 100);
+    });
+    c.addEventListener('pointerdown', e => {
+      const p = toCanvas(e);
+      if (!inBox(p)) return;
+      const st = this.tl.lyricStyle;
+      const cx = c.width * (st.posX ?? 0.5), cy = c.height * (st.posY ?? (c.height > c.width ? 0.5 : 0.58));
+      drag = { ox: cx - p.x, oy: cy - p.y };   // 掴んだ点と中心のズレを保持
+      c.setPointerCapture(e.pointerId);
+      c.style.cursor = 'grabbing';
+      e.preventDefault();
+    });
+    const end = e => { if (!drag) return; drag = null; c.style.cursor = 'move'; this.markDirty(); try { c.releasePointerCapture(e.pointerId); } catch (_) {} };
+    c.addEventListener('pointerup', end);
+    c.addEventListener('pointercancel', end);
   }
 
   fitStage() {
@@ -545,6 +588,10 @@ class Editor {
         <div class="prop-row"><span>字間</span><input type="range" id="st-track" min="0" max="60" value="${(st.tracking || 0) * 100}"></div>
         <div class="prop-row"><span>グロー</span><input type="range" id="st-glow" min="0" max="100" value="${(st.glow ?? 0.6) * 100}"></div>
         <label class="chk-row"><input type="checkbox" id="st-randsize" ${st.randomSize ? 'checked' : ''}><span>文字サイズをランダム化</span></label>
+        <div class="prop-row"><span>横位置</span><input type="range" id="st-posx" min="4" max="96" value="${Math.round((st.posX ?? 0.5) * 100)}"></div>
+        <div class="prop-row"><span>縦位置</span><input type="range" id="st-posy" min="4" max="96" value="${Math.round((st.posY ?? ((this.project.aspect_ratio === '9:16') ? 0.5 : 0.58)) * 100)}"></div>
+        <button class="btn sm" id="st-poscenter" style="width:100%;justify-content:center;margin-top:2px">位置を中央に戻す</button>
+        <div class="bgm-hint" style="margin-top:4px">プレビュー上の文字を直接ドラッグしても自由に配置できます。</div>
       </div>
       <div class="prop-group">
         <h4>シーン &amp; パーティクル</h4>
@@ -596,6 +643,14 @@ class Editor {
     $('#st-track').oninput = e => { this.tl.lyricStyle.tracking = e.target.value / 100; this.markDirty(); };
     $('#st-glow').oninput = e => { this.tl.lyricStyle.glow = e.target.value / 100; this.markDirty(); };
     $('#st-randsize').onchange = e => { this.tl.lyricStyle.randomSize = e.target.checked; this.markDirty(); };
+    $('#st-posx').oninput = e => { this.tl.lyricStyle.posX = e.target.value / 100; this.markDirty(); };
+    $('#st-posy').oninput = e => { this.tl.lyricStyle.posY = e.target.value / 100; this.markDirty(); };
+    $('#st-poscenter').onclick = () => {
+      const def = this.project.aspect_ratio === '9:16' ? 0.5 : 0.58;
+      this.tl.lyricStyle.posX = 0.5; this.tl.lyricStyle.posY = def;
+      $('#st-posx').value = 50; $('#st-posy').value = Math.round(def * 100);
+      this.markDirty();
+    };
     $('#sc-scene').onchange = e => {
       this.tl.sceneDefault = e.target.value;
       if (this.tl.tracks.background[0]) this.tl.tracks.background[0].scene = e.target.value;

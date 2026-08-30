@@ -683,6 +683,7 @@ class FXEngine {
 
   /* ---------------- lyrics (word-level animation) ---------------- */
   _drawLyrics(t, W, H, C, energy, boost, fx) {
+    this._lyricBox = null;   // このフレームで歌詞が描かれなければドラッグ対象なし
     const words = this.timeline?.tracks?.lyrics || [];
     const style = this.timeline?.lyricStyle || {};
     const anim = style.anim || 'glow-pop';
@@ -729,16 +730,21 @@ class FXEngine {
         if ((blockH <= maxBlockH && maxRowW <= maxW) || fontSize < 22) break;
         fontSize *= 0.9;
       }
-      const cy = H * (portrait ? 0.5 : 0.58) - (rows.length - 1) * lineH / 2;
+      const posX = style.posX ?? 0.5, posY = style.posY ?? (portrait ? 0.5 : 0.58);
+      const cy = H * posY - (rows.length - 1) * lineH / 2;
+      let maxRowW2 = 0;
       rows.forEach((row, ri) => {
         const totalW = row.reduce((a, w) => a + w.w, 0) + gap * (row.length - 1);
-        let x = (W - totalW) / 2;
+        maxRowW2 = Math.max(maxRowW2, totalW);
+        let x = W * posX - totalW / 2;
         const y = cy + ri * lineH;
         for (const w of row) {
           this._drawWord(tc, w, x, y, t, fontSize, C, style, anim, energy, boost, lineOut, fx, tracking, w.id === headId, lineStart);
           x += w.w + gap;
         }
       });
+      // ドラッグ配置用に歌詞ブロックの矩形(canvasピクセル座標)を記録
+      this._lyricBox = { x: W * posX - maxRowW2 / 2, y: cy - lineH / 2, w: maxRowW2, h: rows.length * lineH };
     }
 
     // 色収差付きで合成
@@ -1047,12 +1053,16 @@ class FXEngine {
     }
     const totalCols = cols.length;
     const blockW = totalCols * colW;
-    const startX = W / 2 + blockW / 2 - colW / 2;   // 右端の列から
+    const posX = style.posX ?? 0.5, posY = style.posY ?? 0.5;
+    const startX = W * posX + blockW / 2 - colW / 2;   // 右端の列から
+    let maxColH = 0;
+    cols.forEach(col => { maxColH = Math.max(maxColH, col.reduce((a, wc) => a + wc.chars.length, 0) * charH); });
+    this._lyricBox = { x: W * posX - blockW / 2, y: H * posY - maxColH / 2, w: blockW, h: maxColH };
     tc.textAlign = 'center';
     cols.forEach((col, ci) => {
       const cx = startX - ci * colW;
       const nChars = col.reduce((a, wc) => a + wc.chars.length, 0);
-      let cy = H * 0.5 - (nChars * charH) / 2 + charH / 2;
+      let cy = H * posY - (nChars * charH) / 2 + charH / 2;
       for (const wc of col) {
         const w = wc.w;
         const isHead = w.id === headId;
