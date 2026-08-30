@@ -23,6 +23,41 @@ const LETTERINGS = [
   ['rainbow', 'レインボー'], ['fire', 'ファイア(炎)'], ['ice', 'アイス(氷)'], ['shadow3d', '3D押し出し'],
   ['glitch', 'グリッチ(RGBずれ)'], ['retro', 'レトロ(80s)'], ['sticker', 'ステッカー'], ['pill', 'ピル(丸背景)'],
 ];
+// 使用フォント (value=CSS font-family, label=表示名, cat=分類)。index.htmlのGoogle Fontsと対応
+const FONTS = [
+  // ゴシック / サンセリフ
+  ["'Noto Sans JP', sans-serif", 'Noto Sans JP', 'ゴシック'],
+  ["'Zen Kaku Gothic New', sans-serif", 'Zen角ゴシック New', 'ゴシック'],
+  ["'M PLUS Rounded 1c', sans-serif", 'M PLUS Rounded 1c (丸)', 'ゴシック'],
+  ["'Zen Maru Gothic', sans-serif", 'Zen丸ゴシック', 'ゴシック'],
+  ["'Kosugi Maru', sans-serif", '小杉丸ゴシック', 'ゴシック'],
+  // 明朝 / セリフ
+  ["'Noto Serif JP', serif", 'Noto Serif JP (明朝)', '明朝'],
+  ["'Shippori Mincho', serif", 'しっぽり明朝', '明朝'],
+  ["'Zen Old Mincho', serif", 'Zen Old明朝', '明朝'],
+  // ディスプレイ / 太字インパクト
+  ["'Dela Gothic One', sans-serif", 'Dela Gothic One (極太)', 'ディスプレイ'],
+  ["'Reggae One', sans-serif", 'Reggae One (極太)', 'ディスプレイ'],
+  ["'RocknRoll One', sans-serif", 'RocknRoll One', 'ディスプレイ'],
+  ["'Rampart One', sans-serif", 'Rampart One (3D)', 'ディスプレイ'],
+  ["'Train One', sans-serif", 'Train One (袋文字)', 'ディスプレイ'],
+  ["'Kaisei Decol', serif", 'Kaisei Decol (装飾)', 'ディスプレイ'],
+  ["'DotGothic16', sans-serif", 'DotGothic16 (ドット)', 'ディスプレイ'],
+  ["'Stick', sans-serif", 'Stick (細ディスプレイ)', 'ディスプレイ'],
+  // ポップ / 手書き
+  ["'Mochiy Pop One', sans-serif", 'もちいずポップ', 'ポップ/手書き'],
+  ["'Hachi Maru Pop', cursive", 'はちまるポップ', 'ポップ/手書き'],
+  ["'Yusei Magic', sans-serif", '油性マジック', 'ポップ/手書き'],
+  ["'Klee One', cursive", 'クレー (教科書体)', 'ポップ/手書き'],
+  ["'Yuji Syuku', serif", 'Yuji Syuku (筆)', 'ポップ/手書き'],
+  // 欧文
+  ["'Inter', sans-serif", 'Inter', '欧文'],
+  ["'Montserrat', sans-serif", 'Montserrat', '欧文'],
+  ["'Oswald', sans-serif", 'Oswald (縦長)', '欧文'],
+  ["'Bebas Neue', sans-serif", 'Bebas Neue (見出し)', '欧文'],
+  ["'Anton', sans-serif", 'Anton (極太)', '欧文'],
+  ["'Playfair Display', serif", 'Playfair Display', '欧文'],
+];
 const ORIENTS = [['horizontal', '横書き'], ['vertical', '縦書き']];
 const PARTICLES = [['rain', '雨'], ['sakura', '桜'], ['snow', '雪'], ['stars', '光の粒'], ['embers', '火の粉'], ['none', 'なし']];
 const SCENE_COLORS = { Intro: '#8b96a8', Verse: '#00d4ff', 'Pre-Chorus': '#3fd58f', Chorus: '#ff7edb', Bridge: '#ffb03a', Outro: '#8b96a8' };
@@ -59,6 +94,7 @@ class Editor {
     this.engine.setTimeline(this.tl);
     await this.loadAudio();
     this.renderAll();
+    if (this.tl.lyricStyle?.font) this.ensureFont(this.tl.lyricStyle.font);   // 保存済みフォントを確実に読込→再描画
     this.loop();
     this.autosaveTimer = setInterval(() => this.save(true), 30000); // 仕様: 30秒オートセーブ
     this.keyHandler = e => {
@@ -445,6 +481,14 @@ class Editor {
   }
 
   /* ---------------- right pane (properties + AI) ---------------- */
+  // 選択フォントを確実に読み込んでから再描画(Canvasは未ロードだとフォールバック表示になるため)
+  ensureFont(cssFamily) {
+    if (!cssFamily || !document.fonts || !document.fonts.load) return;
+    const fam = cssFamily.split(',')[0].trim();   // 例: "'Noto Sans JP'"
+    Promise.all(['400', '700', '900'].map(w => document.fonts.load(`${w} 64px ${fam}`).catch(() => {})))
+      .then(() => { if (!this._exporting) this.engine.render(this.t); });
+  }
+
   renderRight() {
     const el = this.root.querySelector('#right-pane');
     const st = this.tl.lyricStyle || {};
@@ -484,11 +528,12 @@ class Editor {
       <div class="prop-group">
         <h4>歌詞スタイル</h4>
         <div class="prop-row"><span>フォント</span>
-          <select class="input" id="st-font">
-            <option value="'Noto Sans JP', sans-serif" ${(st.font || '').includes('Sans') ? 'selected' : ''}>Noto Sans JP</option>
-            <option value="'Noto Serif JP', serif" ${(st.font || '').includes('Serif') ? 'selected' : ''}>Noto Serif JP</option>
-            <option value="'Inter', sans-serif" ${(st.font || '').includes('Inter') ? 'selected' : ''}>Inter</option>
-          </select></div>
+          <select class="input" id="st-font">${(() => {
+            const cats = [...new Set(FONTS.map(f => f[2]))];
+            const cur = st.font || FONTS[0][0];
+            return cats.map(cat => `<optgroup label="${cat}">${FONTS.filter(f => f[2] === cat).map(([v, l]) =>
+              `<option value="${v.replace(/"/g, '&quot;')}" ${cur === v ? 'selected' : ''} style="font-family:${v}">${l}</option>`).join('')}</optgroup>`).join('');
+          })()}</select></div>
         <div class="prop-row"><span>サイズ</span><input type="range" id="st-size" min="28" max="300" value="${st.size || 64}"></div>
         <div class="prop-row"><span>カラー</span><input type="color" id="st-color" value="${st.color || '#ffffff'}"></div>
         <div class="prop-row"><span>組方向</span>
@@ -542,7 +587,7 @@ class Editor {
     $('#ai-scene').onclick = () => this.runSceneAnalysis();
     $('#ai-bg').onclick = () => this.openBgStudio();
     $('#ai-trans').onclick = () => this.runTranslate();
-    $('#st-font').onchange = e => { this.tl.lyricStyle.font = e.target.value; this.markDirty(); };
+    $('#st-font').onchange = e => { this.tl.lyricStyle.font = e.target.value; this.ensureFont(e.target.value); this.markDirty(); };
     $('#st-size').oninput = e => { this.tl.lyricStyle.size = +e.target.value; this.markDirty(); };
     $('#st-color').oninput = e => { this.tl.lyricStyle.color = e.target.value; this.markDirty(); };
     $('#st-anim').onchange = e => { this.tl.lyricStyle.anim = e.target.value; this.markDirty(); };
@@ -1354,6 +1399,12 @@ class Editor {
     this.engine.resize(W, H);
     const canvas = this.root.querySelector('#stage');
     const ext = { mp4: 'mp4', webm: 'webm', prores: 'mov', gif: 'gif' }[state.fmt] || 'mp4';
+    // フォントを事前ロード(決定論レンダで1フレーム目から正しい書体で描画されるように)
+    if (this.tl.lyricStyle?.font && document.fonts?.load) {
+      const fam = this.tl.lyricStyle.font.split(',')[0].trim();
+      setP('フォントを読み込み中…', 0);
+      await Promise.all(['400', '700', '900'].map(w => document.fonts.load(`${w} 64px ${fam}`).catch(() => {})));
+    }
     // 背景画像を事前ロード(決定論レンダで1フレーム目から背景が出るように)
     const bgUrls = [...new Set((this.tl.tracks.background || []).map(b => b.image).filter(Boolean))];
     if (bgUrls.length) {
