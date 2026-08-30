@@ -4,12 +4,25 @@
 
 ## 起動
 
+### デスクトップアプリ (Electron・推奨)
+
 ```bash
 cd ~/manus/lyricflow-ai
+npm install      # 初回のみ (Electron 43)
+npm run app      # 専用ウィンドウで起動 (Pythonサーバーは自動起動/終了)
+```
+
+埋め込みブラウザと違い**可視ウィンドウ**で動くため、`backgroundThrottling:false` と合わせて **rAF/画面更新が絞られず再生が滑らかに同期**します。`electron/main.cjs` が `server.py` を子プロセスで起動し、終了時に停止します。Pythonの場所は `LF_PYTHON`、ポートは `LF_PORT` で上書き可。
+
+### サーバー単体 (ブラウザで開く)
+
+```bash
 python3 server.py        # http://localhost:4189
 ```
 
-- 依存: Python 3 標準ライブラリのみ (DB=SQLite)。MP4書き出しに ffmpeg (無ければWebM出力のみ)。
+※プレビューをブラウザで見る場合は、**通常のブラウザの前面タブ**で開いてください（背面/埋め込み表示だとブラウザが画面更新を絞り再生がカクつきます。書き出しMP4は常に正しく同期）。
+
+- 依存: Python 3 標準ライブラリのみ (DB=SQLite)。MP4書き出しに ffmpeg (無ければWebM出力のみ)。デスクトップアプリは Node.js + Electron。
 - デモアカウント: **demo@lyricflow.app / demo1234**
 - 初回起動時にデモ楽曲(オリジナル合成曲・約44秒)とサンプルプロジェクト「星空のメロディー」をシードします。
 - データ初期化: `rm -rf data/` してから再起動。

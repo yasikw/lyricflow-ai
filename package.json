@@ -1,0 +1,13 @@
+{
+  "name": "lyricflow-ai",
+  "version": "1.0.0",
+  "description": "LyricFlow AI — アニメ調MVリリックビデオメーカー (Electron desktop shell)",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "app": "electron .",
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "electron": "^43.2.0"
+  }
+}

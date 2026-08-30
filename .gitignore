@@ -1,6 +1,10 @@
 # runtime data (SQLite DB, uploads, renders, generated secret key, demo song)
 data/
 
+# Electron
+node_modules/
+dist-app/
+
 # OS / editor
 .DS_Store
 *.log
