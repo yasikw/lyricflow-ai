@@ -1014,7 +1014,8 @@ class FXEngine {
       let f = 1;
       if (style.randomSize) {
         const h = this._hash01(w.id + ':' + i);
-        f = isHead ? (1.0 + h * 0.7) : (0.7 + h * 1.2);
+        // 単語の先頭文字は必ず大きく(1.35–1.7)、それ以外はランダム(0.6–1.25)
+        f = i === 0 ? (1.35 + h * 0.35) : (0.6 + h * 0.65);
       }
       const ac = perChar ? this._wordAnim(entrance, w, t, fs, anim, false, energy, lineOut, i, cn) : aw;
       tc.save();
@@ -1076,7 +1077,8 @@ class FXEngine {
         const cn = wc.chars.length;
         wc.chars.forEach((ch, i) => {
           const h = this._hash01(w.id + ':' + i);
-          const jf = style.randomSize ? (isHead ? 1.0 + h * 0.7 : 0.7 + h * 1.2) : 1;
+          // 単語の先頭文字は必ず大きく(1.35–1.7)、それ以外はランダム(0.6–1.25)
+          const jf = style.randomSize ? (i === 0 ? 1.35 + h * 0.35 : 0.6 + h * 0.65) : 1;
           const a = perChar ? this._wordAnim(lineStartV, w, t, fs, anim, false, energy, lineOut, i, cn) : aw;
           tc.save();
           const gy = cy + a.dy;
