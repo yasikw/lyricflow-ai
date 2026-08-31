@@ -600,6 +600,18 @@ class Editor {
         <div class="bgm-hint" style="margin-top:4px">プレビュー上の文字を直接ドラッグしても自由に配置できます。</div>
       </div>
       <div class="prop-group">
+        <h4>シーン別 文字アニメ</h4>
+        ${(this.tl.scenes && this.tl.scenes.length) ? `
+        ${this.tl.scenes.map((s, i) => `<div class="prop-row"><span style="color:${SCENE_COLORS[s.label] || '#8b96a8'}">${s.label}</span>
+          <select class="input sm" data-scanim="${i}">
+            <option value="">全体と同じ (${ANIMS.find(a => a[0] === (st.anim || 'glow-pop'))?.[1] || st.anim})</option>
+            ${ANIMS.map(([v, l]) => `<option value="${v}" ${s.anim === v ? 'selected' : ''}>${l}</option>`).join('')}
+          </select></div>`).join('')}
+        <button class="btn sm" id="sc-anim-rand" style="width:100%;justify-content:center;margin-top:6px">🎲 シーンごとにランダム</button>
+        <button class="btn sm" id="sc-anim-clear" style="width:100%;justify-content:center;margin-top:4px">全て「全体と同じ」に戻す</button>
+        ` : `<div class="empty-note" style="padding:6px 2px;text-align:left;font-size:11px">「シーン解析AI」を実行すると、Intro/Verse/Chorus などセクションごとに文字アニメを変えられます。</div>`}
+      </div>
+      <div class="prop-group">
         <h4>シーン &amp; パーティクル</h4>
         <div class="prop-row"><span>背景</span>
           <select class="input" id="sc-scene">${SCENES.map(([v, l]) => `<option value="${v}" ${(this.tl.tracks.background[0]?.scene || this.tl.sceneDefault) === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
@@ -659,6 +671,21 @@ class Editor {
       $('#st-posx').value = 50; $('#st-posy').value = Math.round(def * 100);
       this.markDirty();
     };
+    // シーン別 文字アニメ
+    this.root.querySelectorAll('[data-scanim]').forEach(sel => sel.onchange = e => {
+      const i = +e.target.dataset.scanim, v = e.target.value;
+      if (this.tl.scenes && this.tl.scenes[i]) { if (v) this.tl.scenes[i].anim = v; else delete this.tl.scenes[i].anim; }
+      this.markDirty();
+      if (this.tl.scenes && this.tl.scenes[i]) this.seek(this.tl.scenes[i].start + 0.3);   // 変更したシーンをプレビュー
+    });
+    { const rb = $('#sc-anim-rand'); if (rb) rb.onclick = () => {
+      const keys = ANIMS.map(a => a[0]); let prev = null;
+      (this.tl.scenes || []).forEach(s => { let k; do { k = keys[Math.floor(Math.random() * keys.length)]; } while (k === prev && keys.length > 1); s.anim = k; prev = k; });
+      this.markDirty(); this.renderRight(); toast('シーンごとに文字アニメをランダム設定しました', 'ok');
+    }; }
+    { const cb = $('#sc-anim-clear'); if (cb) cb.onclick = () => {
+      (this.tl.scenes || []).forEach(s => delete s.anim); this.markDirty(); this.renderRight();
+    }; }
     $('#sc-scene').onchange = e => {
       this.tl.sceneDefault = e.target.value;
       if (this.tl.tracks.background[0]) this.tl.tracks.background[0].scene = e.target.value;

@@ -688,7 +688,9 @@ class FXEngine {
     this._lyricBox = null;   // このフレームで歌詞が描かれなければドラッグ対象なし
     const words = this.timeline?.tracks?.lyrics || [];
     const style = this.timeline?.lyricStyle || {};
-    const anim = style.anim || 'glow-pop';
+    // シーン(セクション)ごとにアニメを上書き可能。指定が無ければ全体設定を使う
+    const sc = this.sceneAt(t);
+    const anim = (sc && sc.anim) || style.anim || 'glow-pop';
     // 現在の行: 表示中 or 直近の単語の行
     let lineIdx = -1;
     for (const w of words) { if (t >= w.start - 0.15 && t < w.end + 0.65) lineIdx = Math.max(lineIdx, w.line); }
