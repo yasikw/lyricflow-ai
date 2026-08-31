@@ -130,6 +130,8 @@ class FXEngine {
     if (flare > 0.04 && this.quality !== 'draft') this._lensFlare(ctx, t, W, H, colors, flare * (0.4 + energy * boost * 0.7));
     this._grade(ctx, W, H, energy);      // カラーグレード + フィルムグレイン
     this._vignette(ctx, W, H);
+    // 画面全体エフェクト (ピクセル化/ミラー/色相/RGBずれ/放射ブラー/VHS/走査線/網点/光漏れ/フラッシュ/古いフィルム/黒帯)
+    this._screenFx(ctx, t, W, H, colors, energy, boost, fx, fxActive);
     if (tl.watermark) this._watermark(ctx, W, H);
     ctx.filter = 'none';
   }
@@ -1163,6 +1165,191 @@ class FXEngine {
     g.addColorStop(1, 'rgba(0,0,0,0)');
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, W, H);
+    ctx.restore();
+  }
+
+  /* ---------------- 画面全体エフェクト (screen FX) ---------------- */
+  _fxBuf(W, H) {
+    if (!this.fxb) { this.fxb = document.createElement('canvas'); this.fxbc = this.fxb.getContext('2d'); }
+    if (this.fxb.width !== W || this.fxb.height !== H) { this.fxb.width = W; this.fxb.height = H; }
+    return this.fxbc;
+  }
+  _copyFrame(W, H) {
+    if (this.post.width !== W || this.post.height !== H) { this.post.width = W; this.post.height = H; }
+    this.pctx.clearRect(0, 0, W, H); this.pctx.drawImage(this.canvas, 0, 0);
+  }
+
+  // 最終合成後に画面全体へ適用するエフェクト群。fxActiveでシーン別上書き可。
+  _screenFx(ctx, t, W, H, C, energy, boost, fx, fa) {
+    const g = k => fa[k] ?? fx[k] ?? 0;
+    const draft = this.quality === 'draft';
+    if (g('pixelate') > 0.03 && !draft) this._pixelate(ctx, W, H, g('pixelate'));
+    if (g('mirror') > 0.03) this._mirror(ctx, W, H, g('mirror'), fx.mirrorMode);
+    if (g('hueshift') > 0.02 && !draft) this._hueShift(ctx, W, H, t, g('hueshift'));
+    if (g('rgbshift') > 0.04 && !draft) this._rgbShift(ctx, W, H, g('rgbshift'), t);
+    if (g('zoomblur') > 0.04 && !draft) this._zoomBlur(ctx, W, H, g('zoomblur') * (0.6 + energy * boost * 0.6), t);
+    if (g('vhs') > 0.05 && !draft) this._vhs(ctx, W, H, g('vhs'), t);
+    if (g('scanlines') > 0.04) this._scanlines(ctx, W, H, g('scanlines'));
+    if (g('halftone') > 0.05 && !draft) this._halftone(ctx, W, H, g('halftone'));
+    if (g('lightleak') > 0.04) this._lightLeak(ctx, t, W, H, C, g('lightleak'));
+    if (g('flash') > 0.04) this._flash(ctx, W, H, C, g('flash'), t, energy, boost);
+    if (g('oldfilm') > 0.05 && !draft) this._oldFilm(ctx, W, H, g('oldfilm'), t);
+    if (g('letterbox') > 0.02) this._letterbox(ctx, W, H, g('letterbox'));
+  }
+
+  _pixelate(ctx, W, H, amt) {
+    const block = Math.max(2, Math.round(2 + amt * 46));
+    const sw = Math.max(1, Math.round(W / block)), sh = Math.max(1, Math.round(H / block));
+    this.pctx.imageSmoothingEnabled = false; this._copyFrame(W, H);
+    this.pctx.clearRect(0, 0, W, H); this.pctx.drawImage(this.canvas, 0, 0, W, H, 0, 0, sw, sh);
+    ctx.save(); ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(this.post, 0, 0, sw, sh, 0, 0, W, H);
+    ctx.restore(); ctx.imageSmoothingEnabled = true; this.pctx.imageSmoothingEnabled = true;
+  }
+
+  _mirror(ctx, W, H, amt, mode) {
+    this._copyFrame(W, H);
+    ctx.save(); ctx.globalAlpha = Math.min(1, amt * 1.15);
+    if (mode === 'vertical') {   // 上を下へ鏡像
+      ctx.translate(0, H); ctx.scale(1, -1);
+      ctx.drawImage(this.post, 0, 0, W, H / 2, 0, 0, W, H / 2);
+    } else if (mode === 'quad') { // 左上を四分割ミラー(万華鏡風)
+      ctx.drawImage(this.post, 0, 0, W / 2, H / 2, 0, 0, W / 2, H / 2);
+      ctx.save(); ctx.translate(W, 0); ctx.scale(-1, 1); ctx.drawImage(this.post, 0, 0, W / 2, H / 2, 0, 0, W / 2, H / 2); ctx.restore();
+      ctx.save(); ctx.translate(0, H); ctx.scale(1, -1); ctx.drawImage(this.post, 0, 0, W / 2, H / 2, 0, 0, W / 2, H / 2); ctx.restore();
+      ctx.save(); ctx.translate(W, H); ctx.scale(-1, -1); ctx.drawImage(this.post, 0, 0, W / 2, H / 2, 0, 0, W / 2, H / 2); ctx.restore();
+    } else {                      // 左を右へ鏡像(既定)
+      ctx.translate(W, 0); ctx.scale(-1, 1);
+      ctx.drawImage(this.post, 0, 0, W / 2, H, 0, 0, W / 2, H);
+    }
+    ctx.restore();
+  }
+
+  _hueShift(ctx, W, H, t, amt) {
+    this._copyFrame(W, H);
+    const deg = (t * 55 * amt) % 360;   // 時間で色相を回す
+    ctx.save(); ctx.filter = `hue-rotate(${deg.toFixed(1)}deg) saturate(${(1 + amt * 0.3).toFixed(2)})`;
+    ctx.drawImage(this.post, 0, 0); ctx.filter = 'none'; ctx.restore();
+  }
+
+  _rgbShift(ctx, W, H, amt, t) {
+    const off = Math.max(1, Math.min(22, amt * 20 * (W / 1280))) * (0.7 + 0.3 * Math.sin(t * 5));
+    this._copyFrame(W, H);
+    const bc = this._fxBuf(W, H);
+    ctx.save();
+    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+    ctx.globalCompositeOperation = 'lighter';
+    const chans = [['#ff0000', -off], ['#00ff00', 0], ['#0000ff', off]];
+    for (const [col, dx] of chans) {
+      bc.globalCompositeOperation = 'source-over'; bc.clearRect(0, 0, W, H); bc.drawImage(this.post, 0, 0);
+      bc.globalCompositeOperation = 'multiply'; bc.fillStyle = col; bc.fillRect(0, 0, W, H);
+      bc.globalCompositeOperation = 'source-over';
+      ctx.drawImage(this.fxb, dx, 0);
+    }
+    ctx.restore();
+  }
+
+  _zoomBlur(ctx, W, H, amt, t) {
+    this._copyFrame(W, H);
+    const steps = 7, cx = W * (this.timeline?.lightX ?? 0.5), cy = H * (this.timeline?.lightY ?? 0.5);
+    ctx.save(); ctx.globalCompositeOperation = 'lighter';
+    for (let i = 1; i <= steps; i++) {
+      const s = 1 + (i / steps) * amt * 0.16;
+      const dw = W * s, dh = H * s;
+      ctx.globalAlpha = amt * 0.14 * (1 - i / steps * 0.5);
+      ctx.drawImage(this.post, cx - cx * s, cy - cy * s, dw, dh);
+    }
+    ctx.restore();
+  }
+
+  _vhs(ctx, W, H, amt, t) {
+    this._copyFrame(W, H);
+    const bands = 6;
+    for (let i = 0; i < bands; i++) {
+      const seed = Math.floor(t * 6) + i * 17;
+      const y = this._hash01('vy' + seed) * H;
+      const h = H * (0.015 + this._hash01('vh' + i) * 0.045);
+      const off = (this._hash01('vo' + seed) - 0.5) * amt * W * 0.06;
+      ctx.drawImage(this.post, 0, y, W, h, off, y, W, h);
+    }
+    ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.globalAlpha = amt * 0.22;
+    ctx.drawImage(this.post, amt * 5, 0); ctx.restore();
+    this._scanlines(ctx, W, H, amt * 0.5);
+  }
+
+  _scanlines(ctx, W, H, amt) {
+    ctx.save(); ctx.globalAlpha = Math.min(0.6, amt * 0.55); ctx.fillStyle = '#000';
+    const gap = Math.max(2, Math.round(H / 220));
+    for (let y = 0; y < H; y += gap) ctx.fillRect(0, y, W, Math.max(1, gap * 0.45));
+    ctx.restore();
+  }
+
+  _htTile() {
+    if (this._ht) return this._ht;
+    const c = document.createElement('canvas'); c.width = c.height = 6;
+    const g = c.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, 6, 6);
+    g.fillStyle = '#000'; g.beginPath(); g.arc(3, 3, 2.1, 0, Math.PI * 2); g.fill();
+    this._ht = c; return c;
+  }
+  _halftone(ctx, W, H, amt) {
+    ctx.save(); ctx.globalAlpha = Math.min(0.5, amt * 0.45); ctx.globalCompositeOperation = 'multiply';
+    ctx.fillStyle = ctx.createPattern(this._htTile(), 'repeat'); ctx.fillRect(0, 0, W, H); ctx.restore();
+  }
+
+  _lightLeak(ctx, t, W, H, C, amt) {
+    ctx.save(); ctx.globalCompositeOperation = 'lighter';
+    const x = W * (0.5 + 0.5 * Math.sin(t * 0.3)), y = H * (0.2 + 0.1 * Math.cos(t * 0.23));
+    let g = ctx.createRadialGradient(x, y, 0, x, y, W * 0.55);
+    g.addColorStop(0, this._alpha(C.accent2 || '#ff7b3a', amt * 0.42));
+    g.addColorStop(0.5, this._alpha(C.accent || '#ffcf6e', amt * 0.16));
+    g.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+    const x2 = W * (0.5 - 0.4 * Math.sin(t * 0.27));
+    g = ctx.createRadialGradient(x2, H, 0, x2, H, W * 0.5);
+    g.addColorStop(0, this._alpha('#ff8a3a', amt * 0.3)); g.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+    ctx.restore();
+  }
+
+  _flash(ctx, W, H, C, amt, t, energy, boost) {
+    const s = Math.pow(Math.max(0, Math.sin(t * 9.2)), 8);   // ビート的な明滅
+    const a = amt * (0.12 + energy * boost * 0.4) * s;
+    if (a < 0.01) return;
+    ctx.save(); ctx.globalCompositeOperation = 'lighter';
+    ctx.fillStyle = this._alpha('#ffffff', Math.min(0.6, a)); ctx.fillRect(0, 0, W, H);
+    ctx.restore();
+  }
+
+  _oldFilm(ctx, W, H, amt, t) {
+    this._copyFrame(W, H);
+    ctx.save();
+    ctx.globalAlpha = amt; ctx.filter = 'sepia(0.65) contrast(1.08) brightness(0.96)';
+    ctx.drawImage(this.post, 0, 0); ctx.filter = 'none'; ctx.globalAlpha = 1;
+    ctx.fillStyle = this._alpha('#000', amt * 0.1 * Math.abs(Math.sin(t * 22))); ctx.fillRect(0, 0, W, H);   // フリッカー
+    ctx.strokeStyle = this._alpha('#ffffff', amt * 0.22); ctx.lineWidth = Math.max(1, W / 1400);
+    const n = 1 + Math.floor(amt * 4);
+    for (let i = 0; i < n; i++) {
+      const x = this._hash01('scr' + i + Math.floor(t * 8)) * W;
+      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x + (this._hash01('sc2' + i) - 0.5) * 12, H); ctx.stroke();
+    }
+    ctx.restore();
+    this._grainOverlay(ctx, W, H, amt * 0.6);
+  }
+
+  _grainOverlay(ctx, W, H, amt) {
+    if (amt <= 0.02) return;
+    ctx.save(); ctx.globalAlpha = Math.min(0.4, amt * 0.4); ctx.globalCompositeOperation = 'overlay';
+    const tile = this._grainTile();
+    const ox = (Math.random() * 128) | 0, oy = (Math.random() * 128) | 0;
+    const pat = ctx.createPattern(tile, 'repeat');
+    ctx.translate(-ox, -oy); ctx.fillStyle = pat; ctx.fillRect(ox, oy, W, H); ctx.restore();
+  }
+
+  _letterbox(ctx, W, H, amt) {
+    const bh = H * 0.12 * Math.min(1, amt);
+    if (bh < 1) return;
+    ctx.save(); ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, W, bh); ctx.fillRect(0, H - bh, W, bh);
     ctx.restore();
   }
 

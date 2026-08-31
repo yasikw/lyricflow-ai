@@ -498,3 +498,7 @@ pre.code {
   background: var(--panel-3); color: var(--muted); cursor: pointer; font-size: 14px; }
 .bgm-sec-clr:hover { color: #fff; border-color: #e0475f; background: #e0475f; }
 .bgm-actions { display: flex; gap: 8px; margin-top: 10px; }
+
+/* 画面全体エフェクトの小見出し */
+.fx-sub { margin: 12px 0 6px; font-size: 11px; font-weight: 700; color: var(--cyan); letter-spacing: .04em;
+  border-top: 1px solid var(--border); padding-top: 10px; }

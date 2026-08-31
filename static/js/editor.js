@@ -58,6 +58,12 @@ const FONTS = [
   ["'Anton', sans-serif", 'Anton (極太)', '欧文'],
   ["'Playfair Display', serif", 'Playfair Display', '欧文'],
 ];
+// 画面全体エフェクト (fx.js の _screenFx と対応)
+const SCREEN_FX = [
+  ['flash', 'フラッシュ(明滅)'], ['zoomblur', '放射ズームブラー'], ['rgbshift', 'RGBずれ'], ['scanlines', '走査線(CRT)'],
+  ['vhs', 'VHS'], ['pixelate', 'モザイク/ピクセル'], ['halftone', '網点(ハーフトーン)'], ['mirror', 'ミラー/万華鏡'],
+  ['hueshift', '色相サイクル'], ['lightleak', '光漏れ(リーク)'], ['oldfilm', '古いフィルム'], ['letterbox', 'シネスコ黒帯'],
+];
 const ORIENTS = [['horizontal', '横書き'], ['vertical', '縦書き']];
 const PARTICLES = [['rain', '雨'], ['sakura', '桜'], ['snow', '雪'], ['stars', '光の粒'], ['embers', '火の粉'], ['none', 'なし']];
 const SCENE_COLORS = { Intro: '#8b96a8', Verse: '#00d4ff', 'Pre-Chorus': '#3fd58f', Chorus: '#ff7edb', Bridge: '#ffb03a', Outro: '#8b96a8' };
@@ -609,7 +615,9 @@ class Editor {
         <div class="fx-toggle"><span>光芒 God rays</span><input type="range" id="fx-godray" min="0" max="100" value="${(fx.godray || 0) * 100}"></div>
         <div class="fx-toggle"><span>レンズフレア</span><input type="range" id="fx-flare" min="0" max="100" value="${(fx.flare || 0) * 100}"></div>
         <div class="fx-toggle"><span>被写界深度 DoF</span><input type="range" id="fx-dof" min="0" max="100" value="${(fx.dof || 0) * 100}"></div>
-        <div class="empty-note" style="padding:6px 2px;text-align:left;font-size:11px">サビ(Chorus)では強度が自動ブーストされます</div>
+        <div class="fx-sub">画面全体エフェクト</div>
+        ${SCREEN_FX.map(([k, l]) => `<div class="fx-toggle"><span>${l}</span><input type="range" id="fx-${k}" min="0" max="100" value="${(fx[k] || 0) * 100}"></div>${k === 'mirror' ? `<div class="prop-row" style="padding-left:2px"><span style="font-size:11px;color:var(--muted)">ミラー種類</span><select class="input sm" id="fx-mirrorMode"><option value="horizontal" ${(fx.mirrorMode || 'horizontal') === 'horizontal' ? 'selected' : ''}>左右</option><option value="vertical" ${fx.mirrorMode === 'vertical' ? 'selected' : ''}>上下</option><option value="quad" ${fx.mirrorMode === 'quad' ? 'selected' : ''}>4分割(万華鏡)</option></select></div>` : ''}`).join('')}
+        <div class="empty-note" style="padding:6px 2px;text-align:left;font-size:11px">サビ(Chorus)では強度が自動ブーストされます。0で無効。</div>
       </div>
       <div class="prop-group">
         <h4>前景キャラ / 被写体</h4>
@@ -658,9 +666,11 @@ class Editor {
       this.markDirty(); this.renderTimeline();
     };
     $('#sc-part').onchange = e => { this.tl.particles = e.target.value; this.engine.particles = []; this.markDirty(); };
-    for (const k of ['bloom', 'glitch', 'chroma', 'wave', 'godray', 'flare', 'dof']) {
-      $('#fx-' + k).oninput = e => { this.tl.fx[k] = e.target.value / 100; this.markDirty(); };
+    for (const k of ['bloom', 'glitch', 'chroma', 'wave', 'godray', 'flare', 'dof', ...SCREEN_FX.map(f => f[0])]) {
+      const el = $('#fx-' + k);
+      if (el) el.oninput = e => { this.tl.fx[k] = e.target.value / 100; this.markDirty(); };
     }
+    { const mm = $('#fx-mirrorMode'); if (mm) mm.onchange = e => { this.tl.fx.mirrorMode = e.target.value; this.markDirty(); }; }
     // 前景キャラ/被写体
     if (this.tl.subject) {
       $('#su-scale').oninput = e => { this.tl.subject.scale = e.target.value / 100; this.markDirty(); };
