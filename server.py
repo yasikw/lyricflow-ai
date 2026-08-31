@@ -74,24 +74,57 @@ def _atlas_req(url, payload=None):
 
 
 # 汎用性の高い(=どの曲にも合う)ムード。歌詞や固有名詞を含めず、雰囲気のある“壁紙”として設計。
-# key: (日本語ラベル, 代表パレット[bg1,bg2,accent,accent2], プロンプト核)
+# key: (日本語ラベル, 代表パレット[bg1,bg2,accent,accent2], プロンプト核, カテゴリ)
 BG_MOODS = {
-    "neon_city":     ("ネオン都市",   ["#0a0e1a", "#1a1040", "#00d4ff", "#ff2e97"], "a moody cinematic neon city at night, rain-slick streets, glowing signs, deep blue and magenta, bokeh lights, wide establishing shot"),
-    "night_sky":     ("夜空・星",     ["#05060f", "#111634", "#7db4ff", "#b98cff"], "a vast starry night sky over silhouetted mountains, milky way, deep blue, subtle nebula glow, serene and cinematic"),
-    "sunset":        ("夕焼け",       ["#2a1230", "#5a2440", "#ff8a5b", "#ffd36e"], "a dreamy gradient sunset sky over the ocean horizon, warm orange to purple, soft clouds, cinematic golden hour"),
-    "ocean":         ("海・水面",     ["#04121e", "#0a2a44", "#37c8e6", "#7bf0d0"], "calm ocean water surface with gentle reflections under twilight, teal and deep blue, cinematic, minimal"),
-    "forest":        ("森・自然光",   ["#0a1710", "#12331f", "#6fe08a", "#d8ff9e"], "a misty forest with soft god rays through the trees, green and gold, atmospheric depth, cinematic nature"),
-    "sakura":        ("桜",           ["#1a0f1e", "#3a1730", "#ff9ec4", "#ffd0e4"], "soft pink cherry blossom branches with falling petals, dreamy bokeh, pastel pink, gentle and cinematic"),
-    "snow":          ("雪・冬",       ["#0c1420", "#1e2c40", "#bfe0ff", "#eaf4ff"], "quiet snowy landscape at blue hour, falling snow, cool blue and white, soft and cinematic, minimal"),
-    "rainy_window":  ("雨の窓",       ["#0a0f18", "#182238", "#6aa6d8", "#9ad0ff"], "raindrops on a window with blurred city lights behind, melancholic, blue tones, shallow focus, cinematic mood"),
-    "abstract_fluid":("抽象・流体",   ["#0b0a1e", "#241452", "#7b6bff", "#ff6ec7"], "abstract flowing liquid gradient waves, iridescent purple and pink, smooth dreamy motion-blur look, wallpaper"),
-    "aurora":        ("オーロラ",     ["#03101a", "#082436", "#3df0c0", "#6a8cff"], "northern lights aurora over a dark arctic landscape, green and violet ribbons, starry sky, cinematic"),
-    "cyber_grid":    ("サイバー",     ["#080312", "#1a0636", "#ff2e97", "#00e0ff"], "retro synthwave neon grid stretching to a glowing horizon sun, magenta and cyan, 80s cinematic, wallpaper"),
-    "city_bokeh":    ("都会ボケ",     ["#0a0c14", "#191d2e", "#ffcf6e", "#ff8a5b"], "defocused warm city bokeh lights at night, golden and amber circles, blurred, cozy cinematic background"),
-    "stage_lights":  ("ステージ",     ["#07060f", "#160a2a", "#00d4ff", "#ff3e8a"], "concert stage with dramatic spotlights and haze, silhouettes, volumetric light beams, energetic cinematic"),
-    "cosmic":        ("宇宙・星雲",   ["#05030f", "#140830", "#8a7bff", "#ff6ec7"], "a colorful deep space nebula with stars, purple pink and blue clouds, cosmic, ethereal, cinematic wallpaper"),
-    "minimal_grad":  ("ミニマル",     ["#0d1117", "#1a2040", "#00d4ff", "#7b2ff7"], "a smooth minimal dark gradient background with soft light glow and subtle grain, elegant, cinematic, plain"),
-    "mountain_fog":  ("山と霧",       ["#0b131c", "#1c2c3a", "#8fb8d8", "#c9e4ff"], "layered mountain ridges in morning fog, cool blue atmospheric depth, minimal and cinematic, wide"),
+    # --- 都市 ---
+    "neon_city":     ("ネオン都市",   ["#0a0e1a", "#1a1040", "#00d4ff", "#ff2e97"], "a moody cinematic neon city at night, rain-slick streets, glowing signs, deep blue and magenta, bokeh lights, wide establishing shot", "都市"),
+    "cyber_grid":    ("サイバー",     ["#080312", "#1a0636", "#ff2e97", "#00e0ff"], "retro synthwave neon grid stretching to a glowing horizon sun, magenta and cyan, 80s cinematic, wallpaper", "都市"),
+    "city_bokeh":    ("都会ボケ",     ["#0a0c14", "#191d2e", "#ffcf6e", "#ff8a5b"], "defocused warm city bokeh lights at night, golden and amber circles, blurred, cozy cinematic background", "都市"),
+    "rooftop_city":  ("屋上と夜景",   ["#0a0e18", "#161d33", "#6ab0ff", "#ff9ad0"], "a rooftop view overlooking a sprawling city skyline at night, distant glowing towers, deep blue, cinematic wide", "都市"),
+    "neon_alley":    ("裏路地ネオン", ["#0b0710", "#1c0a24", "#ff4d9d", "#26e0ff"], "a narrow rainy back alley with dense glowing neon signs, reflections on wet ground, moody cyberpunk, cinematic", "都市"),
+    "rain_street":   ("雨の街路",     ["#080d16", "#141f30", "#7fb0e0", "#ffce7a"], "an empty city street in the rain at night, glossy reflections of traffic and shop lights, melancholic, cinematic", "都市"),
+    "harbor_night":  ("夜の港",       ["#060f18", "#0f2438", "#4fd0e0", "#ffcf6e"], "a quiet night harbor with boats and warm dock lights reflecting on calm water, distant city glow, cinematic", "都市"),
+    "highway_night": ("夜のハイウェイ",["#070a12", "#131a2c", "#ff7a4d", "#5aa8ff"], "a night highway with long light trails of passing cars, overpasses and distant city, motion blur, cinematic", "都市"),
+    # --- 自然 ---
+    "ocean":         ("海・水面",     ["#04121e", "#0a2a44", "#37c8e6", "#7bf0d0"], "calm ocean water surface with gentle reflections under twilight, teal and deep blue, cinematic, minimal", "自然"),
+    "forest":        ("森・自然光",   ["#0a1710", "#12331f", "#6fe08a", "#d8ff9e"], "a misty forest with soft god rays through the trees, green and gold, atmospheric depth, cinematic nature", "自然"),
+    "mountain_fog":  ("山と霧",       ["#0b131c", "#1c2c3a", "#8fb8d8", "#c9e4ff"], "layered mountain ridges in morning fog, cool blue atmospheric depth, minimal and cinematic, wide", "自然"),
+    "sunset":        ("夕焼け",       ["#2a1230", "#5a2440", "#ff8a5b", "#ffd36e"], "a dreamy gradient sunset sky over the ocean horizon, warm orange to purple, soft clouds, cinematic golden hour", "自然"),
+    "desert_dunes":  ("砂漠の砂丘",   ["#1c1220", "#3a2438", "#ffb877", "#ff8f6b"], "vast rolling desert sand dunes at dusk, long shadows, warm orange and purple sky, minimal and cinematic", "自然"),
+    "waterfall":     ("滝",           ["#0a1a1c", "#123634", "#7ff0d8", "#bfffe8"], "a lush waterfall in a green gorge with mist and soft light, emerald and teal, atmospheric, cinematic nature", "自然"),
+    "beach_tropical":("南国ビーチ",   ["#08202a", "#0f3d4a", "#48e0d0", "#ffe08a"], "a tropical beach at golden hour, turquoise water and soft waves, palm silhouettes, warm and dreamy, cinematic", "自然"),
+    "meadow_sunrise":("草原の朝",     ["#141a10", "#28381c", "#bfe86a", "#ffe59e"], "a wide grassy meadow at sunrise with backlit golden grass and soft mist, gentle warm light, cinematic wide", "自然"),
+    "foggy_road":    ("霧の道",       ["#0c1016", "#1a222e", "#9fb4c8", "#d8e6f2"], "a lonely road disappearing into thick fog at dawn, silhouetted trees, muted cool tones, moody cinematic", "自然"),
+    "clouds_sky":    ("青空と雲",     ["#0e1c30", "#1f3b5c", "#7fc0ff", "#ffffff"], "soft billowing clouds in a bright blue sky drifting slowly, airy and dreamy, high key, cinematic wallpaper", "自然"),
+    # --- 空・宇宙 ---
+    "night_sky":     ("夜空・星",     ["#05060f", "#111634", "#7db4ff", "#b98cff"], "a vast starry night sky over silhouetted mountains, milky way, deep blue, subtle nebula glow, serene and cinematic", "空・宇宙"),
+    "aurora":        ("オーロラ",     ["#03101a", "#082436", "#3df0c0", "#6a8cff"], "northern lights aurora over a dark arctic landscape, green and violet ribbons, starry sky, cinematic", "空・宇宙"),
+    "cosmic":        ("宇宙・星雲",   ["#05030f", "#140830", "#8a7bff", "#ff6ec7"], "a colorful deep space nebula with stars, purple pink and blue clouds, cosmic, ethereal, cinematic wallpaper", "空・宇宙"),
+    "moon_night":    ("月夜",         ["#070a14", "#121a2e", "#cdd8ff", "#8aa0e0"], "a large glowing full moon in a deep blue night sky with thin clouds, calm and mystical, cinematic wide", "空・宇宙"),
+    "milkyway_lake": ("湖と天の川",   ["#050810", "#0e1630", "#8fd0ff", "#c7a0ff"], "the milky way reflected on a still mountain lake at night, star-filled sky, serene symmetry, cinematic", "空・宇宙"),
+    "galaxy_spiral": ("銀河",         ["#04030e", "#120a2e", "#9a8cff", "#ff8ad0"], "a majestic spiral galaxy with swirling star clouds, deep purples and blues, cosmic grandeur, cinematic wallpaper", "空・宇宙"),
+    "planet_alien":  ("異星の風景",   ["#100612", "#2a0e2c", "#ff7a5a", "#8a6bff"], "an alien planet landscape with rings in the sky and glowing terrain, sci-fi, otherworldly, cinematic wide", "空・宇宙"),
+    # --- 季節・和 ---
+    "sakura":        ("桜",           ["#1a0f1e", "#3a1730", "#ff9ec4", "#ffd0e4"], "soft pink cherry blossom branches with falling petals, dreamy bokeh, pastel pink, gentle and cinematic", "季節・和"),
+    "snow":          ("雪・冬",       ["#0c1420", "#1e2c40", "#bfe0ff", "#eaf4ff"], "quiet snowy landscape at blue hour, falling snow, cool blue and white, soft and cinematic, minimal", "季節・和"),
+    "autumn_leaves": ("紅葉",         ["#1c0f0a", "#3a1c10", "#ff8a3a", "#ffd06a"], "a tunnel of vivid autumn maple leaves, warm red and orange, soft backlight and falling leaves, cinematic", "季節・和"),
+    "bamboo_forest": ("竹林",         ["#0a1610", "#123020", "#8fe0a0", "#e8ffcf"], "a serene green bamboo forest with soft diffused light and gentle haze, tall stalks, tranquil, cinematic", "季節・和"),
+    "torii_shrine":  ("鳥居・神社",   ["#150810", "#341018", "#ff5a5a", "#ffb08a"], "a row of vermilion torii gates on a misty mountain path, spiritual and atmospheric, red and green, cinematic", "季節・和"),
+    "fireworks":     ("花火",         ["#070610", "#140a26", "#ff7ad0", "#7ad0ff"], "colorful fireworks blooming in a dark night sky over a distant town, festive and dreamy, bokeh, cinematic", "季節・和"),
+    "rice_field":    ("夏の田園",     ["#0e1610", "#20321c", "#9ee06a", "#ffe59e"], "green rice paddy fields under a summer sky with drifting clouds, nostalgic countryside, warm light, cinematic", "季節・和"),
+    # --- 室内・演出 ---
+    "stage_lights":  ("ステージ",     ["#07060f", "#160a2a", "#00d4ff", "#ff3e8a"], "concert stage with dramatic spotlights and haze, silhouettes, volumetric light beams, energetic cinematic", "室内・演出"),
+    "rainy_window":  ("雨の窓",       ["#0a0f18", "#182238", "#6aa6d8", "#9ad0ff"], "raindrops on a window with blurred city lights behind, melancholic, blue tones, shallow focus, cinematic mood", "室内・演出"),
+    "cafe_bokeh":    ("カフェ",       ["#120c08", "#2a1c12", "#ffb877", "#ffd9a8"], "a cozy cafe interior with warm defocused bokeh lights and soft window glow, intimate, amber tones, cinematic", "室内・演出"),
+    "cathedral":     ("大聖堂",       ["#0a0c14", "#1a2030", "#ffd98a", "#8aa8ff"], "a grand gothic cathedral interior with tall stained glass windows and volumetric god rays, majestic, cinematic", "室内・演出"),
+    "ferris_wheel":  ("観覧車",       ["#0a0c18", "#161d33", "#ff8ad0", "#7ad0ff"], "a giant illuminated ferris wheel glowing at night with colorful lights and bokeh, dreamy amusement park, cinematic", "室内・演出"),
+    # --- 抽象 ---
+    "abstract_fluid":("抽象・流体",   ["#0b0a1e", "#241452", "#7b6bff", "#ff6ec7"], "abstract flowing liquid gradient waves, iridescent purple and pink, smooth dreamy motion-blur look, wallpaper", "抽象"),
+    "minimal_grad":  ("ミニマル",     ["#0d1117", "#1a2040", "#00d4ff", "#7b2ff7"], "a smooth minimal dark gradient background with soft light glow and subtle grain, elegant, cinematic, plain", "抽象"),
+    "vaporwave":     ("ヴェイパー",   ["#160a24", "#2a1048", "#ff7ad0", "#7ad0ff"], "a dreamy vaporwave aesthetic gradient with soft pastel pink and cyan, retro grid and glow, aesthetic wallpaper", "抽象"),
+    "ink_wash":      ("墨・和紙",     ["#12100c", "#26221a", "#c8c0b0", "#8a8478"], "a minimalist japanese sumi-e ink wash background on textured washi paper, soft grey brush strokes, elegant, wabi-sabi", "抽象"),
+    "gold_particles":("金の粒子",     ["#0e0a06", "#241a0c", "#ffd27a", "#ff9a4d"], "elegant floating golden particles and light bokeh on a dark background, luxurious and glamorous, cinematic", "抽象"),
+    "crystal":       ("クリスタル",   ["#080c14", "#141c30", "#8ad0ff", "#c79aff"], "abstract glowing crystalline shards and prisms with soft refraction and light, cool iridescent, cinematic wallpaper", "抽象"),
 }
 BG_ORIENT_SIZE = {"landscape": "1536x1024", "portrait": "1024x1536", "square": "1024x1024"}
 
@@ -1610,7 +1643,7 @@ class Handler(BaseHTTPRequestHandler):
             if s[0] == "bglib":
                 if len(s) == 1 and method == "GET":
                     rows = con.execute("SELECT * FROM bg_library WHERE user_id=? ORDER BY created_at DESC", (uid,)).fetchall()
-                    moods = [{"key": k, "label": v[0], "palette": v[1]} for k, v in BG_MOODS.items()]
+                    moods = [{"key": k, "label": v[0], "palette": v[1], "cat": v[3] if len(v) > 3 else "その他"} for k, v in BG_MOODS.items()]
                     return self.send_json({"enabled": bool(ATLAS_KEY), "images": [bglib_row_json(r) for r in rows],
                                            "moods": moods, "daily": {"used": bg_daily_used(con, uid), "limit": BG_DAILY_LIMIT}})
                 if len(s) == 2 and s[1] == "generate" and method == "POST":

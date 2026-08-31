@@ -966,11 +966,15 @@ class Editor {
 
     const draw = () => {
       const enabled = data.enabled;
-      const moodChips = (data.moods || []).map(m => {
+      const chip = m => {
         const on = genSel.has(m.key);
         const c = (m.palette && m.palette[2]) || '#00d4ff';
         return `<button class="bgm-chip ${on ? 'on' : ''}" data-mood="${m.key}" style="border-color:${on ? c : 'var(--border)'};${on ? `background:${c}22;color:#fff` : ''}">${m.label}</button>`;
-      }).join('');
+      };
+      const cats = [...new Set((data.moods || []).map(m => m.cat || 'その他'))];
+      const moodChips = cats.map(cat =>
+        `<div class="bgm-cat">${cat}</div><div class="bgm-moodrow">${(data.moods || []).filter(m => (m.cat || 'その他') === cat).map(chip).join('')}</div>`
+      ).join('');
       const gallery = images.length ? images.map(im => `
         <div class="bgm-cell" data-img="${im.url}" title="${im.mood_label || ''}">
           <img src="${im.url}" loading="lazy">
@@ -1098,8 +1102,8 @@ class Editor {
       if (autoBtn) autoBtn.onclick = () => {
         if (!images.length) return toast('先に背景を生成してください', 'err');
         // エネルギーの高いセクション=派手なムード、低い=静かなムードを優先し、被りを避けて循環
-        const energetic = ['stage_lights', 'cyber_grid', 'neon_city', 'cosmic', 'aurora'];
-        const calm = ['night_sky', 'snow', 'rainy_window', 'minimal_grad', 'mountain_fog', 'ocean'];
+        const energetic = ['stage_lights', 'cyber_grid', 'neon_city', 'cosmic', 'aurora', 'fireworks', 'ferris_wheel', 'neon_alley', 'highway_night', 'harbor_night', 'planet_alien', 'vaporwave', 'galaxy_spiral'];
+        const calm = ['night_sky', 'snow', 'rainy_window', 'minimal_grad', 'mountain_fog', 'ocean', 'moon_night', 'milkyway_lake', 'foggy_road', 'bamboo_forest', 'ink_wash', 'clouds_sky', 'meadow_sunrise', 'crystal', 'cafe_bokeh'];
         const pool = images.slice();
         secs.forEach((s, i) => {
           const want = (s.energy || 0.5) >= 0.6 ? energetic : calm;
