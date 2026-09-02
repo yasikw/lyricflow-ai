@@ -206,6 +206,9 @@ export class VMDPlayer {
       };
     }
     rig.hipsRestWorld = world(hips, new THREE.Vector3());
+    // MMD「下半身/上半身」の回転支点(ウエスト)に相当する位置 ≒ spine関節
+    const spineNode = get('spine');
+    rig.waistOff = spineNode ? spineNode.position.clone() : null;
     this._rig = rig;
     this._vrm = vrm;
   }
@@ -249,15 +252,21 @@ export class VMDPlayer {
       groove.samplePos(t, _v1);
       hips.position.y += _v1.y * s;
     }
-    hips.quaternion.identity();
-    if (center) hips.quaternion.multiply(FQ(center.sampleRot(t, _q1)));
+    const qCenter = (this._qCenter ||= new THREE.Quaternion()).identity();
+    if (center) FQ(center.sampleRot(t, qCenter));
     // 下半身: MMDでは上半身と兄弟(親=センター)。VRMはspineがhipsの子のため、
     // hipsへ入れた下半身回転をspine側で打ち消す必要がある(でないと上体が二重に曲がる)
     const qLower = (this._qLower ||= new THREE.Quaternion()).identity();
     const lower = this.bones.get('下半身');
-    if (lower) {
-      FQ(lower.sampleRot(t, qLower));
-      hips.quaternion.multiply(qLower);
+    if (lower) FQ(lower.sampleRot(t, qLower));
+    hips.quaternion.copy(qCenter).multiply(qLower);
+    // 下半身回転の支点補正: MMDはウエスト(≒spine関節)を支点に回すが、
+    // VRM hipsは骨盤中心が支点。差分 qC×(dL − qL×dL) をhips位置へ加えて一致させる
+    if (rig.waistOff && lower) {
+      _v2.copy(rig.waistOff);
+      _v3.copy(rig.waistOff).applyQuaternion(qLower);
+      _v2.sub(_v3).applyQuaternion(qCenter);
+      hips.position.add(_v2);
     }
 
     // --- 直接コピー系(上半身/首/頭/肩)
