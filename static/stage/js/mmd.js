@@ -49,6 +49,7 @@ const MORPH_MAP = {
 const _q1 = new THREE.Quaternion();
 const _q2 = new THREE.Quaternion();
 const _q3 = new THREE.Quaternion();
+const _q4 = new THREE.Quaternion();
 const _v1 = new THREE.Vector3();
 const _v2 = new THREE.Vector3();
 const _v3 = new THREE.Vector3();
@@ -300,7 +301,7 @@ export class VMDPlayer {
         const leg = rig.legs[side];
         const ik = this._ikTrack(jp);
         if (!leg || !ik) continue;
-        this._solveLeg(leg, ik, hips, rig, t);
+        this._solveLeg(leg, ik, this.bones.get(jp + '足'), hips, rig, t);
       }
     } else {
       for (const [mmdName, vrmName] of FK_LEG_BONES) {
@@ -322,7 +323,7 @@ export class VMDPlayer {
   }
 
   /** 2ボーンIK: hips空間で足首をIK目標へ。ひざは前方(+Z)へ曲げる。 */
-  _solveLeg(leg, ik, hips, rig, t) {
+  _solveLeg(leg, ik, fk, hips, rig, t) {
     ik.samplePos(t, _v1).multiplyScalar(rig.posScale);          // IKオフセット(root空間)
     if (rig.flip) { _v1.x = -_v1.x; _v1.z = -_v1.z; }
     const target = _v1.add(leg.restAnkle);
@@ -343,7 +344,15 @@ export class VMDPlayer {
     const za = (this._ikZ ||= new THREE.Vector3());
     ya.copy(d).negate();                                  // レスト脚方向(0,-1,0)=ボーン-Y
     const fwd = rig.flip ? -1 : 1;                        // リグ空間の前方
-    za.set(0, 0, fwd).addScaledVector(d, -d.z * fwd).normalize(); // 前方を脚軸に直交化
+    // 膝の向き(ポール): FK「足」ボーンの回転を反映 (MMDはIK解決時もFK足の
+    // 回転が脚の開き/ひねりとして効く。無視すると開脚系の振付で腰が捻れる)
+    const pole = _v3.set(0, 0, fwd);
+    if (fk) {
+      fk.sampleRot(t, _q4);
+      if (rig.flip) _q4.set(-_q4.x, _q4.y, -_q4.z, _q4.w);
+      pole.applyQuaternion(_q4);
+    }
+    za.copy(pole).addScaledVector(d, -d.dot(pole)).normalize(); // ポールを脚軸に直交化
     if (!Number.isFinite(za.x) || za.lengthSq() < 1e-6) za.set(0, 0, fwd);
     xa.crossVectors(ya, za).normalize();
     za.crossVectors(xa, ya);                              // 再直交化
