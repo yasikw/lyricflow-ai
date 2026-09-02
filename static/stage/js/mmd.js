@@ -353,13 +353,19 @@ export class VMDPlayer {
     const za = (this._ikZ ||= new THREE.Vector3());
     ya.copy(d).negate();                                  // レスト脚方向(0,-1,0)=ボーン-Y
     const fwd = rig.flip ? -1 : 1;                        // リグ空間の前方
-    // 膝の向き(ポール): FK「足」ボーンの回転を反映 (MMDはIK解決時もFK足の
-    // 回転が脚の開き/ひねりとして効く。無視すると開脚系の振付で腰が捻れる)
+    // 膝の向き(ポール): FK「足」ボーンの回転のうち「ヨー成分(脚の開き)」のみ反映。
+    // フル回転を使うとピッチ系キーでポールが脚軸と平行になり、直交化が不安定化して
+    // 太ももがねじれる(パンツ/スカートが巻き付いて見える)ため、swing-twist分解で
+    // Y軸まわりのツイストだけを取り出す。
     const pole = _v3.set(0, 0, fwd);
     if (fk) {
       fk.sampleRot(t, _q4);
       if (rig.flip) _q4.set(-_q4.x, _q4.y, -_q4.z, _q4.w);
-      pole.applyQuaternion(_q4);
+      const n = Math.hypot(_q4.y, _q4.w);
+      if (n > 1e-6) {
+        _q4.set(0, _q4.y / n, 0, _q4.w / n);   // Y軸ツイスト成分のみ
+        pole.applyQuaternion(_q4);
+      }
     }
     za.copy(pole).addScaledVector(d, -d.dot(pole)).normalize(); // ポールを脚軸に直交化
     if (!Number.isFinite(za.x) || za.lengthSq() < 1e-6) za.set(0, 0, fwd);
