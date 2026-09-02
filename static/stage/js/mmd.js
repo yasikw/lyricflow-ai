@@ -244,8 +244,14 @@ export class VMDPlayer {
     }
     hips.quaternion.identity();
     if (center) hips.quaternion.multiply(center.sampleRot(t, _q1));
+    // 下半身: MMDでは上半身と兄弟(親=センター)。VRMはspineがhipsの子のため、
+    // hipsへ入れた下半身回転をspine側で打ち消す必要がある(でないと上体が二重に曲がる)
+    const qLower = (this._qLower ||= new THREE.Quaternion()).identity();
     const lower = this.bones.get('下半身');
-    if (lower) hips.quaternion.multiply(lower.sampleRot(t, _q1));
+    if (lower) {
+      lower.sampleRot(t, qLower);
+      hips.quaternion.multiply(qLower);
+    }
 
     // --- 直接コピー系(上半身/首/頭/肩)
     for (const [mmdName, vrmName] of DIRECT_BONES) {
@@ -253,6 +259,10 @@ export class VMDPlayer {
       const node = h.getNormalizedBoneNode(vrmName);
       if (!tr || !node) continue;
       node.quaternion.copy(tr.sampleRot(t, _q1));
+      if (vrmName === 'spine') {
+        // 上半身はセンター基準 → 下半身回転をキャンセル
+        node.quaternion.premultiply(_q2.copy(qLower).invert());
+      }
     }
     // 肩ボーンが無いモデル: 肩回転を腕へ折り込むため保持
     const shoulderQ = { 1: null, '-1': null };
@@ -318,8 +328,18 @@ export class VMDPlayer {
     const len = Math.min(Math.max(d.length(), Math.abs(leg.l1 - leg.l2) + 1e-4),
                          leg.l1 + leg.l2 - 1e-4);
     d.normalize();
-    // 目標方向へ向ける回転(レスト脚方向 = 真下)
-    const aim = _q1.setFromUnitVectors(_v2.set(0, -1, 0), d);
+    // 目標方向へ向ける回転: 膝が常に前(+Z)を向くようポールベクターで基底を構築
+    // (最短弧回転だとターン時に膝軸がねじれて脚が破綻する)
+    const mtx = (this._ikMtx ||= new THREE.Matrix4());
+    const xa = (this._ikX ||= new THREE.Vector3());
+    const ya = (this._ikY ||= new THREE.Vector3());
+    const za = (this._ikZ ||= new THREE.Vector3());
+    ya.copy(d).negate();                                  // レスト脚方向(0,-1,0)=ボーン-Y
+    za.set(0, 0, 1).addScaledVector(d, -d.z).normalize(); // 前方を脚軸に直交化
+    if (!Number.isFinite(za.x) || za.lengthSq() < 1e-6) za.set(0, 0, 1);
+    xa.crossVectors(ya, za).normalize();
+    za.crossVectors(xa, ya);                              // 再直交化
+    const aim = _q1.setFromRotationMatrix(mtx.makeBasis(xa, ya, za));
     // 股関節の追加屈曲(余弦定理)・ひざは+X軸ヒンジで前へ
     const a1 = Math.acos(Math.min(1, Math.max(-1,
       (leg.l1 * leg.l1 + len * len - leg.l2 * leg.l2) / (2 * leg.l1 * len))));
