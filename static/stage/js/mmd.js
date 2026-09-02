@@ -12,7 +12,11 @@
 import * as THREE from 'three';
 import { MMDParser } from '../vendor/jsm/libs/mmdparser.module.js';
 
-const MMD_UNIT_HIPS = 8.0;   // 標準的なMMDモデルのセンター高さ(MMD単位)
+// 標準MMDモデル(ミクv2実測)の基準値: スケールは「股関節の高さ」の比で取る。
+// センター高(8.0)で割るとVRoid系で移動量が約1.34倍過大になり、
+// 足の開き・しゃがみが深くなりすぎる(公式MMDAnimationHelperとの比較で確認)。
+const MMD_LEG_ROOT_Y = 10.75;  // 股関節(足ボーン)の高さ
+const MMD_WAIST_Y = 13.24;     // 下半身/上半身ピボット(ウエスト)の高さ
 const ARM_OFFSET_DEG = 37;   // A-pose⇔T-poseの腕角度差
 
 // MMDボーン名 → VRMヒューマノイドボーン (直接回転コピー系)
@@ -192,7 +196,7 @@ export class VMDPlayer {
       flip: vrm.meta?.metaVersion !== '1',
       legs: {},
     };
-    rig.posScale = Math.max(0.02, rig.hipsRest.y || 0.7) / MMD_UNIT_HIPS;
+    rig.posScale = Math.max(0.02, rig.hipsRest.y || 0.7) / MMD_LEG_ROOT_Y;
     for (const side of ['left', 'right']) {
       const u = get(side + 'UpperLeg'), k = get(side + 'LowerLeg'), f = get(side + 'Foot');
       if (!u || !k || !f) continue;
@@ -206,9 +210,9 @@ export class VMDPlayer {
       };
     }
     rig.hipsRestWorld = world(hips, new THREE.Vector3());
-    // MMD「下半身/上半身」の回転支点(ウエスト)に相当する位置 ≒ spine関節
-    const spineNode = get('spine');
-    rig.waistOff = spineNode ? spineNode.position.clone() : null;
+    // MMD「下半身/上半身」の回転支点(ウエスト): ミク実測比で股関節の約23%上
+    rig.waistOff = new THREE.Vector3(
+      0, (MMD_WAIST_Y - MMD_LEG_ROOT_Y) / MMD_LEG_ROOT_Y * rig.hipsRest.y, 0);
     this._rig = rig;
     this._vrm = vrm;
   }
@@ -400,7 +404,7 @@ export class VMDPlayer {
   applyCamera(camera) {
     const c = this.camera;
     if (!c) return false;
-    const s = this._rig?.posScale ?? 0.1;
+    const s = this._rig?.posScale ?? (0.85 / MMD_LEG_ROOT_Y);
     const t = this.t;
     // seek
     const n = c.times.length;
