@@ -186,6 +186,9 @@ export class VMDPlayer {
       hips,
       hipsRest: hips.position.clone(),
       armSign: vrm.meta?.metaVersion === '1' ? -1 : 1,
+      // VRM0はrotateVRM0の180°Y回転が正規化リグ適用後に乗るため、
+      // VMDの回転/位置(+Z前方基準)をリグ空間(−Z前方)へ変換する必要がある
+      flip: vrm.meta?.metaVersion !== '1',
       legs: {},
     };
     rig.posScale = Math.max(0.02, rig.hipsRest.y || 0.7) / MMD_UNIT_HIPS;
@@ -226,13 +229,16 @@ export class VMDPlayer {
     const h = vrm.humanoid;
     const t = this.t;
     const s = rig.posScale;
+    // VMD(+Z前方) → リグ空間 変換: 回転は(x,z)成分反転(RotY(π)共役)、位置は(x,z)反転
+    const FQ = (q) => { if (rig.flip) q.set(-q.x, q.y, -q.z, q.w); return q; };
+    const FV = (v) => { if (rig.flip) { v.x = -v.x; v.z = -v.z; } return v; };
 
     // --- センター/グルーブ → hips位置、センター×下半身 → hips回転
     const hips = rig.hips;
     hips.position.copy(rig.hipsRest);
     const center = this.bones.get('センター');
     if (center) {
-      center.samplePos(t, _v1);
+      FV(center.samplePos(t, _v1));
       hips.position.x += _v1.x * s;
       hips.position.y += _v1.y * s;
       hips.position.z += _v1.z * s;
@@ -243,13 +249,13 @@ export class VMDPlayer {
       hips.position.y += _v1.y * s;
     }
     hips.quaternion.identity();
-    if (center) hips.quaternion.multiply(center.sampleRot(t, _q1));
+    if (center) hips.quaternion.multiply(FQ(center.sampleRot(t, _q1)));
     // 下半身: MMDでは上半身と兄弟(親=センター)。VRMはspineがhipsの子のため、
     // hipsへ入れた下半身回転をspine側で打ち消す必要がある(でないと上体が二重に曲がる)
     const qLower = (this._qLower ||= new THREE.Quaternion()).identity();
     const lower = this.bones.get('下半身');
     if (lower) {
-      lower.sampleRot(t, qLower);
+      FQ(lower.sampleRot(t, qLower));
       hips.quaternion.multiply(qLower);
     }
 
@@ -258,7 +264,7 @@ export class VMDPlayer {
       const tr = this.bones.get(mmdName);
       const node = h.getNormalizedBoneNode(vrmName);
       if (!tr || !node) continue;
-      node.quaternion.copy(tr.sampleRot(t, _q1));
+      node.quaternion.copy(FQ(tr.sampleRot(t, _q1)));
       if (vrmName === 'spine') {
         // 上半身はセンター基準 → 下半身回転をキャンセル
         node.quaternion.premultiply(_q2.copy(qLower).invert());
@@ -268,8 +274,8 @@ export class VMDPlayer {
     const shoulderQ = { 1: null, '-1': null };
     if (!h.getNormalizedBoneNode('leftShoulder')) {
       const ls = this.bones.get('左肩'), rs = this.bones.get('右肩');
-      if (ls) shoulderQ[1] = ls.sampleRot(t, new THREE.Quaternion());
-      if (rs) shoulderQ[-1] = rs.sampleRot(t, new THREE.Quaternion());
+      if (ls) shoulderQ[1] = FQ(ls.sampleRot(t, new THREE.Quaternion()));
+      if (rs) shoulderQ[-1] = FQ(rs.sampleRot(t, new THREE.Quaternion()));
     }
 
     // --- 腕チェーン (A-pose補正: 腕 q⊗r / 以降 r⁻¹⊗q⊗r)
@@ -279,7 +285,7 @@ export class VMDPlayer {
       if (!node) continue;
       const theta = side * rig.armSign * THREE.MathUtils.degToRad(this.armOffsetDeg);
       _q2.setFromAxisAngle(_v1.set(0, 0, 1), theta);           // r
-      const q = tr ? tr.sampleRot(t, _q1) : _q1.identity();
+      const q = tr ? FQ(tr.sampleRot(t, _q1)) : _q1.identity();
       if (pos === 0) {
         if (shoulderQ[side]) q.premultiply(shoulderQ[side]);   // 肩折込み
         node.quaternion.copy(q).multiply(_q2);                 // q⊗r
@@ -300,7 +306,7 @@ export class VMDPlayer {
       for (const [mmdName, vrmName] of FK_LEG_BONES) {
         const tr = this.bones.get(mmdName);
         const node = h.getNormalizedBoneNode(vrmName);
-        if (tr && node) node.quaternion.copy(tr.sampleRot(t, _q1));
+        if (tr && node) node.quaternion.copy(FQ(tr.sampleRot(t, _q1)));
       }
     }
 
@@ -318,6 +324,7 @@ export class VMDPlayer {
   /** 2ボーンIK: hips空間で足首をIK目標へ。ひざは前方(+Z)へ曲げる。 */
   _solveLeg(leg, ik, hips, rig, t) {
     ik.samplePos(t, _v1).multiplyScalar(rig.posScale);          // IKオフセット(root空間)
+    if (rig.flip) { _v1.x = -_v1.x; _v1.z = -_v1.z; }
     const target = _v1.add(leg.restAnkle);
     // 股関節のroot空間位置 = hips平行移動+回転を適用
     const hipDelta = _v2.copy(leg.restUpper).sub(rig.hipsRestWorld);
@@ -335,8 +342,9 @@ export class VMDPlayer {
     const ya = (this._ikY ||= new THREE.Vector3());
     const za = (this._ikZ ||= new THREE.Vector3());
     ya.copy(d).negate();                                  // レスト脚方向(0,-1,0)=ボーン-Y
-    za.set(0, 0, 1).addScaledVector(d, -d.z).normalize(); // 前方を脚軸に直交化
-    if (!Number.isFinite(za.x) || za.lengthSq() < 1e-6) za.set(0, 0, 1);
+    const fwd = rig.flip ? -1 : 1;                        // リグ空間の前方
+    za.set(0, 0, fwd).addScaledVector(d, -d.z * fwd).normalize(); // 前方を脚軸に直交化
+    if (!Number.isFinite(za.x) || za.lengthSq() < 1e-6) za.set(0, 0, fwd);
     xa.crossVectors(ya, za).normalize();
     za.crossVectors(xa, ya);                              // 再直交化
     const aim = _q1.setFromRotationMatrix(mtx.makeBasis(xa, ya, za));
@@ -351,7 +359,9 @@ export class VMDPlayer {
     // 足首: IK回転をroot空間の目標向きとして適用(未指定なら水平維持)
     const chain = _q2.copy(hips.quaternion).multiply(leg.upper.quaternion)
       .multiply(leg.lower.quaternion);
-    leg.foot.quaternion.copy(chain.invert()).multiply(ik.sampleRot(t, _q3));
+    ik.sampleRot(t, _q3);
+    if (rig.flip) _q3.set(-_q3.x, _q3.y, -_q3.z, _q3.w);
+    leg.foot.quaternion.copy(chain.invert()).multiply(_q3);
   }
 
   get hasCamera() { return !!this.camera; }
