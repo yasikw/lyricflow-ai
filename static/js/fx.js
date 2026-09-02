@@ -114,6 +114,8 @@ class FXEngine {
     if (dof > 0.05 && this.quality !== 'draft') this._dof(ctx, W, H, dof);
     // 前景キャラ/被写体レイヤー (任意アップロード素材)
     this._drawSubject(ctx, t, W, H, energy, boost);
+    // 3Dダンスレイヤー (VRMアバター + MMDモーション / VRM Atelier連携)
+    this._drawDance(ctx, t, W, H, energy, boost);
     if (!this.hideLyrics) this._drawLyrics(t, W, H, colors, energy, boost, fx);   // タップ同期中は歌詞を隠す
     this._drawOverlays(ctx, t, W, H, colors);
 
@@ -134,6 +136,56 @@ class FXEngine {
     this._screenFx(ctx, t, W, H, colors, energy, boost, fx, fxActive);
     if (tl.watermark) this._watermark(ctx, W, H);
     ctx.filter = 'none';
+  }
+
+  /* 3Dダンスレイヤー: VRMアバター+VMDモーションを透過WebGLで描き、2D合成する。
+     tl.dance = {enabled, vrm_url, vmd_url, offset, scale, x, y, camera, loop} */
+  _drawDance(ctx, t, W, H, energy, boost) {
+    const d = this.timeline?.dance;
+    if (!d || !d.enabled || !d.vrm_url || !window.Stage3D) return;
+    if (!this._stage) this._stage = window.Stage3D.create();
+    const st = this._stage;
+    // 非同期ロードは投げっぱなし(未ロードのフレームは描かない=決定論エクスポートでは事前ロード)
+    if (st.vrmUrl !== d.vrm_url) { st.loadVRM(d.vrm_url).catch(() => {}); return; }
+    if (d.vmd_url && st.vmdUrl !== d.vmd_url) { st.loadVMD(d.vmd_url).catch(() => {}); }
+    if (!st.ready) return;
+    const opts = { offset: d.offset || 0, camera: !!d.camera, loop: d.loop !== false, speed: d.speed || 1 };
+    const useVmdCam = !!(d.camera && st.player && st.player.hasCamera);
+    if (useVmdCam) {
+      // シネマティックモード: 画面全体を3Dカメラで
+      st.setSize(this.quality === 'draft' ? W / 2 : W, this.quality === 'draft' ? H / 2 : H);
+      if (!st.renderAt(t, opts)) return;
+      ctx.drawImage(st.canvas, 0, 0, W, H);
+      return;
+    }
+    // 配置モード: 被写体と同じく接地アンカーで合成
+    const scale = d.scale ?? 0.92;                       // 画面高に対するステージ高
+    const sh = Math.max(64, Math.round(H * scale));
+    const sw = Math.round(sh * 0.72);
+    st.setSize(this.quality === 'draft' ? sw / 2 : sw, this.quality === 'draft' ? sh / 2 : sh);
+    if (!st.renderAt(t, opts)) return;
+    const cx = W * (d.x ?? 0.5), by = H * (d.y ?? 1.0);
+    const x = cx - sw / 2, y = by - sh;
+    // 接地の影
+    ctx.save();
+    ctx.globalAlpha = 0.32;
+    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+    ctx.beginPath();
+    ctx.ellipse(cx, by - H * 0.012, sw * 0.3, H * 0.018, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+    ctx.drawImage(st.canvas, x, y, sw, sh);
+    ctx.restore();
+  }
+
+  /** 書き出し前の3Dダンス素材プリロード+揺れもの整定 (editor.startRenderが呼ぶ) */
+  async prepareDance() {
+    const d = this.timeline?.dance;
+    if (!d || !d.enabled || !d.vrm_url || !window.Stage3D) return;
+    if (!this._stage) this._stage = window.Stage3D.create();
+    await this._stage.loadVRM(d.vrm_url);
+    if (d.vmd_url) await this._stage.loadVMD(d.vmd_url);
+    this._stage.warmup(0, 20);
   }
 
   /* 前景の被写体(キャラ)レイヤー: アップロード画像をリムライト+浮遊+呼吸で演出 */

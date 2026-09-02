@@ -473,6 +473,10 @@ def sniff_kind(data, ext):
         detected = "font"                                   # TTF/OTF
     elif head[:4] == b"wOF2" or head[:4] == b"wOFF":
         detected = "font"                                   # WOFF/WOFF2
+    elif head[:4] == b"glTF":
+        detected = "model3d"                                # VRM (GLB)
+    elif data[:25] == b"Vocaloid Motion Data 0002":
+        detected = "motion3d"                               # MMD VMD
     return detected
 
 # ---------------------------------------------------------------- AI engines
@@ -1615,6 +1619,32 @@ class Handler(BaseHTTPRequestHandler):
                                            "result": json.loads(row["result_json"] or "null")})
                 return self.err(404, "not_found", "unknown external endpoint")
 
+            # ---------- VRM Atelier ファイルプロキシ (未認証) ----------
+            # 3Dダンスレイヤーのモデル/モーションはGLTFLoader等の素のfetchで取得される
+            # (認証ヘッダ無し)ため、パス許可制で未認証許可。APIキーはサーバー側で付与。
+            if s[0] == "atelier" and len(s) >= 2 and s[1] == "file" and method == "GET":
+                base = os.environ.get("LF_ATELIER_URL", "http://127.0.0.1:4188")
+                key = os.environ.get("LF_ATELIER_KEY", "")
+                qs = urllib.parse.parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
+                fpath = (qs.get("path") or [""])[0]
+                if not re.match(r"^/files/(avatars|motions|thumbs)/[\w.-]+$", fpath):
+                    return self.err(400, "bad_path", "不正なパスです")
+                try:
+                    req = urllib.request.Request(base + fpath, headers={"X-API-Key": key})
+                    with urllib.request.urlopen(req, timeout=15) as r:
+                        data = r.read()
+                except Exception as e:
+                    return self.err(502, "atelier_error", f"取得失敗: {e}")
+                ctype = "model/gltf-binary" if fpath.endswith(".vrm") else \
+                        ("image/png" if fpath.endswith(".png") else "application/octet-stream")
+                self.send_response(200)
+                self.send_header("Content-Type", ctype)
+                self.send_header("Content-Length", str(len(data)))
+                self.send_header("Cache-Control", "no-cache")
+                self.end_headers()
+                self.wfile.write(data)
+                return
+
             # ---------- authenticated ----------
             uid = self.auth_user()
             if not uid:
@@ -1623,6 +1653,34 @@ class Handler(BaseHTTPRequestHandler):
             def ws_role(wid):
                 r = con.execute("SELECT role FROM workspace_users WHERE workspace_id=? AND user_id=?", (wid, uid)).fetchone()
                 return r["role"] if r else None
+
+            # ---------- VRM Atelier 連携 (3Dダンスレイヤー用プロキシ) ----------
+            # LF_ATELIER_URL / LF_ATELIER_KEY を .env に設定すると有効。
+            # ブラウザから直接叩くとCORSに阻まれるため、サーバー側で代理取得する。
+            if s[0] == "atelier":
+                base = os.environ.get("LF_ATELIER_URL", "http://127.0.0.1:4188")
+                key = os.environ.get("LF_ATELIER_KEY", "")
+                def _atelier_get(p):
+                    req = urllib.request.Request(base + p, headers={"X-API-Key": key})
+                    with urllib.request.urlopen(req, timeout=10) as r:
+                        return r.read()
+                if len(s) >= 2 and s[1] == "status" and method == "GET":
+                    if not key:
+                        return self.send_json({"connected": False, "reason": "LF_ATELIER_KEY未設定"})
+                    try:
+                        _atelier_get("/api/v1/public/avatars")
+                        return self.send_json({"connected": True, "base": base})
+                    except Exception as e:
+                        return self.send_json({"connected": False, "reason": str(e)[:120]})
+                if len(s) >= 2 and s[1] in ("avatars", "motions") and method == "GET":
+                    if not key:
+                        return self.err(424, "atelier_not_configured",
+                                        "VRM Atelier連携が未設定です (.envにLF_ATELIER_KEYを設定)")
+                    try:
+                        return self.send_json(json.loads(_atelier_get(f"/api/v1/public/{s[1]}")))
+                    except Exception as e:
+                        return self.err(502, "atelier_error", f"VRM Atelierに接続できません: {e}")
+                return self.err(404, "not_found", "unknown atelier endpoint")
 
             if s[0] == "me" and method == "GET":
                 u = con.execute("SELECT id,email,name,mfa_enabled FROM users WHERE id=?", (uid,)).fetchone()
@@ -1787,7 +1845,8 @@ class Handler(BaseHTTPRequestHandler):
                         ext = os.path.splitext(f["filename"])[1].lower()
                         kind = {"mp3": "audio", "wav": "audio", "m4a": "audio", "png": "image", "jpg": "image",
                                 "jpeg": "image", "svg": "image", "webp": "image", "mp4": "video", "webm": "video",
-                                "ttf": "font", "otf": "font", "woff2": "font"}.get(ext.lstrip("."))
+                                "ttf": "font", "otf": "font", "woff2": "font",
+                                "vrm": "model3d", "vmd": "motion3d"}.get(ext.lstrip("."))
                         if not kind:
                             return self.err(400, "bad_type", f"未対応のファイル形式です: {ext}")
                         # 仕様 8.3: マジックバイトによるMIME検証 (拡張子偽装を拒否)

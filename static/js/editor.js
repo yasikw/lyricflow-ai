@@ -425,6 +425,85 @@ class Editor {
     } catch (e) { toast(e.message, 'err'); }
   }
 
+  /* ---- 3Dダンス (VRM × MMD): VRM Atelier連携 + ファイルアップロード ---- */
+  async _loadAtelier() {
+    if (this._atelier) return this._atelier;
+    const out = { connected: false, avatars: [], motions: [] };
+    try {
+      const st = await API.req('GET', '/atelier/status');
+      if (st.connected) {
+        out.connected = true;
+        out.avatars = (await API.req('GET', '/atelier/avatars')).avatars || [];
+        out.motions = (await API.req('GET', '/atelier/motions')).motions || [];
+      }
+    } catch { /* 未設定/未起動 */ }
+    this._atelier = out;
+    return out;
+  }
+
+  _bindDancePanel($) {
+    const d = this.tl.dance;
+    if (!d?.enabled) {
+      const btn = $('#dn-setup');
+      if (btn) btn.onclick = () => {
+        this.tl.dance = { enabled: true, scale: 0.92, x: 0.5, y: 1.0, offset: 0, camera: false };
+        this.markDirty(); this.renderRight();
+      };
+      return;
+    }
+    // セレクトをAtelier一覧で埋める
+    this._loadAtelier().then(at => {
+      const vs = $('#dn-vrm-sel'), ms = $('#dn-vmd-sel');
+      if (!vs || !ms) return;
+      const proxied = u => '/api/v1/atelier/file?path=' + encodeURIComponent(u);
+      vs.innerHTML = '<option value="">— 選択 —</option>' + at.avatars.map(a =>
+        `<option value="${proxied(a.file_url)}">${esc(a.name)}</option>`).join('') +
+        (at.connected ? '' : '<option value="" disabled>(Atelier未接続: .envにLF_ATELIER_KEY)</option>');
+      ms.innerHTML = '<option value="">なし (立ちポーズ)</option>' + at.motions.map(m =>
+        `<option value="${proxied(m.file_url)}">${esc(m.name)}</option>`).join('');
+      if (d.vrm_url) vs.value = d.vrm_url;
+      if (d.vmd_url) ms.value = d.vmd_url;
+      vs.onchange = e => {
+        d.vrm_url = e.target.value || null;
+        d.vrm_name = e.target.selectedOptions[0]?.textContent || '';
+        this.markDirty();
+      };
+      ms.onchange = e => {
+        d.vmd_url = e.target.value || null;
+        d.vmd_name = e.target.selectedOptions[0]?.textContent || '';
+        this.markDirty();
+      };
+    });
+    $('#dn-vrm-up').onclick = () => $('#dn-vrm-file').click();
+    $('#dn-vmd-up').onclick = () => $('#dn-vmd-file').click();
+    $('#dn-vrm-file').onchange = e => this._uploadDanceFile(e.target.files[0], 'vrm');
+    $('#dn-vmd-file').onchange = e => this._uploadDanceFile(e.target.files[0], 'vmd');
+    $('#dn-scale').oninput = e => { d.scale = e.target.value / 100; this.markDirty(); };
+    $('#dn-x').oninput = e => { d.x = e.target.value / 100; this.markDirty(); };
+    $('#dn-offset').onchange = e => { d.offset = +e.target.value || 0; this.markDirty(); };
+    $('#dn-camera').onchange = e => { d.camera = e.target.checked; this.markDirty(); };
+    $('#dn-del').onclick = () => {
+      this.tl.dance = null;
+      if (this.engine._stage) { this.engine._stage.dispose(); this.engine._stage = null; }
+      this.markDirty(); this.renderRight();
+    };
+  }
+
+  async _uploadDanceFile(file, kind) {
+    if (!file) return;
+    const fd = new FormData();
+    fd.append('file', file);
+    toast((kind === 'vrm' ? 'VRM' : 'VMD') + 'をアップロード中…');
+    try {
+      const a = await API.upload(`/workspaces/${this.project.workspace_id}/assets`, fd);
+      const d = this.tl.dance;
+      if (kind === 'vrm') { d.vrm_url = a.url; d.vrm_name = a.filename; }
+      else { d.vmd_url = a.url; d.vmd_name = a.filename; }
+      this.markDirty(); this.renderRight();
+      toast('設定しました', 'ok');
+    } catch (e) { toast(e.message, 'err'); }
+  }
+
   async uploadAsset(file) {
     if (!file) return;
     const fd = new FormData();
@@ -643,6 +722,26 @@ class Editor {
           <input type="file" id="su-file" accept=".png,.jpg,.jpeg,.webp" style="display:none">
           <button class="btn sm" id="su-add" style="width:100%;justify-content:center;margin-top:6px">＋ キャラ画像を配置</button>
         `}
+      </div>
+      <div class="prop-group">
+        <h4>3Dダンス (VRM × MMD)</h4>
+        ${this.tl.dance?.enabled ? `
+          <div class="prop-row"><span>アバター</span><select class="input sm" id="dn-vrm-sel" style="max-width:130px"><option value="">読み込み中…</option></select></div>
+          <div class="prop-row"><span>モーション</span><select class="input sm" id="dn-vmd-sel" style="max-width:130px"><option value="">読み込み中…</option></select></div>
+          <div class="prop-row"><span>ファイル</span><span style="display:flex;gap:4px">
+            <button class="btn sm" id="dn-vrm-up">↑vrm</button>
+            <button class="btn sm" id="dn-vmd-up">↑vmd</button></span></div>
+          <div class="prop-row"><span>大きさ</span><input type="range" id="dn-scale" min="40" max="120" value="${(this.tl.dance.scale ?? 0.92) * 100}"></div>
+          <div class="prop-row"><span>横位置</span><input type="range" id="dn-x" min="0" max="100" value="${(this.tl.dance.x ?? 0.5) * 100}"></div>
+          <div class="prop-row"><span>開始オフセット(秒)</span><input type="number" class="input sm" id="dn-offset" step="0.1" value="${this.tl.dance.offset || 0}" style="width:64px"></div>
+          <div class="prop-row"><span>VMDカメラで撮る</span><input type="checkbox" id="dn-camera" ${this.tl.dance.camera ? 'checked' : ''}></div>
+          <button class="btn danger sm" id="dn-del" style="width:100%;justify-content:center;margin-top:5px">3Dダンスを外す</button>
+        ` : `
+          <div class="empty-note" style="padding:4px 2px;text-align:left;font-size:11px">VRMアバターにMMD(VMD)モーションを踊らせて合成します。VRM Atelier連携またはファイルアップロードで設定。</div>
+          <button class="btn sm" id="dn-setup" style="width:100%;justify-content:center;margin-top:6px">＋ 3Dダンスを配置</button>
+        `}
+        <input type="file" id="dn-vrm-file" accept=".vrm" style="display:none">
+        <input type="file" id="dn-vmd-file" accept=".vmd" style="display:none">
       </div>`;
     const $ = s => el.querySelector(s);
     const engSel = $('#ai-engine');
@@ -707,6 +806,8 @@ class Editor {
       $('#su-add').onclick = () => $('#su-file').click();
       $('#su-file').onchange = e => this.addSubject(e.target.files[0]);
     }
+    // 3Dダンス (VRM × MMD)
+    this._bindDancePanel($);
     if (selWord) {
       $('#w-start').onchange = e => { selWord.start = +e.target.value; this.markDirty(); this.renderTimeline(); };
       $('#w-end').onchange = e => { selWord.end = +e.target.value; this.markDirty(); this.renderTimeline(); };
@@ -1511,6 +1612,12 @@ class Editor {
         if (im && im.complete && im.naturalWidth) return res();
         im.onload = res; im.onerror = res; setTimeout(res, 8000);
       })));
+    }
+    // 3Dダンス素材のプリロード+揺れもの整定 (決定論レンダで1フレーム目から描画されるように)
+    if (this.tl.dance?.enabled && this.tl.dance.vrm_url) {
+      setP('3Dダンス素材を読み込み中…', 0);
+      try { await this.engine.prepareDance(); }
+      catch (e) { toast('3Dダンス素材の読み込みに失敗: ' + e.message, 'err'); }
     }
     try {
       const { job_id } = await API.post('/render/frames/start', {
