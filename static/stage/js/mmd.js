@@ -358,14 +358,13 @@ export class VMDPlayer {
     // 太ももがねじれる(パンツ/スカートが巻き付いて見える)ため、swing-twist分解で
     // Y軸まわりのツイストだけを取り出す。
     const pole = _v3.set(0, 0, fwd);
+    const qFkYaw = (this._qFkYaw ||= new THREE.Quaternion()).identity();
     if (fk) {
       fk.sampleRot(t, _q4);
       if (rig.flip) _q4.set(-_q4.x, _q4.y, -_q4.z, _q4.w);
       const n = Math.hypot(_q4.y, _q4.w);
-      if (n > 1e-6) {
-        _q4.set(0, _q4.y / n, 0, _q4.w / n);   // Y軸ツイスト成分のみ
-        pole.applyQuaternion(_q4);
-      }
+      if (n > 1e-6) qFkYaw.set(0, _q4.y / n, 0, _q4.w / n);   // Y軸ツイスト成分のみ
+      pole.applyQuaternion(qFkYaw);
     }
     za.copy(pole).addScaledVector(d, -d.dot(pole)).normalize(); // ポールを脚軸に直交化
     if (!Number.isFinite(za.x) || za.lengthSq() < 1e-6) za.set(0, 0, fwd);
@@ -380,12 +379,19 @@ export class VMDPlayer {
     leg.upper.quaternion.copy(aim)
       .multiply(_q2.setFromAxisAngle(_v2.set(1, 0, 0), -a1));
     leg.lower.quaternion.setFromAxisAngle(_v2.set(1, 0, 0), Math.PI - beta);
-    // 足首: IK回転をroot空間の目標向きとして適用(未指定なら水平維持)
+    // 足首の向き: ワールド固定にせず「体(センター)のヨー × 脚の開き(FK足ヨー)」に
+    // 追従させ、その上に足IK回転(あれば)を乗せる。WAVEFILE等は足IK回転が全て0のため、
+    // 固定にするとターン時に足だけ正面を向き続けて腰から下が捻れて見える。
     const chain = _q2.copy(hips.quaternion).multiply(leg.upper.quaternion)
       .multiply(leg.lower.quaternion);
+    const qc = this._qCenter || _q1.identity();
+    const hy = Math.hypot(qc.y, qc.w) || 1;
+    _q1.set(0, qc.y / hy, 0, qc.w / hy);      // 体の向き(センターのヨー)
+    _q1.multiply(qFkYaw);                      // 脚の開き
     ik.sampleRot(t, _q3);
     if (rig.flip) _q3.set(-_q3.x, _q3.y, -_q3.z, _q3.w);
-    leg.foot.quaternion.copy(chain.invert()).multiply(_q3);
+    _q1.multiply(_q3);                         // 足IK回転(キーがあれば)
+    leg.foot.quaternion.copy(chain.invert()).multiply(_q1);
   }
 
   get hasCamera() { return !!this.camera; }
