@@ -460,6 +460,8 @@ export class VMDPlayer {
     const ez = L(c.euler[i][2], c.euler[j][2]);
     const dist = L(c.dist[i], c.dist[j]) * s;
     const fov = L(c.fov[i], c.fov[j]);
+    // カメラはワールド空間。VRM0でもrotateVRM0でモデル側が+Z正面に揃うため、
+    // ボーンのようなRotY(π)変換は掛けない(掛けると背面を映す)
     _q1.setFromEuler(new THREE.Euler(ex, ey, ez, 'YXZ'));
     // MMDのdistanceは負値が標準(注視点の手前=カメラ側)
     camera.position.copy(center).add(_v2.set(0, 0, -dist).applyQuaternion(_q1));
