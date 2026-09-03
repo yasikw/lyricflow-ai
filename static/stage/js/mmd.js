@@ -21,8 +21,10 @@ const MMD_WAIST_Y = 13.24;     // 下半身/上半身ピボット(ウエスト)�
 // 肩が20°強上ずれし(肩無補正)、肘の折り畳み軸が7°ずれて前腕が上腕へめり込む。
 // 注: 実測ではひじ→手首は40.3°(バインド時点で肘が10.6°折れている)だが、この
 // 「事前折れ」を腕が真っ直ぐなVRoid系へ転写すると伸ばした腕の肘が折れて見えるため、
-// ひじ以降は腕と同角=共役(回転軸の補正)のみとし、折れ自体は転写しない。
-const MMD_ARM_BIND_DEG = { shoulder: 30.2, upperArm: 29.7, lowerArm: 29.7, hand: 29.7 };
+// ひじは腕と同角=共役(回転軸の補正)のみとし、折れ自体は転写しない。
+// 手首は本来のMMD角(41.0°)で合わせる: 前腕を起こした10.6°の差を手首関節で
+// 吸収することで、肘は真っ直ぐのまま手の向きだけ公式実装と一致させる。
+const MMD_ARM_BIND_DEG = { shoulder: 30.2, upperArm: 29.7, lowerArm: 29.7, hand: 41.0 };
 
 // MMDボーン名 → VRMヒューマノイドボーン (直接回転コピー系)
 const DIRECT_BONES = [
@@ -224,14 +226,16 @@ export class VMDPlayer {
     for (const side of ['left', 'right']) {
       const S = side === 'left' ? 1 : -1;
       const ua = get(side + 'UpperArm'), la = get(side + 'LowerArm'), hand = get(side + 'Hand');
+      const mid = get(side + 'MiddleProximal');   // 手のレスト方向は中指で実測(無ければ前腕で代用)
       const vSh = down(ua?.position), vUa = down(la?.position), vLa = down(hand?.position);
+      const vHand = mid ? down(mid.position) : vLa;
       const mk = (deg, vrmRad) =>
         S * rig.armSign * (THREE.MathUtils.degToRad(deg) - vrmRad);
       rig.armOff[side] = {
         shoulder: mk(MMD_ARM_BIND_DEG.shoulder, vSh),
         upperArm: mk(MMD_ARM_BIND_DEG.upperArm, vUa),
         lowerArm: mk(MMD_ARM_BIND_DEG.lowerArm, vLa),
-        hand: mk(MMD_ARM_BIND_DEG.hand, vLa),
+        hand: mk(MMD_ARM_BIND_DEG.hand, vHand),
       };
     }
     this._rig = rig;
