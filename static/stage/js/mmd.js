@@ -374,15 +374,21 @@ export class VMDPlayer {
     if (!Number.isFinite(za.x) || za.lengthSq() < 1e-6) za.set(0, 0, fwd);
     xa.crossVectors(ya, za).normalize();
     za.crossVectors(xa, ya);                              // 再直交化
+    // ここまでの基底は「ボーン+Z=膝の向き(前方)」を仮定しているが、リグ空間で
+    // ボーン+Zが指すのは常に+Z。VRM0はリグ空間の前方が-Zのため、このままだと
+    // 基底が脚軸まわりに180°回り、太もも〜すね全体が半回転ねじれて衣装が
+    // 巻き付く(輪郭は正しいので気づきにくい)。脚軸まわりにπ回して整合させる。
+    if (rig.flip) { xa.negate(); za.negate(); }
     const aim = _q1.setFromRotationMatrix(mtx.makeBasis(xa, ya, za));
-    // 股関節の追加屈曲(余弦定理)・ひざは+X軸ヒンジで前へ
+    // 股関節の追加屈曲(余弦定理)・ひざはX軸ヒンジで前へ(曲げ符号は前方の向きに従う)
     const a1 = Math.acos(Math.min(1, Math.max(-1,
       (leg.l1 * leg.l1 + len * len - leg.l2 * leg.l2) / (2 * leg.l1 * len))));
     const beta = Math.acos(Math.min(1, Math.max(-1,
       (leg.l1 * leg.l1 + leg.l2 * leg.l2 - len * len) / (2 * leg.l1 * leg.l2))));
+    const fs = rig.flip ? -1 : 1;
     leg.upper.quaternion.copy(aim)
-      .multiply(_q2.setFromAxisAngle(_v2.set(1, 0, 0), -a1));
-    leg.lower.quaternion.setFromAxisAngle(_v2.set(1, 0, 0), Math.PI - beta);
+      .multiply(_q2.setFromAxisAngle(_v2.set(1, 0, 0), -a1 * fs));
+    leg.lower.quaternion.setFromAxisAngle(_v2.set(1, 0, 0), (Math.PI - beta) * fs);
     // 足首の向き: ワールド固定にせず「体(センター)のヨー × 脚の開き(FK足ヨー)」に
     // 追従させ、その上に足IK回転(あれば)を乗せる。WAVEFILE等は足IK回転が全て0のため、
     // 固定にするとターン時に足だけ正面を向き続けて腰から下が捻れて見える。
