@@ -18,9 +18,11 @@ import { MMDParser } from '../vendor/jsm/libs/mmdparser.module.js';
 const MMD_LEG_ROOT_Y = 10.75;  // 股関節(足ボーン)の高さ
 const MMD_WAIST_Y = 13.24;     // 下半身/上半身ピボット(ウエスト)の高さ
 // MMD素体(ミクv2バインド実測)の腕チェーン各ボーンの下向き角。一律37°で近似すると
-// 肩が20°強上ずれ(肩無補正)・肘は折り畳み時に前腕が上腕へめり込む(実際は
-// バインド時点で肘が10.6°折れている)ため、ボーンごとに実測値を使う。
-const MMD_ARM_BIND_DEG = { shoulder: 30.2, upperArm: 29.7, lowerArm: 40.3, hand: 41.0 };
+// 肩が20°強上ずれし(肩無補正)、肘の折り畳み軸が7°ずれて前腕が上腕へめり込む。
+// 注: 実測ではひじ→手首は40.3°(バインド時点で肘が10.6°折れている)だが、この
+// 「事前折れ」を腕が真っ直ぐなVRoid系へ転写すると伸ばした腕の肘が折れて見えるため、
+// ひじ以降は腕と同角=共役(回転軸の補正)のみとし、折れ自体は転写しない。
+const MMD_ARM_BIND_DEG = { shoulder: 30.2, upperArm: 29.7, lowerArm: 29.7, hand: 29.7 };
 
 // MMDボーン名 → VRMヒューマノイドボーン (直接回転コピー系)
 const DIRECT_BONES = [
