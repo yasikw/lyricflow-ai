@@ -17,7 +17,10 @@ import { MMDParser } from '../vendor/jsm/libs/mmdparser.module.js';
 // 足の開き・しゃがみが深くなりすぎる(公式MMDAnimationHelperとの比較で確認)。
 const MMD_LEG_ROOT_Y = 10.75;  // 股関節(足ボーン)の高さ
 const MMD_WAIST_Y = 13.24;     // 下半身/上半身ピボット(ウエスト)の高さ
-const ARM_OFFSET_DEG = 37;   // A-pose⇔T-poseの腕角度差
+// MMD素体(ミクv2バインド実測)の腕チェーン各ボーンの下向き角。一律37°で近似すると
+// 肩が20°強上ずれ(肩無補正)・肘は折り畳み時に前腕が上腕へめり込む(実際は
+// バインド時点で肘が10.6°折れている)ため、ボーンごとに実測値を使う。
+const MMD_ARM_BIND_DEG = { shoulder: 30.2, upperArm: 29.7, lowerArm: 40.3, hand: 41.0 };
 
 // MMDボーン名 → VRMヒューマノイドボーン (直接回転コピー系)
 const DIRECT_BONES = [
@@ -25,17 +28,17 @@ const DIRECT_BONES = [
   ['上半身2', 'chest'],
   ['首', 'neck'],
   ['頭', 'head'],
-  ['左肩', 'leftShoulder'],
-  ['右肩', 'rightShoulder'],
 ];
-const ARM_BONES = [
-  // [mmd名, vrm名, side(+1=左), chain位置(0=腕,1=ひじ以降)]
-  ['左腕', 'leftUpperArm', 1, 0],
-  ['左ひじ', 'leftLowerArm', 1, 1],
-  ['左手首', 'leftHand', 1, 1],
-  ['右腕', 'rightUpperArm', -1, 0],
-  ['右ひじ', 'rightLowerArm', -1, 1],
-  ['右手首', 'rightHand', -1, 1],
+const ARM_CHAIN = [
+  // [mmd名, vrm名, side(+1=左), 自レスト差キー, 親レスト差キー]
+  ['左肩', 'leftShoulder', 1, 'shoulder', null],
+  ['左腕', 'leftUpperArm', 1, 'upperArm', 'shoulder'],
+  ['左ひじ', 'leftLowerArm', 1, 'lowerArm', 'upperArm'],
+  ['左手首', 'leftHand', 1, 'hand', 'lowerArm'],
+  ['右肩', 'rightShoulder', -1, 'shoulder', null],
+  ['右腕', 'rightUpperArm', -1, 'upperArm', 'shoulder'],
+  ['右ひじ', 'rightLowerArm', -1, 'lowerArm', 'upperArm'],
+  ['右手首', 'rightHand', -1, 'hand', 'lowerArm'],
 ];
 const FK_LEG_BONES = [
   ['左足', 'leftUpperLeg'], ['左ひざ', 'leftLowerLeg'], ['左足首', 'leftFoot'],
@@ -165,7 +168,6 @@ export class VMDPlayer {
     this.loop = true;
     this.speed = 1.0;
     this.t = 0;
-    this.armOffsetDeg = ARM_OFFSET_DEG;
     this._rig = null;
   }
 
@@ -213,6 +215,23 @@ export class VMDPlayer {
     // MMD「下半身/上半身」の回転支点(ウエスト): ミク実測比で股関節の約23%上
     rig.waistOff = new THREE.Vector3(
       0, (MMD_WAIST_Y - MMD_LEG_ROOT_Y) / MMD_LEG_ROOT_Y * rig.hipsRest.y, 0);
+    // 腕チェーンのレスト方向差: MMD素体(ミク実測)の下向き角 − このVRMのレスト下向き角。
+    // rotZオフセットとして q_vrm = R_parent⁻¹ ⊗ q_mmd ⊗ R_self の形で挟む。
+    const down = (p) => (p ? Math.atan2(-p.y, Math.hypot(p.x, p.z)) : 0);
+    rig.armOff = {};
+    for (const side of ['left', 'right']) {
+      const S = side === 'left' ? 1 : -1;
+      const ua = get(side + 'UpperArm'), la = get(side + 'LowerArm'), hand = get(side + 'Hand');
+      const vSh = down(ua?.position), vUa = down(la?.position), vLa = down(hand?.position);
+      const mk = (deg, vrmRad) =>
+        S * rig.armSign * (THREE.MathUtils.degToRad(deg) - vrmRad);
+      rig.armOff[side] = {
+        shoulder: mk(MMD_ARM_BIND_DEG.shoulder, vSh),
+        upperArm: mk(MMD_ARM_BIND_DEG.upperArm, vUa),
+        lowerArm: mk(MMD_ARM_BIND_DEG.lowerArm, vLa),
+        hand: mk(MMD_ARM_BIND_DEG.hand, vLa),
+      };
+    }
     this._rig = rig;
     this._vrm = vrm;
   }
@@ -292,20 +311,23 @@ export class VMDPlayer {
       if (rs) shoulderQ[-1] = FQ(rs.sampleRot(t, new THREE.Quaternion()));
     }
 
-    // --- 腕チェーン (A-pose補正: 腕 q⊗r / 以降 r⁻¹⊗q⊗r)
-    for (const [mmdName, vrmName, side, pos] of ARM_BONES) {
-      const tr = this.bones.get(mmdName);
+    // --- 腕チェーン (肩含む): ボーンごとのレスト方向差を挟む
+    // q_vrm = R_parent⁻¹ ⊗ q_mmd ⊗ R_self。一律オフセットだと肩が20°強
+    // 上ずれし(MMD肩は30°下向きレスト)、肘は折り畳みで前腕が上腕へめり込む。
+    for (const [mmdName, vrmName, side, selfKey, parentKey] of ARM_CHAIN) {
       const node = h.getNormalizedBoneNode(vrmName);
       if (!node) continue;
-      const theta = side * rig.armSign * THREE.MathUtils.degToRad(this.armOffsetDeg);
-      _q2.setFromAxisAngle(_v1.set(0, 0, 1), theta);           // r
+      const off = rig.armOff[side === 1 ? 'left' : 'right'];
+      const tr = this.bones.get(mmdName);
       const q = tr ? FQ(tr.sampleRot(t, _q1)) : _q1.identity();
-      if (pos === 0) {
-        if (shoulderQ[side]) q.premultiply(shoulderQ[side]);   // 肩折込み
-        node.quaternion.copy(q).multiply(_q2);                 // q⊗r
-      } else {
-        node.quaternion.copy(_q2).invert().multiply(q).multiply(_q2);  // r⁻¹⊗q⊗r
+      let pOff = parentKey ? off[parentKey] : 0;
+      if (selfKey === 'upperArm' && shoulderQ[side]) {
+        q.premultiply(shoulderQ[side]);                        // 肩折込み(肩無しモデル)
+        pOff = 0;                                              // 親は体幹
       }
+      if (pOff) q.premultiply(_q2.setFromAxisAngle(_v1.set(0, 0, 1), pOff).invert());
+      node.quaternion.copy(q)
+        .multiply(_q2.setFromAxisAngle(_v1.set(0, 0, 1), off[selfKey]));
     }
 
     // --- 脚: 足IKがあれば2ボーンIK、無ければFK
