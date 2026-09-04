@@ -161,6 +161,8 @@ export class VMDPlayer {
       const last = this.camera.times[this.camera.times.length - 1];
       if (last > this.duration) this.duration = last;
     }
+    this._ownCamera = this.camera;   // 外部カメラ解除時に戻す用
+    this._camWrap = 0;               // 外部カメラのループ周期(0=ループしない)
 
     this.hasMorphs = [...this.morphs.keys()].some((k) => MORPH_MAP[k]);
     this.usesLegIK = this.bones.has('左足ＩＫ') || this.bones.has('左足IK') ||
@@ -434,12 +436,32 @@ export class VMDPlayer {
 
   get hasCamera() { return !!this.camera; }
 
+  /**
+   * 別VMD(カメラ配布データ)のカメラトラックを取り込み、本モーションの時刻に
+   * 追従させる。ダンスVMDとカメラVMDを同時に使うための入口。
+   * カメラ側が短い場合はその周期でループする。null で解除。
+   * @returns {boolean} カメラを取り込めたか
+   */
+  setExternalCamera(player) {
+    if (!player || !player.camera) {
+      this.camera = this._ownCamera || null;
+      this._camWrap = 0;
+      return false;
+    }
+    const src = player.camera;
+    this.camera = { ...src, cursor: 0 };
+    this._camWrap = src.times.length ? src.times[src.times.length - 1] : 0;
+    return true;
+  }
+
   /** VMDカメラを three カメラへ適用 (MMD: 注視点+距離+回転) */
   applyCamera(camera) {
     const c = this.camera;
     if (!c) return false;
     const s = this._rig?.posScale ?? (0.85 / MMD_LEG_ROOT_Y);
-    const t = this.t;
+    // 外部カメラがダンスより短い場合はカメラ側の周期で繰り返す
+    const t = (this._camWrap > 0.05 && this.t > this._camWrap)
+      ? this.t % this._camWrap : this.t;
     // seek
     const n = c.times.length;
     if (c.cursor >= n) c.cursor = n - 1;
