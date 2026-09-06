@@ -236,7 +236,7 @@ class Editor {
             <button class="btn sm" id="tl-bpm-detect">検知</button>
             <label class="tl-bpm-grid"><input type="checkbox" id="tl-bpm-grid" ${this.tl.showBeats === false ? '' : 'checked'}>拍グリッド</label>
             <label class="tl-bpm-grid"><input type="checkbox" id="tl-metro" ${this.metronomeOn ? 'checked' : ''}>🔊 メトロノーム</label>
-            <label class="tl-bpm-grid" title="クリック音のタイミング補正。＋で遅く／−で早く">補正<input type="number" id="tl-metro-trim" min="-100" max="200" step="1" style="width:52px" value="${Math.round((this.tl.metroTrim ?? 0.004) * 1000)}">ms</label>
+            <label class="tl-bpm-grid" title="クリック音のタイミング補正。＋で遅く／−で早く">補正<input type="number" id="tl-metro-trim" min="-100" max="200" step="1" style="width:52px" value="${Math.round((this.tl.metroTrim ?? 0.002) * 1000)}">ms</label>
           </div>
           <div class="zoom">
             <span>ズーム</span>
@@ -451,7 +451,7 @@ class Editor {
     // (無補正だとクリックが音楽より僅かに先行して聞こえる)。多くの環境で outputLatency が
     // 0 を返すので、その場合は実測代表値(~55ms)を既定補正に使う。metroTrimで微調整可。
     const auto = ac.outputLatency || 0;         // 環境が値を返す時のみ自動補正
-    const comp = auto + (this.tl.metroTrim ?? 0.004);  // 既定4ms、スライダーで微調整
+    const comp = auto + (this.tl.metroTrim ?? 0.002);  // 既定2ms、スライダーで微調整
     let beat = this._metroScheduled + 1;
     for (; beat < 1e9; beat++) {
       const bt = off + beat * period;     // その拍の曲内時刻
