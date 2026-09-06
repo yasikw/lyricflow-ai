@@ -443,7 +443,7 @@ class Editor {
     // 補正: <audio>要素は AudioContext より出力が遅れるため、その分クリックを後ろへずらす
     // (無補正だとクリックが音楽より僅かに先行して聞こえる)。多くの環境で outputLatency が
     // 0 を返すので、その場合は実測代表値(~55ms)を既定補正に使う。metroTrimで微調整可。
-    const auto = ac.outputLatency || (ac.baseLatency || 0) + 0.025;
+    const auto = ac.outputLatency || (ac.baseLatency || 0) + 0.01;
     const comp = auto + (this.tl.metroTrim || 0);
     let beat = this._metroScheduled + 1;
     for (; beat < 1e9; beat++) {
