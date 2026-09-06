@@ -401,12 +401,12 @@ pre.code {
 .prop-group h4 { font-size: 11px; font-weight: 800; letter-spacing: .08em; color: var(--muted); margin-bottom: 11px; text-transform: uppercase; }
 .prop-row { display: flex; align-items: center; justify-content: space-between; gap: 9px; margin-bottom: 9px; font-size: 12px; }
 .prop-row > span { color: var(--muted); flex: none; }
-/* コントロールはパネル幅に追従(flexで伸縮)。右端が常に揃う */
-.prop-row .input, .prop-row select { flex: 1 1 0; min-width: 0; max-width: 260px; padding: 5px 8px; font-size: 12px; }
-.prop-row input[type=range] { flex: 1 1 0; min-width: 60px; max-width: 260px; accent-color: var(--cyan); }
+/* コントロールはパネル幅いっぱいに追従(flexで伸縮)。右端が常に揃う */
+.prop-row .input, .prop-row select { flex: 1 1 0; min-width: 0; padding: 5px 8px; font-size: 12px; }
+.prop-row input[type=range] { flex: 1 1 0; min-width: 60px; accent-color: var(--cyan); }
 .prop-row input[type=color] { width: 30px; height: 26px; flex: none; padding: 2px; border-radius: 5px; border: 1px solid var(--border); background: var(--bg-deep); }
 /* .sm はコンパクト指定を維持(背景スタジオ等) */
-.prop-row .input.sm, .prop-row select.sm { flex: 0 0 auto; max-width: none; }
+.prop-row .input.sm, .prop-row select.sm { flex: 0 0 auto; }
 .ai-engine-row { display: flex; align-items: center; justify-content: space-between; gap: 9px; margin-bottom: 10px; font-size: 12px; }
 .ai-engine-row > span { color: var(--muted); }
 .ai-engine-row select { width: 128px; padding: 5px 8px; font-size: 12px; }
@@ -435,7 +435,7 @@ pre.code {
 .media-item .mi-meta { font-size: 10px; color: var(--faint); }
 .fx-toggle { display: flex; align-items: center; justify-content: space-between; gap: 9px; padding: 8px 2px; font-size: 12.5px; }
 .fx-toggle > span { flex: none; }
-.fx-toggle input[type=range] { flex: 1 1 0; min-width: 60px; max-width: 260px; accent-color: var(--purple); }
+.fx-toggle input[type=range] { flex: 1 1 0; min-width: 60px; accent-color: var(--purple); }
 .empty-note { color: var(--faint); font-size: 12px; text-align: center; padding: 26px 10px; line-height: 1.8; }
 
 /* progress bars */
