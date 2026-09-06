@@ -197,6 +197,12 @@ class Editor {
         <div class="tl-toolbar">
           <span>タイムライン</span>
           <span id="tl-hint" style="color:var(--faint)">クリップをドラッグで移動 / 端でリサイズ</span>
+          <div class="tl-bpm">
+            <span>BPM</span>
+            <input type="number" id="tl-bpm-val" min="40" max="240" value="${this.tl.bpm || ''}" placeholder="--">
+            <button class="btn sm" id="tl-bpm-detect">検知</button>
+            <label class="tl-bpm-grid"><input type="checkbox" id="tl-bpm-grid" ${this.tl.showBeats === false ? '' : 'checked'}>拍グリッド</label>
+          </div>
           <div class="zoom">
             <span>ズーム</span>
             <input type="range" id="tl-zoom" min="4" max="120" value="${this.zoom}" style="width:110px;accent-color:var(--cyan)">
@@ -226,6 +232,14 @@ class Editor {
       $('#quality-chip').textContent = '品質: ' + (this.quality === 'full' ? 'Full HD' : 'Draft(高速)');
     };
     $('#tl-zoom').oninput = e => { this.zoom = +e.target.value; this.renderTimeline(); };
+    $('#tl-bpm-detect').onclick = () => this.detectBpm();
+    $('#tl-bpm-val').onchange = e => {
+      const v = +e.target.value;
+      if (v >= 40 && v <= 240) { this.tl.bpm = v; if (this.tl.beatOffset == null) this.tl.beatOffset = 0; }
+      else this.tl.bpm = null;
+      this.markDirty(); this.renderTimeline();
+    };
+    $('#tl-bpm-grid').onchange = e => { this.tl.showBeats = e.target.checked; this.markDirty(); this.renderTimeline(); };
     this.root.querySelectorAll('.ed-tabs button').forEach(b => b.onclick = () => {
       this.root.querySelectorAll('.ed-tabs button').forEach(x => x.classList.remove('active'));
       b.classList.add('active');
@@ -1097,6 +1111,27 @@ class Editor {
     toast(`AI自動同期 完了 (${eng}): ${res.timestamps.length}語`, 'ok');
   }
 
+  async detectBpm() {
+    const aid = this.tl.audio_asset_id;
+    const asset = (this.assets || []).find(a => a.id === aid) || (this.assets || []).find(a => a.type === 'audio');
+    const url = asset && asset.url;
+    if (!url) return toast('先に音源を設定してください', 'err');
+    const btn = this.root.querySelector('#tl-bpm-detect');
+    if (btn) { btn.disabled = true; btn.textContent = '解析中…'; }
+    try {
+      const { bpm, beatOffset } = await detectBPM(url);
+      this.tl.bpm = bpm; this.tl.beatOffset = beatOffset; this.tl.showBeats = true;
+      const bv = this.root.querySelector('#tl-bpm-val'); if (bv) bv.value = bpm;
+      const gc = this.root.querySelector('#tl-bpm-grid'); if (gc) gc.checked = true;
+      this.markDirty(); this.renderTimeline();
+      toast(`BPM検知: ${bpm}（拍グリッドをタイムラインに表示）`, 'ok');
+    } catch (e) {
+      toast('BPM検知に失敗: ' + e.message, 'err');
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = '検知'; }
+    }
+  }
+
   async runSceneAnalysis() {
     if (!this.tl.envelope) return toast('先に音源を設定してください', 'err');
     const { job_id } = await API.post('/ai/analyze-scene', {
@@ -1349,9 +1384,20 @@ class Editor {
       const c = SCENE_COLORS[sc.label] || '#8b96a8';
       sceneBand += `<div class="scene-band" data-seek="${sc.start}" style="left:${labelW + sc.start * pps}px;width:${(sc.end - sc.start) * pps}px;background:linear-gradient(180deg,${c}33,transparent);border-left:1px solid ${c}"><span style="background:${c}">${sc.label}</span></div>`;
     }
+    // 拍グリッド (BPMから生成)
+    let beatGrid = '';
+    if (this.tl.bpm && this.tl.showBeats !== false) {
+      const period = 60 / this.tl.bpm, off = this.tl.beatOffset || 0, bpb = this.tl.beatsPerBar || 4;
+      let lines = '', i = 0;
+      for (let tb = off; tb <= dur && i < 4000; tb += period, i++) {
+        lines += `<i class="${i % bpb === 0 ? 'bar' : ''}" style="left:${labelW + tb * pps}px"></i>`;
+      }
+      beatGrid = `<div class="beat-grid" style="width:${W}px">${lines}</div>`;
+    }
     inner.style.width = W + 'px';
     inner.innerHTML = `
       <div class="tl-ruler" id="tl-ruler" style="width:${W}px">${ruler}${sceneBand}</div>
+      ${beatGrid}
       ${trackDefs.map(([label, key, color]) => `
         <div class="tl-track" data-track="${key}" style="height:${this._trackH(key)}px">
           <div class="tl-label"><i style="background:${color}"></i>${label}</div>

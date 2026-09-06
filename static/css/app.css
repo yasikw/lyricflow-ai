@@ -366,11 +366,19 @@ pre.code {
 /* timeline */
 .ed-bottom { border-top: 1px solid var(--border); background: var(--bg-deep); display: flex; flex-direction: column; min-height: 0; min-width: 0; overflow: hidden; }
 .tl-toolbar { display: flex; align-items: center; gap: 10px; padding: 7px 14px; border-bottom: 1px solid var(--border); font-size: 11.5px; color: var(--muted); flex: none; }
+.tl-bpm { display: flex; align-items: center; gap: 6px; margin-left: 16px; }
+.tl-bpm input[type=number] { width: 52px; background: var(--bg-deep); border: 1px solid var(--border); color: var(--text); border-radius: 5px; padding: 3px 5px; font-size: 11.5px; }
+.tl-bpm .tl-bpm-grid { display: flex; align-items: center; gap: 4px; cursor: pointer; }
+.tl-bpm .tl-bpm-grid input { accent-color: var(--cyan); }
 .tl-toolbar .zoom { display: flex; align-items: center; gap: 6px; margin-left: auto; }
 .tl-scroll { flex: 1; overflow: auto; position: relative; min-width: 0; }
 .tl-inner { position: relative; min-width: 100%; }
 .tl-ruler { height: 22px; position: sticky; top: 0; background: var(--bg-deep); border-bottom: 1px solid var(--border); z-index: 6; }
-.tl-track { display: flex; border-bottom: 1px solid #1a2130; position: relative; }
+.tl-track { display: flex; border-bottom: 1px solid #1a2130; position: relative; z-index: 1; }
+/* 拍グリッド(BPM) — トラックの背面 */
+.beat-grid { position: absolute; top: 22px; bottom: 0; left: 0; pointer-events: none; z-index: 0; }
+.beat-grid i { position: absolute; top: 0; bottom: 0; width: 1px; background: rgba(255, 255, 255, .08); }
+.beat-grid i.bar { background: rgba(0, 212, 255, .38); width: 1.5px; }
 .tl-label {
   position: sticky; left: 0; width: 92px; flex: none; background: var(--bg-deep); z-index: 5;
   font-size: 10px; font-weight: 700; color: var(--muted); padding: 6px 10px; border-right: 1px solid var(--border);

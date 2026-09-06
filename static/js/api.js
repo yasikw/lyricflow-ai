@@ -95,3 +95,42 @@ async function computeEnvelope(url, hop = 0.1) {
   ctx.close();
   return { env, duration: audio.duration, hop };
 }
+
+// BPM(テンポ)検知: オンセット強度の自己相関でテンポを推定し、拍の位相も求める
+async function detectBPM(url) {
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  const audio = await ctx.decodeAudioData(await (await fetch(url)).arrayBuffer());
+  ctx.close();
+  const sr = audio.sampleRate, ch = audio.getChannelData(0);
+  const fps = 100, win = Math.floor(sr / fps);          // ~100Hz のオンセット包絡
+  const n = Math.floor(ch.length / win);
+  if (n < 20) throw new Error('音源が短すぎます');
+  const energy = new Float32Array(n);
+  for (let f = 0; f < n; f++) {
+    let acc = 0; const s = f * win, e = s + win;
+    for (let i = s; i < e; i += 4) { const v = ch[i]; acc += v * v; }
+    energy[f] = Math.sqrt(acc / (win / 4));
+  }
+  const onset = new Float32Array(n);                    // 立ち上がり(正の差分)= オンセット強度
+  for (let f = 1; f < n; f++) { const d = energy[f] - energy[f - 1]; onset[f] = d > 0 ? d : 0; }
+  const minBpm = 60, maxBpm = 190;
+  const minLag = Math.round(fps * 60 / maxBpm), maxLag = Math.round(fps * 60 / minBpm);
+  let best = -1, bestLag = minLag;
+  for (let lag = minLag; lag <= maxLag; lag++) {
+    let sum = 0; for (let f = lag; f < n; f++) sum += onset[f] * onset[f - lag];
+    const bpm = fps * 60 / lag;
+    const w = 1 - Math.abs(Math.log2(bpm / 120)) * 0.15;   // 120付近を僅かに優遇(オクターブ誤り抑制)
+    const score = sum * w;
+    if (score > best) { best = score; bestLag = lag; }
+  }
+  let bpm = fps * 60 / bestLag;
+  while (bpm < 70) bpm *= 2; while (bpm > 180) bpm /= 2;
+  bpm = Math.round(bpm);
+  const period = Math.max(1, Math.round(fps * 60 / bpm));  // 拍の位相(オンセットが最も乗る位置)
+  let bestPhase = 0, bestPhaseScore = -1;
+  for (let ph = 0; ph < period; ph++) {
+    let s = 0; for (let f = ph; f < n; f += period) s += onset[f];
+    if (s > bestPhaseScore) { bestPhaseScore = s; bestPhase = ph; }
+  }
+  return { bpm, beatOffset: +(bestPhase / fps).toFixed(3), duration: audio.duration };
+}
