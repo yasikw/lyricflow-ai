@@ -320,7 +320,7 @@ pre.code {
 @keyframes slideIn { from { transform: translateX(24px); opacity: 0; } to { transform: none; opacity: 1; } }
 
 /* ============ editor ============ */
-.editor { display: grid; grid-template-rows: 48px 1fr 258px; height: 100vh; overflow: hidden; }
+.editor { display: grid; grid-template-rows: 48px 1fr var(--tl-h, 258px); height: 100vh; overflow: hidden; }
 .ed-top {
   display: flex; align-items: center; gap: 12px; padding: 0 14px; border-bottom: 1px solid var(--border);
   background: var(--bg-deep); z-index: 30;
@@ -329,7 +329,17 @@ pre.code {
 .ed-top .title-in:hover, .ed-top .title-in:focus { border-color: var(--border); background: var(--bg); outline: none; }
 .ed-top .autosave { font-size: 11px; color: var(--faint); }
 .ed-top .autosave.saved { color: var(--green); }
-.ed-mid { display: grid; grid-template-columns: 252px 1fr 264px; min-height: 0; }
+.ed-mid { display: grid; grid-template-columns: var(--left-w, 252px) 1fr var(--right-w, 264px); min-height: 0; position: relative; }
+/* パネルのリサイザー(境界をドラッグして幅/高さを変更) */
+.resizer { position: absolute; z-index: 40; transition: background .12s; }
+.resizer-x { top: 0; bottom: 0; width: 9px; margin-left: -5px; cursor: col-resize; }
+.resizer-y { left: 0; right: 0; height: 9px; margin-top: -5px; cursor: row-resize; }
+#rz-left { left: var(--left-w, 252px); }
+#rz-right { left: auto; right: var(--right-w, 264px); margin-left: 0; margin-right: -5px; }
+#rz-tl { top: 0; }
+.resizer:hover, .resizer.dragging { background: var(--cyan); }
+.resizer::after { content: ''; position: absolute; background: transparent; }
+.ed-bottom { position: relative; }
 .ed-left, .ed-right { background: var(--bg-deep); border-right: 1px solid var(--border); overflow-y: auto; min-height: 0; }
 .ed-right { border-right: none; border-left: 1px solid var(--border); }
 .ed-tabs { display: flex; border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--bg-deep); z-index: 5; }

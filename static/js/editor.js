@@ -102,6 +102,7 @@ class Editor {
     this.renderAll();
     if (this.tl.lyricStyle?.font) this.ensureFont(this.tl.lyricStyle.font);   // 保存済みフォントを確実に読込→再描画
     this.setupStageDrag();
+    this.setupPaneResizers();
     this.loop();
     this.autosaveTimer = setInterval(() => this.save(true), 30000); // 仕様: 30秒オートセーブ
     this.keyHandler = e => {
@@ -188,8 +189,11 @@ class Editor {
           </div>
         </section>
         <aside class="ed-right" id="right-pane"></aside>
+        <div class="resizer resizer-x" id="rz-left" title="ドラッグで左サイドバーの幅を調整"></div>
+        <div class="resizer resizer-x" id="rz-right" title="ドラッグで右サイドバーの幅を調整"></div>
       </div>
       <div class="ed-bottom">
+        <div class="resizer resizer-y" id="rz-tl" title="ドラッグでタイムラインの高さを調整"></div>
         <div class="tl-toolbar">
           <span>タイムライン</span>
           <span id="tl-hint" style="color:var(--faint)">クリップをドラッグで移動 / 端でリサイズ</span>
@@ -239,6 +243,52 @@ class Editor {
   }
 
   // プレビュー上で歌詞を掴んでリアルタイムに移動(自由配置)
+  // サイドバー幅・タイムライン高さを境界ドラッグで変更(localStorageに保存)
+  setupPaneResizers() {
+    const editor = this.root.querySelector('.editor');
+    const mid = this.root.querySelector('.ed-mid');
+    if (!editor || !mid || editor._rzBound) return;
+    editor._rzBound = true;
+    const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+    const setVar = (k, px) => editor.style.setProperty(k, px + 'px');
+    // 保存値を復元
+    ['--left-w', '--right-w', '--tl-h'].forEach(k => { const v = localStorage.getItem('lf_pane_' + k); if (v) setVar(k, parseInt(v, 10)); });
+    const bind = (id, onMove) => {
+      const h = this.root.querySelector('#' + id);
+      if (!h) return;
+      h.addEventListener('pointerdown', e => {
+        e.preventDefault();
+        h.setPointerCapture(e.pointerId);
+        h.classList.add('dragging');
+        const move = ev => onMove(ev);
+        const up = ev => {
+          h.classList.remove('dragging');
+          document.removeEventListener('pointermove', move);
+          document.removeEventListener('pointerup', up);
+          try { h.releasePointerCapture(ev.pointerId); } catch (_) {}
+          this.fitStage(); this.renderTimeline();     // 最終サイズで再フィット
+        };
+        document.addEventListener('pointermove', move);
+        document.addEventListener('pointerup', up);
+      });
+    };
+    bind('rz-left', e => {
+      const r = mid.getBoundingClientRect();
+      const w = Math.round(clamp(e.clientX - r.left, 170, r.width - 360));
+      setVar('--left-w', w); localStorage.setItem('lf_pane_--left-w', w);
+    });
+    bind('rz-right', e => {
+      const r = mid.getBoundingClientRect();
+      const w = Math.round(clamp(r.right - e.clientX, 190, r.width - 360));
+      setVar('--right-w', w); localStorage.setItem('lf_pane_--right-w', w);
+    });
+    bind('rz-tl', e => {
+      const r = editor.getBoundingClientRect();
+      const hgt = Math.round(clamp(r.bottom - e.clientY, 120, r.height - 260));
+      setVar('--tl-h', hgt); localStorage.setItem('lf_pane_--tl-h', hgt);
+    });
+  }
+
   setupStageDrag() {
     const c = this.root.querySelector('#stage');
     if (!c || c._dragBound) return;
