@@ -108,14 +108,15 @@ class FXEngine {
     // 光芒 (God rays) — 背景の上・前景/歌詞の下に敷く
     const godray = (fxActive.godray ?? fx.godray ?? 0);
     if (godray > 0.04 && this.quality !== 'draft') this._godRays(ctx, t, W, H, colors, godray * (0.6 + energy * boost * 0.6));
-    this._stepParticles(ctx, t, W, H, colors, energy * boost);
-    // 被写界深度 (Depth of Field) — 背景/粒子をフォーカス帯の外でぼかす
+    // 被写界深度 (Depth of Field) — 背景をフォーカス帯の外でぼかす
     const dof = (fxActive.dof ?? fx.dof ?? 0);
     if (dof > 0.05 && this.quality !== 'draft') this._dof(ctx, W, H, dof);
     // 前景キャラ/被写体レイヤー (任意アップロード素材)
     this._drawSubject(ctx, t, W, H, energy, boost);
     // 3Dダンスレイヤー (VRMアバター + MMDモーション / VRM Atelier連携)
     this._drawDance(ctx, t, W, H, energy, boost);
+    // パーティクル(粒子) — 前景キャラ/被写体より前面に降らせる
+    this._stepParticles(ctx, t, W, H, colors, energy * boost);
     if (!this.hideLyrics) this._drawLyrics(t, W, H, colors, energy, boost, fx);   // タップ同期中は歌詞を隠す
     this._drawOverlays(ctx, t, W, H, colors);
 
