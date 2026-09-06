@@ -440,11 +440,16 @@ class Editor {
     const songT = this.t;                 // 現在の曲内時刻(=audio.currentTime)
     const acNow = ac.currentTime;         // それに対応するAudioContextの現在時刻
     const lookahead = 0.18;               // 先読み窓(秒)
+    // 補正: <audio>要素は AudioContext より出力が遅れるため、その分クリックを後ろへずらす
+    // (無補正だとクリックが音楽より僅かに先行して聞こえる)。多くの環境で outputLatency が
+    // 0 を返すので、その場合は実測代表値(~55ms)を既定補正に使う。metroTrimで微調整可。
+    const auto = ac.outputLatency || (ac.baseLatency || 0) + 0.05;
+    const comp = auto + (this.tl.metroTrim || 0);
     let beat = this._metroScheduled + 1;
     for (; beat < 1e9; beat++) {
       const bt = off + beat * period;     // その拍の曲内時刻
       if (bt < songT - 0.02) continue;    // シーク直後などで過ぎている拍は捨てる
-      const when = acNow + (bt - songT);  // AudioContext上の発音時刻
+      const when = acNow + (bt - songT) + comp;  // AudioContext上の発音時刻(レイテンシ補正込み)
       if (when > acNow + lookahead) break;
       this._metroClick(beat % bpb === 0, Math.max(when, acNow + 0.001));
       this._metroScheduled = beat;
