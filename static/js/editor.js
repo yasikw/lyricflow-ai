@@ -1353,10 +1353,10 @@ class Editor {
     inner.innerHTML = `
       <div class="tl-ruler" id="tl-ruler" style="width:${W}px">${ruler}${sceneBand}</div>
       ${trackDefs.map(([label, key, color]) => `
-        <div class="tl-track">
+        <div class="tl-track" data-track="${key}" style="height:${this._trackH(key)}px">
           <div class="tl-label"><i style="background:${color}"></i>${label}</div>
           <div class="tl-lane ${key === 'audio' ? 'audio' : ''}" data-track="${key}" style="width:${W - labelW}px">
-            ${key === 'audio' ? `<canvas id="wave-c" height="46" style="position:absolute;inset:0"></canvas>` : ''}
+            ${key === 'audio' ? `<canvas id="wave-c" style="position:absolute;inset:0"></canvas>` : ''}
             ${key === 'lyrics' ? (this.tl.tracks.lyrics || []).map(w => `
               <div class="clip lyr ${w.id === this.sel ? 'sel' : ''}" data-clip="${w.id}"
                    style="left:${w.start * pps}px;width:${Math.max(14, (w.end - w.start) * pps)}px">
@@ -1369,10 +1369,18 @@ class Editor {
             ${key === 'overlay' ? (this.tl.tracks.overlay || []).map(o => `
               <div class="clip ov" style="left:${o.start * pps}px;width:${Math.max(14, (o.end - o.start) * pps)}px">${esc(o.text || o.type)}</div>`).join('') : ''}
           </div>
+          <div class="tl-rz" data-track="${key}" title="ドラッグでトラックの高さを変更"></div>
         </div>`).join('')}
       <div class="playhead" id="playhead" style="left:${labelW + this.t * pps}px"></div>`;
     this.drawWaveform();
     this.bindTimeline(labelW, pps);
+  }
+
+  // トラック高さ(localStorageに保存)。既定=AUDIO 54px / それ以外 34px
+  _trackH(key) {
+    const def = key === 'audio' ? 54 : 34;
+    const v = parseInt(localStorage.getItem('lf_trackH_' + key), 10);
+    return (v && v >= 26 && v <= 260) ? v : def;
   }
 
   drawWaveform() {
@@ -1380,14 +1388,17 @@ class Editor {
     if (!c || !this.tl.envelope) return;
     const pps = this.zoom;
     const dur = this.tl.duration || 10;
+    const laneH = (c.parentElement && c.parentElement.clientHeight) || 46;
     c.width = dur * pps;
+    c.height = laneH;                       // レーン高さに合わせる(トラック高さ変更に追従)
     const ctx = c.getContext('2d');
     const mx = Math.max(...this.tl.envelope, 0.001);
     const hop = this.tl.hop || 0.1;
+    const mid = laneH / 2, maxAmp = laneH * 0.82;
     ctx.fillStyle = 'rgba(0,212,255,0.45)';
     for (let i = 0; i < this.tl.envelope.length; i++) {
-      const h = (this.tl.envelope[i] / mx) * 38;
-      ctx.fillRect(i * hop * pps, 23 - h / 2, Math.max(1, hop * pps - 0.5), h);
+      const h = (this.tl.envelope[i] / mx) * maxAmp;
+      ctx.fillRect(i * hop * pps, mid - h / 2, Math.max(1, hop * pps - 0.5), h);
     }
   }
 
@@ -1405,6 +1416,30 @@ class Editor {
         this.seek((e.clientX - rect.left) / pps);
         this.sel = null; this.renderTimeline(); this.renderRight();
       };
+    });
+    // トラック高さのリサイズ(下辺をドラッグ)
+    this.root.querySelectorAll('.tl-rz').forEach(rz => {
+      rz.addEventListener('pointerdown', e => {
+        e.preventDefault(); e.stopPropagation();
+        const key = rz.dataset.track;
+        const track = rz.closest('.tl-track');
+        const startY = e.clientY, startH = track.getBoundingClientRect().height;
+        rz.setPointerCapture(e.pointerId); rz.classList.add('dragging');
+        const move = ev => {
+          const h = Math.max(26, Math.min(260, Math.round(startH + (ev.clientY - startY))));
+          track.style.height = h + 'px';
+          if (key === 'audio') this.drawWaveform();
+        };
+        const up = ev => {
+          localStorage.setItem('lf_trackH_' + key, parseInt(track.style.height, 10));
+          rz.classList.remove('dragging');
+          document.removeEventListener('pointermove', move);
+          document.removeEventListener('pointerup', up);
+          try { rz.releasePointerCapture(ev.pointerId); } catch (_) {}
+        };
+        document.addEventListener('pointermove', move);
+        document.addEventListener('pointerup', up);
+      });
     });
     // 歌詞クリップ: ドラッグ移動 / リサイズ / 選択
     this.root.querySelectorAll('.clip[data-clip]').forEach(clip => {
