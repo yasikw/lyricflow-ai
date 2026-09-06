@@ -84,7 +84,7 @@ class Editor {
     this.destroyed = false;
     this.metronomeOn = false;
     try { this.metronomeOn = localStorage.getItem('lf_metronome') === '1'; } catch (_) {}
-    this._lastBeat = null;         // 最後にクリック音を鳴らした拍番号
+    this._metroScheduled = -Infinity;   // 予約済みの最終拍番号
   }
 
   /* メトロノーム: Web Audioでクリック音を生成 */
@@ -96,25 +96,25 @@ class Editor {
     if (this._actx.state === 'suspended') this._actx.resume().catch(() => {});
     return this._actx;
   }
-  _metroClick(accent) {
-    const ac = this._ensureAudioCtx();
+  // 指定したAudioContext時刻(when)にクリック音を予約する。予約=正確な発音でズレない
+  _metroClick(accent, when) {
+    const ac = this._actx;
     if (!ac) return;
-    const now = ac.currentTime;
     const osc = ac.createOscillator(), gain = ac.createGain();
     osc.type = 'square';
     osc.frequency.value = accent ? 2000 : 1200;   // 小節頭は高い音
     const peak = accent ? 0.35 : 0.2;
-    gain.gain.setValueAtTime(0.0001, now);
-    gain.gain.exponentialRampToValueAtTime(peak, now + 0.001);
-    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.05);
+    gain.gain.setValueAtTime(0.0001, when);
+    gain.gain.exponentialRampToValueAtTime(peak, when + 0.001);
+    gain.gain.exponentialRampToValueAtTime(0.0001, when + 0.05);
     osc.connect(gain).connect(ac.destination);
-    osc.start(now); osc.stop(now + 0.06);
+    osc.start(when); osc.stop(when + 0.06);
   }
-  // 現在の再生位置に拍カーソルを合わせる(シーク・再生開始・ON時に呼ぶ→鳴りっぱなし防止)
+  // 現在の再生位置に拍カーソルを合わせる(シーク・再生開始・ON・BPM変更で呼ぶ→二重/連打防止)
   _syncBeatCursor() {
-    if (!this.tl.bpm) { this._lastBeat = null; return; }
+    if (!this.tl.bpm) { this._metroScheduled = -Infinity; return; }
     const period = 60 / this.tl.bpm, off = this.tl.beatOffset || 0;
-    this._lastBeat = Math.floor((this.t - off) / period);
+    this._metroScheduled = Math.ceil((this.t - off) / period) - 1;  // 次の拍から予約
   }
 
   async init() {
@@ -430,15 +430,24 @@ class Editor {
     this.movePlayhead();
   }
 
-  // 拍の境界をまたいだらクリック音(小節頭はアクセント)。frame()から毎フレーム呼ぶ
+  /* 先読みスケジューラ: これから鳴る拍をAudioContextのタイムライン上に前もって予約する。
+     「検知した瞬間に鳴らす」方式は 16msポーリングのジッタ + 音声/AudioContextのクロック差で
+     ズレて聞こえるため、song時刻→AudioContext時刻に写像して正確に予約する(A Tale of Two Clocks)。 */
   _metroTick() {
+    const ac = this._actx;
+    if (!ac) return;
     const period = 60 / this.tl.bpm, off = this.tl.beatOffset || 0, bpb = this.tl.beatsPerBar || 4;
-    if (this.t < off) return;
-    const beat = Math.floor((this.t - off) / period);
-    if (this._lastBeat == null) { this._lastBeat = beat; return; }
-    if (beat > this._lastBeat) {
-      this._lastBeat = beat;
-      this._metroClick(beat % bpb === 0);
+    const songT = this.t;                 // 現在の曲内時刻(=audio.currentTime)
+    const acNow = ac.currentTime;         // それに対応するAudioContextの現在時刻
+    const lookahead = 0.18;               // 先読み窓(秒)
+    let beat = this._metroScheduled + 1;
+    for (; beat < 1e9; beat++) {
+      const bt = off + beat * period;     // その拍の曲内時刻
+      if (bt < songT - 0.02) continue;    // シーク直後などで過ぎている拍は捨てる
+      const when = acNow + (bt - songT);  // AudioContext上の発音時刻
+      if (when > acNow + lookahead) break;
+      this._metroClick(beat % bpb === 0, Math.max(when, acNow + 0.001));
+      this._metroScheduled = beat;
     }
   }
 
