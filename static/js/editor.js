@@ -82,6 +82,39 @@ class Editor {
     this.leftTab = 'media';
     this.quality = 'full';
     this.destroyed = false;
+    this.metronomeOn = false;
+    try { this.metronomeOn = localStorage.getItem('lf_metronome') === '1'; } catch (_) {}
+    this._lastBeat = null;         // 最後にクリック音を鳴らした拍番号
+  }
+
+  /* メトロノーム: Web Audioでクリック音を生成 */
+  _ensureAudioCtx() {
+    if (!this._actx) {
+      try { this._actx = new (window.AudioContext || window.webkitAudioContext)(); }
+      catch (_) { return null; }
+    }
+    if (this._actx.state === 'suspended') this._actx.resume().catch(() => {});
+    return this._actx;
+  }
+  _metroClick(accent) {
+    const ac = this._ensureAudioCtx();
+    if (!ac) return;
+    const now = ac.currentTime;
+    const osc = ac.createOscillator(), gain = ac.createGain();
+    osc.type = 'square';
+    osc.frequency.value = accent ? 2000 : 1200;   // 小節頭は高い音
+    const peak = accent ? 0.35 : 0.2;
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(peak, now + 0.001);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.05);
+    osc.connect(gain).connect(ac.destination);
+    osc.start(now); osc.stop(now + 0.06);
+  }
+  // 現在の再生位置に拍カーソルを合わせる(シーク・再生開始・ON時に呼ぶ→鳴りっぱなし防止)
+  _syncBeatCursor() {
+    if (!this.tl.bpm) { this._lastBeat = null; return; }
+    const period = 60 / this.tl.bpm, off = this.tl.beatOffset || 0;
+    this._lastBeat = Math.floor((this.t - off) / period);
   }
 
   async init() {
@@ -202,6 +235,7 @@ class Editor {
             <input type="number" id="tl-bpm-val" min="40" max="240" value="${this.tl.bpm || ''}" placeholder="--">
             <button class="btn sm" id="tl-bpm-detect">検知</button>
             <label class="tl-bpm-grid"><input type="checkbox" id="tl-bpm-grid" ${this.tl.showBeats === false ? '' : 'checked'}>拍グリッド</label>
+            <label class="tl-bpm-grid"><input type="checkbox" id="tl-metro" ${this.metronomeOn ? 'checked' : ''}>🔊 メトロノーム</label>
           </div>
           <div class="zoom">
             <span>ズーム</span>
@@ -237,9 +271,16 @@ class Editor {
       const v = +e.target.value;
       if (v >= 40 && v <= 240) { this.tl.bpm = v; if (this.tl.beatOffset == null) this.tl.beatOffset = 0; }
       else this.tl.bpm = null;
+      this._syncBeatCursor();
       this.markDirty(); this.renderTimeline();
     };
     $('#tl-bpm-grid').onchange = e => { this.tl.showBeats = e.target.checked; this.markDirty(); this.renderTimeline(); };
+    $('#tl-metro').onchange = e => {
+      this.metronomeOn = e.target.checked;
+      try { localStorage.setItem('lf_metronome', this.metronomeOn ? '1' : '0'); } catch (_) {}
+      if (this.metronomeOn) { this._ensureAudioCtx(); this._syncBeatCursor(); }
+      if (this.metronomeOn && !this.tl.bpm) toast('先にBPMを検知/入力してください', 'err');
+    };
     this.root.querySelectorAll('.ed-tabs button').forEach(b => b.onclick = () => {
       this.root.querySelectorAll('.ed-tabs button').forEach(x => x.classList.remove('active'));
       b.classList.add('active');
@@ -379,6 +420,7 @@ class Editor {
     if (this.playing && this.audio.src) this.t = this.audio.currentTime;
     else if (this.playing) this.t += 1 / 60;
     if (this.playing && this.t >= (this.tl.duration || 0)) { this.pause(); this.t = this.tl.duration || 0; }
+    if (this.playing && this.metronomeOn && this.tl.bpm) this._metroTick();
     this.engine.render(this.t);
     const tt = this.root.querySelector('#tp-time');
     if (tt) tt.textContent = `${fmtTime(this.t)} / ${fmtTime(this.tl.duration || 0)}`;
@@ -386,6 +428,18 @@ class Editor {
     const chip = this.root.querySelector('#scene-chip');
     if (chip) chip.textContent = sc ? `${sc.label} · energy ${(sc.energy * 100 | 0)}%` : 'シーン未解析';
     this.movePlayhead();
+  }
+
+  // 拍の境界をまたいだらクリック音(小節頭はアクセント)。frame()から毎フレーム呼ぶ
+  _metroTick() {
+    const period = 60 / this.tl.bpm, off = this.tl.beatOffset || 0, bpb = this.tl.beatsPerBar || 4;
+    if (this.t < off) return;
+    const beat = Math.floor((this.t - off) / period);
+    if (this._lastBeat == null) { this._lastBeat = beat; return; }
+    if (beat > this._lastBeat) {
+      this._lastBeat = beat;
+      this._metroClick(beat % bpb === 0);
+    }
   }
 
   togglePlay() { this.playing ? this.pause() : this.play(); }
@@ -398,6 +452,7 @@ class Editor {
       toast('この表示環境ではプレビューがカクつく場合があります。滑らかに見るには localhost:4189 をブラウザの別タブで開いてください（書き出しは正しく同期されます）', '');
     }
     this.playing = true;
+    if (this.metronomeOn) { this._ensureAudioCtx(); this._syncBeatCursor(); }
     if (this.audio.src) { this.audio.currentTime = this.t; this.audio.play().catch(() => {}); }
     this.root.querySelector('#tp-play').textContent = '⏸';
   }
@@ -410,6 +465,7 @@ class Editor {
   seek(t) {
     this.t = Math.max(0, Math.min(this.tl.duration || 0, t));
     if (this.audio.src) this.audio.currentTime = this.t;
+    this._syncBeatCursor();
   }
 
   /* ---------------- left pane ---------------- */
@@ -1121,6 +1177,7 @@ class Editor {
     try {
       const { bpm, beatOffset } = await detectBPM(url);
       this.tl.bpm = bpm; this.tl.beatOffset = beatOffset; this.tl.showBeats = true;
+      this._syncBeatCursor();
       const bv = this.root.querySelector('#tl-bpm-val'); if (bv) bv.value = bpm;
       const gc = this.root.querySelector('#tl-bpm-grid'); if (gc) gc.checked = true;
       this.markDirty(); this.renderTimeline();
