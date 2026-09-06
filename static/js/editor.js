@@ -715,7 +715,7 @@ class Editor {
         <h4>前景キャラ / 被写体</h4>
         ${this.tl.subject ? `
           <div class="prop-row"><span>素材</span><span style="font-size:11px;color:var(--cyan);overflow:hidden;text-overflow:ellipsis">${esc(this.tl.subject.name || '設定済み')}</span></div>
-          <div class="prop-row"><span>大きさ</span><input type="range" id="su-scale" min="30" max="100" value="${(this.tl.subject.scale || 0.72) * 100}"></div>
+          <div class="prop-row"><span>大きさ</span><input type="range" id="su-scale" min="30" max="300" value="${(this.tl.subject.scale || 0.72) * 100}"></div>
           <div class="prop-row"><span>横位置</span><input type="range" id="su-x" min="0" max="100" value="${(this.tl.subject.x ?? 0.5) * 100}"></div>
           <div class="prop-row"><span>縦位置</span><input type="range" id="su-y" min="0" max="100" value="${(this.tl.subject.y ?? 0.98) * 100}"></div>
           <button class="btn danger sm" id="su-del" style="width:100%;justify-content:center;margin-top:5px">キャラを外す</button>
