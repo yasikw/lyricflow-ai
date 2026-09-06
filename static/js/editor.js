@@ -716,6 +716,7 @@ class Editor {
           <div class="prop-row"><span>素材</span><span style="font-size:11px;color:var(--cyan);overflow:hidden;text-overflow:ellipsis">${esc(this.tl.subject.name || '設定済み')}</span></div>
           <div class="prop-row"><span>大きさ</span><input type="range" id="su-scale" min="30" max="100" value="${(this.tl.subject.scale || 0.72) * 100}"></div>
           <div class="prop-row"><span>横位置</span><input type="range" id="su-x" min="0" max="100" value="${(this.tl.subject.x ?? 0.5) * 100}"></div>
+          <div class="prop-row"><span>縦位置</span><input type="range" id="su-y" min="0" max="100" value="${(this.tl.subject.y ?? 0.98) * 100}"></div>
           <button class="btn danger sm" id="su-del" style="width:100%;justify-content:center;margin-top:5px">キャラを外す</button>
         ` : `
           <div class="empty-note" style="padding:4px 2px;text-align:left;font-size:11px">アニメキャラ等の画像/透過PNGを前景に配置し、リムライト・浮遊・呼吸で演出します。</div>
@@ -801,6 +802,7 @@ class Editor {
     if (this.tl.subject) {
       $('#su-scale').oninput = e => { this.tl.subject.scale = e.target.value / 100; this.markDirty(); };
       $('#su-x').oninput = e => { this.tl.subject.x = e.target.value / 100; this.markDirty(); };
+      $('#su-y').oninput = e => { this.tl.subject.y = e.target.value / 100; this.markDirty(); };
       $('#su-del').onclick = () => { this.tl.subject = null; this.engine.setTimeline(this.tl); this.markDirty(); this.renderRight(); };
     } else {
       $('#su-add').onclick = () => $('#su-file').click();
