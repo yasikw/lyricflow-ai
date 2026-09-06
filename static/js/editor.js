@@ -696,6 +696,7 @@ class Editor {
           <select class="input" id="sc-scene">${SCENES.map(([v, l]) => `<option value="${v}" ${(this.tl.tracks.background[0]?.scene || this.tl.sceneDefault) === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
         <div class="prop-row"><span>粒子</span>
           <select class="input" id="sc-part">${PARTICLES.map(([v, l]) => `<option value="${v}" ${this.tl.particles === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+        <div class="prop-row"><span>粒子の量</span><input type="range" id="sc-pden" min="0" max="200" value="${Math.round((this.tl.particleDensity ?? 1) * 100)}"></div>
       </div>
       <div class="prop-group">
         <h4>アニメ調エフェクト (Anime FX)</h4>
@@ -793,6 +794,7 @@ class Editor {
       this.markDirty(); this.renderTimeline();
     };
     $('#sc-part').onchange = e => { this.tl.particles = e.target.value; this.engine.particles = []; this.markDirty(); };
+    $('#sc-pden').oninput = e => { this.tl.particleDensity = e.target.value / 100; this.markDirty(); };
     for (const k of ['bloom', 'glitch', 'chroma', 'wave', 'godray', 'flare', 'dof', ...SCREEN_FX.map(f => f[0])]) {
       const el = $('#fx-' + k);
       if (el) el.oninput = e => { this.tl.fx[k] = e.target.value / 100; this.markDirty(); };

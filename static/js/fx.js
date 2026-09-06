@@ -686,7 +686,11 @@ class FXEngine {
     if (kind === 'none') { this.particles = []; return; }
     const dt = this.pTime < 0 || t < this.pTime ? 0.016 : Math.min(0.1, t - this.pTime);
     this.pTime = t;
-    const targetN = Math.floor((kind === 'rain' ? 70 : kind === 'sakura' ? 40 : kind === 'snow' ? 60 : kind === 'embers' ? 45 : 50) * (0.5 + intensity));
+    // 粒子の量 = 種類別の基準数 × エネルギー × ユーザー指定の密度(既定1.0)
+    const density = this.timeline?.particleDensity ?? 1;
+    const base = kind === 'rain' ? 70 : kind === 'sakura' ? 40 : kind === 'snow' ? 60 : kind === 'embers' ? 45 : 50;
+    const targetN = Math.floor(base * (0.5 + intensity) * density);
+    if (targetN <= 0) { this.particles = []; return; }
     while (this.particles.length < targetN) this.particles.push(this._spawn(kind, W, H, true));
     if (this.particles.length > targetN + 20) this.particles.length = targetN + 20;
     ctx.save();
