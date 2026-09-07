@@ -57,6 +57,10 @@ class DanceStage {
 
   loadVRM(url) {
     if (this.vrmUrl === url && this._loadingVrm) return this._loadingVrm;
+    // 失敗直後の再試行を間引く(描画ループから毎フレーム呼ばれるため)
+    if (this._vrmFail === url && performance.now() < this._vrmRetryAt) {
+      return Promise.reject(new Error('retry cooldown'));
+    }
     this.vrmUrl = url;
     this._loadingVrm = (async () => {
       const loader = new GLTFLoader();
@@ -69,19 +73,41 @@ class DanceStage {
       this.scene.add(vrm.scene);
       this.vrm = vrm;
       if (this.player) this.player.attach(vrm);
+      this._vrmFail = null;
       return vrm;
-    })();
+    })().catch((e) => {
+      // 失敗したURLを保持したままだと `vrmUrl !== d.vrm_url` が成立せず
+      // 二度と再読込されない(VRM Atelier起動前に掴んだ502で「モデルが出ない」が
+      // 固定化していた)。状態を巻き戻して次のフレームで再試行できるようにする。
+      this.vrmUrl = null; this._loadingVrm = null;
+      this._vrmFail = url; this._vrmRetryAt = performance.now() + 2500;
+      this.lastError = e;
+      console.warn('[Stage3D] VRMの読み込みに失敗、2.5秒後に再試行します:', e.message);
+      throw e;
+    });
     return this._loadingVrm;
   }
 
   loadVMD(url) {
     if (this.vmdUrl === url && this._loadingVmd) return this._loadingVmd;
+    if (this._vmdFail === url && performance.now() < this._vmdRetryAt) {
+      return Promise.reject(new Error('retry cooldown'));
+    }
     this.vmdUrl = url;
     this._loadingVmd = (async () => {
-      const ab = await (await fetch(url)).arrayBuffer();
-      this.player = VMDPlayer.parse(ab);
+      const res = await fetch(url);
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      this.player = VMDPlayer.parse(await res.arrayBuffer());
+      if (this.vrm) this.player.attach(this.vrm);
+      this._vmdFail = null;
       return this.player;
-    })();
+    })().catch((e) => {
+      this.vmdUrl = null; this._loadingVmd = null;
+      this._vmdFail = url; this._vmdRetryAt = performance.now() + 2500;
+      this.lastError = e;
+      console.warn('[Stage3D] VMDの読み込みに失敗、2.5秒後に再試行します:', e.message);
+      throw e;
+    });
     return this._loadingVmd;
   }
 

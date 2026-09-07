@@ -567,17 +567,25 @@ class Editor {
   }
 
   /* ---- 3Dダンス (VRM × MMD): VRM Atelier連携 + ファイルアップロード ---- */
-  async _loadAtelier() {
-    if (this._atelier) return this._atelier;
-    const out = { connected: false, avatars: [], motions: [] };
+  async _loadAtelier(force) {
+    // 成功時のみキャッシュする。失敗をキャッシュすると、後からVRM Atelierを
+    // 起動しても一覧が空のままになり「アバターを選べない」状態が固定化する。
+    if (this._atelier?.connected && !force) return this._atelier;
+    const out = { connected: false, avatars: [], motions: [], reason: '' };
     try {
       const st = await API.req('GET', '/atelier/status');
       if (st.connected) {
         out.connected = true;
         out.avatars = (await API.req('GET', '/atelier/avatars')).avatars || [];
         out.motions = (await API.req('GET', '/atelier/motions')).motions || [];
+      } else {
+        out.reason = /refus|connection|timed out/i.test(st.reason || '')
+          ? 'VRM Atelier (:4188) が起動していません'
+          : (st.reason || '未接続');
       }
-    } catch { /* 未設定/未起動 */ }
+    } catch (e) {
+      out.reason = 'APIキー未設定またはVRM Atelierに到達できません';
+    }
     this._atelier = out;
     return out;
   }
@@ -593,15 +601,20 @@ class Editor {
       return;
     }
     // セレクトをAtelier一覧で埋める
-    this._loadAtelier().then(at => {
-      const vs = $('#dn-vrm-sel'), ms = $('#dn-vmd-sel');
+    const fillAtelier = (force) => this._loadAtelier(force).then(at => {
+      const vs = $('#dn-vrm-sel'), ms = $('#dn-vmd-sel'), note = $('#dn-atelier-note');
       if (!vs || !ms) return;
       const proxied = u => '/api/v1/atelier/file?path=' + encodeURIComponent(u);
       vs.innerHTML = '<option value="">— 選択 —</option>' + at.avatars.map(a =>
-        `<option value="${proxied(a.file_url)}">${esc(a.name)}</option>`).join('') +
-        (at.connected ? '' : '<option value="" disabled>(Atelier未接続: .envにLF_ATELIER_KEY)</option>');
+        `<option value="${proxied(a.file_url)}">${esc(a.name)}</option>`).join('');
       ms.innerHTML = '<option value="">なし (立ちポーズ)</option>' + at.motions.map(m =>
         `<option value="${proxied(m.file_url)}">${esc(m.name)}</option>`).join('');
+      if (note) {
+        note.textContent = at.connected
+          ? `アバター${at.avatars.length} / モーション${at.motions.length}`
+          : `${at.reason} — 起動後に「↻ 再読込」`;
+        note.style.color = at.connected ? 'var(--muted)' : 'var(--warn, #e8a33d)';
+      }
       if (d.vrm_url) vs.value = d.vrm_url;
       if (d.vmd_url) ms.value = d.vmd_url;
       vs.onchange = e => {
@@ -615,6 +628,8 @@ class Editor {
         this.markDirty();
       };
     });
+    fillAtelier(false);
+    $('#dn-reload').onclick = () => fillAtelier(true);
     $('#dn-vrm-up').onclick = () => $('#dn-vrm-file').click();
     $('#dn-vmd-up').onclick = () => $('#dn-vmd-file').click();
     $('#dn-vrm-file').onchange = e => this._uploadDanceFile(e.target.files[0], 'vrm');
@@ -878,6 +893,9 @@ class Editor {
           <div class="prop-row"><span>横位置</span><input type="range" id="dn-x" min="0" max="100" value="${(this.tl.dance.x ?? 0.5) * 100}"></div>
           <div class="prop-row"><span>開始オフセット(秒)</span><input type="number" class="input sm" id="dn-offset" step="0.1" value="${this.tl.dance.offset || 0}" style="width:64px"></div>
           <div class="prop-row"><span>VMDカメラで撮る</span><input type="checkbox" id="dn-camera" ${this.tl.dance.camera ? 'checked' : ''}></div>
+          <div class="prop-row"><span>連携</span><span style="display:flex;gap:5px;align-items:center">
+            <button class="btn sm" id="dn-reload">↻ 再読込</button></span></div>
+          <div id="dn-atelier-note" style="font-size:10.5px;color:var(--muted);margin:2px 0 4px">読み込み中…</div>
           <button class="btn danger sm" id="dn-del" style="width:100%;justify-content:center;margin-top:5px">3Dダンスを外す</button>
         ` : `
           <div class="empty-note" style="padding:4px 2px;text-align:left;font-size:11px">VRMアバターにMMD(VMD)モーションを踊らせて合成します。VRM Atelier連携またはファイルアップロードで設定。</div>

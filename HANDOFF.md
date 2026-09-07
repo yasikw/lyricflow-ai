@@ -16,6 +16,14 @@
 - FXEngine: `_drawDance()`(subjectの直後に描画) / `prepareDance()`(書き出し前プリロード)。
   レイヤー順: 背景 → subject → **dance** → 歌詞。
 
+## 連携が切れたときの復帰(重要)
+
+- `_loadAtelier()` は**成功時のみキャッシュ**する。失敗をキャッシュすると、後から
+  VRM Atelierを起動しても一覧が空のままになり「アバターを選べない」が固定化する。
+- `Stage3D.loadVRM/loadVMD` は**失敗時に vrmUrl/vmdUrl を巻き戻す**。保持したままだと
+  `st.vrmUrl !== d.vrm_url` が成立せず二度と再読込されない(2.5秒バックオフで再試行)。
+- 3Dダンスパネルに接続状態と「↻ 再読込」を表示する。
+
 ## in-flight
 
 - なし(3Dダンスレイヤー Phase1 完了・E2E確認済み)
