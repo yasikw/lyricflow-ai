@@ -40,9 +40,13 @@ class DanceStage {
   }
 
   _resetCamera() {
+    // 足元がキャンバス下端に来るようフレーミングする。以前は 0.15m〜1.69m しか
+    // 映しておらず足首から下が切れていたため、合成側の接地アンカー(by)が
+    // 実際の足元とズレ、縦位置スライダーを最大にしても収まらなかった。
+    // fov28 / 距離3.85 → 縦の可視範囲 ≈ 0.00m〜1.92m。
     this.camera.fov = 28;
-    this.camera.position.set(0, 1.02, 3.1);
-    this.camera.lookAt(0, 0.92, 0);
+    this.camera.position.set(0, 0.96, 3.85);
+    this.camera.lookAt(0, 0.96, 0);
     this.camera.updateProjectionMatrix();
   }
 
@@ -176,5 +180,8 @@ class DanceStage {
 window.Stage3D = {
   create: () => new DanceStage(),
   VMDPlayer,
+  // ステージ高に対する標準的なVRMの身長比(可視1.92mに対し身長約1.55m)。
+  // 合成側はこれで割って「大きさ=画面高に対するキャラの高さ」を保つ。
+  CHAR_FRAC: 0.81,
 };
 document.dispatchEvent(new Event('stage3d-ready'));
