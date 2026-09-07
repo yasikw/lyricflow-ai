@@ -162,7 +162,10 @@ class FXEngine {
     // 配置モード: 被写体と同じく接地アンカーで合成
     const scale = d.scale ?? 0.92;                       // 画面高に対するステージ高
     const sh = Math.max(64, Math.round(H * scale));
-    const sw = Math.round(sh * 0.72);
+    // ステージの横幅比。0.72固定だと腕を横に広げた振付で左右が切れるため、
+    // 既定を1:1にし、パネルから変更できるようにしている(縦のfovは不変なので
+    // 広げてもキャラの大きさは変わらず、見切れる範囲だけが減る)。
+    const sw = Math.round(sh * (d.aspect ?? 1.0));
     st.setSize(this.quality === 'draft' ? sw / 2 : sw, this.quality === 'draft' ? sh / 2 : sh);
     if (!st.renderAt(t, opts)) return;
     const cx = W * (d.x ?? 0.5), by = H * (d.y ?? 1.0);
@@ -172,7 +175,7 @@ class FXEngine {
     ctx.globalAlpha = 0.32;
     ctx.fillStyle = 'rgba(0,0,0,0.6)';
     ctx.beginPath();
-    ctx.ellipse(cx, by - H * 0.012, sw * 0.3, H * 0.018, 0, 0, Math.PI * 2);
+    ctx.ellipse(cx, by - H * 0.012, sh * 0.22, H * 0.018, 0, 0, Math.PI * 2);
     ctx.fill();
     ctx.globalAlpha = 1;
     ctx.drawImage(st.canvas, x, y, sw, sh);

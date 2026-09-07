@@ -8,7 +8,8 @@
 - 認証付きプロキシ: `GET /api/v1/atelier/status|avatars|motions`
 - **未認証**ファイルプロキシ: `GET /api/v1/atelier/file?path=/files/(avatars|motions|thumbs)/<name>`
   (GLTFLoader等が認証ヘッダ無しで取得するため。パス許可制・キーはサーバー側付与)
-- タイムライン: `timeline.dance = {enabled, vrm_url, vmd_url, vrm_name, vmd_name, offset, scale, x, y, camera, loop, speed}`
+- タイムライン: `timeline.dance = {enabled, vrm_url, vmd_url, vrm_name, vmd_name, offset, scale, x, y, aspect, camera, loop, speed}`
+  (`aspect` はステージの横幅比。未設定は1.0。以前は0.72固定で腕を広げると左右が切れていた)
 - アセットkind追加: `vrm→model3d` / `vmd→motion3d`(マジックバイト検証付き)
 - `static/stage/` は **vrm-avatar-platform がマスター**。直接編集せず、
   `~/manus/vrm-avatar-platform/sync_stage.sh` で同期する(SYNC_VERSION参照)。

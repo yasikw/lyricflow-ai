@@ -639,6 +639,16 @@ class Editor {
     $('#dn-y').oninput = e => { d.y = e.target.value / 100; this.markDirty(); };
     $('#dn-offset').onchange = e => { d.offset = +e.target.value || 0; this.markDirty(); };
     $('#dn-camera').onchange = e => { d.camera = e.target.checked; this.markDirty(); };
+    // ステージの横幅比(左右の見切れ対策)
+    $('#dn-ar').onclick = e => {
+      const b = e.target.closest('button[data-ar]');
+      if (!b) return;
+      d.aspect = +b.dataset.ar;
+      for (const x of e.currentTarget.querySelectorAll('button[data-ar]')) {
+        x.classList.toggle('primary', x === b);
+      }
+      this.markDirty();   // プレビューは毎フレーム描き直されるので即反映される
+    };
     $('#dn-del').onclick = () => {
       this.tl.dance = null;
       if (this.engine._stage) { this.engine._stage.dispose(); this.engine._stage = null; }
@@ -894,6 +904,10 @@ class Editor {
           <div class="prop-row"><span>横位置</span><input type="range" id="dn-x" min="0" max="100" value="${(this.tl.dance.x ?? 0.5) * 100}"></div>
           <div class="prop-row"><span>縦位置</span><input type="range" id="dn-y" min="0" max="120" value="${(this.tl.dance.y ?? 1.0) * 100}"></div>
           <div class="prop-row"><span>開始オフセット(秒)</span><input type="number" class="input sm" id="dn-offset" step="0.1" value="${this.tl.dance.offset || 0}" style="width:64px"></div>
+          <div class="prop-row"><span>ステージ比</span><span style="display:flex;gap:4px" id="dn-ar">
+            ${[['9:16', 0.5625], ['4:5', 0.8], ['1:1', 1], ['16:9', 1.7778]].map(([lab, v]) =>
+              `<button class="btn sm${Math.abs((this.tl.dance.aspect ?? 1) - v) < 0.01 ? ' primary' : ''}" data-ar="${v}">${lab}</button>`).join('')}
+          </span></div>
           <div class="prop-row"><span>VMDカメラで撮る</span><input type="checkbox" id="dn-camera" ${this.tl.dance.camera ? 'checked' : ''}></div>
           <div class="prop-row"><span>連携</span><span style="display:flex;gap:5px;align-items:center">
             <button class="btn sm" id="dn-reload">↻ 再読込</button></span></div>
