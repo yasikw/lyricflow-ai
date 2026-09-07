@@ -634,9 +634,31 @@ class Editor {
     $('#dn-vmd-up').onclick = () => $('#dn-vmd-file').click();
     $('#dn-vrm-file').onchange = e => this._uploadDanceFile(e.target.files[0], 'vrm');
     $('#dn-vmd-file').onchange = e => this._uploadDanceFile(e.target.files[0], 'vmd');
-    $('#dn-scale').oninput = e => { d.scale = e.target.value / 100; this.markDirty(); };
+    // 縦位置に必要な量は大きさに比例する(キャラが画面より大きいほど、下端まで
+    // 送るのに大きな値が要る)。上限を大きさに連動させ、常に端まで届くようにする。
+    const charFrac = () => window.Stage3D?._last?.charFrac || window.Stage3D?.CHAR_FRAC || 0.81;
+    const syncYRange = () => {
+      const yEl = $('#dn-y');
+      if (!yEl) return;
+      const max = Math.max(160, Math.round((1 + (d.scale ?? 0.92) / charFrac()) * 100));
+      yEl.max = String(max);
+      if (+yEl.value > max) { yEl.value = String(max); d.y = max / 100; }
+      const v = $('#dn-y-v');
+      if (v) v.textContent = Math.round(+yEl.value) + '%';
+    };
+    $('#dn-scale').oninput = e => {
+      d.scale = e.target.value / 100;
+      $('#dn-scale-v').textContent = e.target.value + '%';
+      syncYRange();
+      this.markDirty();
+    };
     $('#dn-x').oninput = e => { d.x = e.target.value / 100; this.markDirty(); };
-    $('#dn-y').oninput = e => { d.y = e.target.value / 100; this.markDirty(); };
+    $('#dn-y').oninput = e => {
+      d.y = e.target.value / 100;
+      $('#dn-y-v').textContent = e.target.value + '%';
+      this.markDirty();
+    };
+    syncYRange();
     $('#dn-offset').onchange = e => { d.offset = +e.target.value || 0; this.markDirty(); };
     $('#dn-camera').onchange = e => { d.camera = e.target.checked; this.markDirty(); };
     // ステージの横幅比(左右の見切れ対策)
@@ -900,9 +922,13 @@ class Editor {
           <div class="prop-row"><span>ファイル</span><span style="display:flex;gap:4px">
             <button class="btn sm" id="dn-vrm-up">↑vrm</button>
             <button class="btn sm" id="dn-vmd-up">↑vmd</button></span></div>
-          <div class="prop-row"><span>大きさ</span><input type="range" id="dn-scale" min="20" max="200" value="${(this.tl.dance.scale ?? 0.92) * 100}"></div>
+          <div class="prop-row"><span>大きさ</span>
+            <input type="range" id="dn-scale" min="20" max="400" value="${Math.round((this.tl.dance.scale ?? 0.92) * 100)}">
+            <span id="dn-scale-v" style="flex:none;width:38px;text-align:right;font-size:11px">${Math.round((this.tl.dance.scale ?? 0.92) * 100)}%</span></div>
           <div class="prop-row"><span>横位置</span><input type="range" id="dn-x" min="0" max="100" value="${(this.tl.dance.x ?? 0.5) * 100}"></div>
-          <div class="prop-row"><span>縦位置</span><input type="range" id="dn-y" min="0" max="160" value="${(this.tl.dance.y ?? 1.0) * 100}"></div>
+          <div class="prop-row"><span>縦位置</span>
+            <input type="range" id="dn-y" min="0" max="160" value="${Math.round((this.tl.dance.y ?? 1.0) * 100)}">
+            <span id="dn-y-v" style="flex:none;width:38px;text-align:right;font-size:11px">${Math.round((this.tl.dance.y ?? 1.0) * 100)}%</span></div>
           <div class="prop-row"><span>開始オフセット(秒)</span><input type="number" class="input sm" id="dn-offset" step="0.1" value="${this.tl.dance.offset || 0}" style="width:64px"></div>
           <div class="prop-row"><span>ステージ比</span><span style="display:flex;gap:4px" id="dn-ar">
             ${[['9:16', 0.5625], ['4:5', 0.8], ['1:1', 1], ['16:9', 1.7778]].map(([lab, v]) =>
