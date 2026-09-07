@@ -163,7 +163,9 @@ class FXEngine {
     const scale = d.scale ?? 0.92;                       // 画面高に対するキャラの身長
     // ステージ高 = 身長 ÷ 身長比。カメラは足元〜頭上までを映すので、
     // ステージ下端 = 足元 になり by(接地アンカー)が正しく効く。
-    const frac = window.Stage3D?.CHAR_FRAC || 0.81;
+    // 身長比はモデルごとに実測した値を優先する(チビキャラや長身モデルでも
+    // 「大きさ」がそのまま画面高に対する身長として効くように)
+    const frac = st.charFrac || window.Stage3D?.CHAR_FRAC || 0.81;
     const sh = Math.max(64, Math.round(H * scale / frac));
     // ステージの横幅比。0.72固定だと腕を横に広げた振付で左右が切れるため、
     // 既定を1:1にし、パネルから変更できるようにしている(縦のfovは不変なので

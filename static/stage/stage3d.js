@@ -39,6 +39,18 @@ class DanceStage {
     this._loadingVmd = null;
   }
 
+  /** モデルの実身長とステージ可視高から身長比を求める(モデル差を吸収) */
+  _measure() {
+    if (!this.vrm) return;
+    const box = new THREE.Box3().setFromObject(this.vrm.scene);
+    const h = box.max.y - box.min.y;
+    this.charHeight = (Number.isFinite(h) && h > 0.2) ? h : null;
+    // 縦の可視範囲 = 2 * 距離 * tan(fov/2)。_resetCamera と同じ値を使う。
+    const dist = 3.85;
+    this.viewHeight = 2 * dist * Math.tan(THREE.MathUtils.degToRad(28) / 2);
+    this.charFrac = this.charHeight ? this.charHeight / this.viewHeight : null;
+  }
+
   _resetCamera() {
     // 足元がキャンバス下端に来るようフレーミングする。以前は 0.15m〜1.69m しか
     // 映しておらず足首から下が切れていたため、合成側の接地アンカー(by)が
@@ -77,6 +89,7 @@ class DanceStage {
       this.scene.add(vrm.scene);
       this.vrm = vrm;
       if (this.player) this.player.attach(vrm);
+      this._measure();
       this._vrmFail = null;
       return vrm;
     })().catch((e) => {
@@ -178,7 +191,8 @@ class DanceStage {
 }
 
 window.Stage3D = {
-  create: () => new DanceStage(),
+  // 最後に生成したステージを保持(VRM Atelier の window._viewer と同じデバッグ用)
+  create: () => (window.Stage3D._last = new DanceStage()),
   VMDPlayer,
   // ステージ高に対する標準的なVRMの身長比(可視1.92mに対し身長約1.55m)。
   // 合成側はこれで割って「大きさ=画面高に対するキャラの高さ」を保つ。

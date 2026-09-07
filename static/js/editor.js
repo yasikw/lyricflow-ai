@@ -900,7 +900,7 @@ class Editor {
           <div class="prop-row"><span>ファイル</span><span style="display:flex;gap:4px">
             <button class="btn sm" id="dn-vrm-up">↑vrm</button>
             <button class="btn sm" id="dn-vmd-up">↑vmd</button></span></div>
-          <div class="prop-row"><span>大きさ</span><input type="range" id="dn-scale" min="40" max="120" value="${(this.tl.dance.scale ?? 0.92) * 100}"></div>
+          <div class="prop-row"><span>大きさ</span><input type="range" id="dn-scale" min="20" max="200" value="${(this.tl.dance.scale ?? 0.92) * 100}"></div>
           <div class="prop-row"><span>横位置</span><input type="range" id="dn-x" min="0" max="100" value="${(this.tl.dance.x ?? 0.5) * 100}"></div>
           <div class="prop-row"><span>縦位置</span><input type="range" id="dn-y" min="0" max="160" value="${(this.tl.dance.y ?? 1.0) * 100}"></div>
           <div class="prop-row"><span>開始オフセット(秒)</span><input type="number" class="input sm" id="dn-offset" step="0.1" value="${this.tl.dance.offset || 0}" style="width:64px"></div>
