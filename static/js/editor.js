@@ -636,6 +636,7 @@ class Editor {
     $('#dn-vmd-file').onchange = e => this._uploadDanceFile(e.target.files[0], 'vmd');
     $('#dn-scale').oninput = e => { d.scale = e.target.value / 100; this.markDirty(); };
     $('#dn-x').oninput = e => { d.x = e.target.value / 100; this.markDirty(); };
+    $('#dn-y').oninput = e => { d.y = e.target.value / 100; this.markDirty(); };
     $('#dn-offset').onchange = e => { d.offset = +e.target.value || 0; this.markDirty(); };
     $('#dn-camera').onchange = e => { d.camera = e.target.checked; this.markDirty(); };
     $('#dn-del').onclick = () => {
@@ -891,6 +892,7 @@ class Editor {
             <button class="btn sm" id="dn-vmd-up">↑vmd</button></span></div>
           <div class="prop-row"><span>大きさ</span><input type="range" id="dn-scale" min="40" max="120" value="${(this.tl.dance.scale ?? 0.92) * 100}"></div>
           <div class="prop-row"><span>横位置</span><input type="range" id="dn-x" min="0" max="100" value="${(this.tl.dance.x ?? 0.5) * 100}"></div>
+          <div class="prop-row"><span>縦位置</span><input type="range" id="dn-y" min="0" max="120" value="${(this.tl.dance.y ?? 1.0) * 100}"></div>
           <div class="prop-row"><span>開始オフセット(秒)</span><input type="number" class="input sm" id="dn-offset" step="0.1" value="${this.tl.dance.offset || 0}" style="width:64px"></div>
           <div class="prop-row"><span>VMDカメラで撮る</span><input type="checkbox" id="dn-camera" ${this.tl.dance.camera ? 'checked' : ''}></div>
           <div class="prop-row"><span>連携</span><span style="display:flex;gap:5px;align-items:center">
