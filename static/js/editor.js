@@ -63,6 +63,7 @@ const SCREEN_FX = [
   ['flash', 'フラッシュ(明滅)'], ['zoomblur', '放射ズームブラー'], ['rgbshift', 'RGBずれ'], ['scanlines', '走査線(CRT)'],
   ['vhs', 'VHS'], ['pixelate', 'モザイク/ピクセル'], ['halftone', '網点(ハーフトーン)'], ['mirror', 'ミラー/万華鏡'],
   ['hueshift', '色相サイクル'], ['lightleak', '光漏れ(リーク)'], ['oldfilm', '古いフィルム'], ['letterbox', 'シネスコ黒帯'],
+  ['colorama', 'コロラマ(極彩色)'], ['speedlines', '流線(集中線)'], ['lightning', '稲妻フラッシュ'], ['blinds', 'ブラインド'], ['cinema', 'シネマ色調'],
 ];
 const ORIENTS = [['horizontal', '横書き'], ['vertical', '縦書き']];
 const PARTICLES = [['rain', '雨'], ['sakura', '桜'], ['snow', '雪'], ['stars', '光の粒'], ['embers', '火の粉'], ['none', 'なし']];
@@ -864,6 +865,7 @@ class Editor {
         <label class="chk-row"><input type="checkbox" id="st-randsize" ${st.randomSize ? 'checked' : ''}><span>文字サイズをランダム化</span></label>
         <div class="prop-row"><span>横位置</span><input type="range" id="st-posx" min="4" max="96" value="${Math.round((st.posX ?? 0.5) * 100)}"></div>
         <div class="prop-row"><span>縦位置</span><input type="range" id="st-posy" min="4" max="96" value="${Math.round((st.posY ?? ((this.project.aspect_ratio === '9:16') ? 0.5 : 0.58)) * 100)}"></div>
+        <div class="prop-row"><span>傾き(斜め文字)</span><input type="range" id="st-tilt" min="-20" max="20" value="${Math.round(st.tilt || 0)}"></div>
         <button class="btn sm" id="st-poscenter" style="width:100%;justify-content:center;margin-top:2px">位置を中央に戻す</button>
         <div class="bgm-hint" style="margin-top:4px">プレビュー上の文字を直接ドラッグしても自由に配置できます。</div>
       </div>
@@ -967,6 +969,7 @@ class Editor {
     $('#st-randsize').onchange = e => { this.tl.lyricStyle.randomSize = e.target.checked; this.markDirty(); };
     $('#st-posx').oninput = e => { this.tl.lyricStyle.posX = e.target.value / 100; this.markDirty(); };
     $('#st-posy').oninput = e => { this.tl.lyricStyle.posY = e.target.value / 100; this.markDirty(); };
+    $('#st-tilt').oninput = e => { this.tl.lyricStyle.tilt = +e.target.value; this.markDirty(); };
     $('#st-poscenter').onclick = () => {
       const def = this.project.aspect_ratio === '9:16' ? 0.5 : 0.58;
       this.tl.lyricStyle.posX = 0.5; this.tl.lyricStyle.posY = def;

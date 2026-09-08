@@ -819,6 +819,14 @@ class FXEngine {
     // 色収差付きで合成
     const chroma = (fx.chroma || 0) * boost * (0.4 + energy);
     const ctx = this.ctx;
+    // 斜め文字(右上がり): テキストレイヤーを行の中心まわりに傾けて合成
+    const tiltDeg = style.tilt || 0;
+    ctx.save();
+    if (tiltDeg) {
+      const box = this._lyricBox;
+      const cxp = box ? box.x + box.w / 2 : W / 2, cyp = box ? box.y + box.h / 2 : H / 2;
+      ctx.translate(cxp, cyp); ctx.rotate(-tiltDeg * Math.PI / 180); ctx.translate(-cxp, -cyp);
+    }
     if (chroma > 0.06 && this.quality !== 'draft') {
       const off = Math.min(10, chroma * 6 * (W / 1280));
       ctx.save();
@@ -838,6 +846,7 @@ class FXEngine {
     } else {
       ctx.drawImage(this.textLayer, 0, 0);
     }
+    ctx.restore();
   }
 
   /* 出現アニメの状態を計算 (縦横で共有) */
@@ -1255,6 +1264,7 @@ class FXEngine {
     if (g('pixelate') > 0.03 && !draft) this._pixelate(ctx, W, H, g('pixelate'));
     if (g('mirror') > 0.03) this._mirror(ctx, W, H, g('mirror'), fx.mirrorMode);
     if (g('hueshift') > 0.02 && !draft) this._hueShift(ctx, W, H, t, g('hueshift'));
+    if (g('colorama') > 0.03 && !draft) this._colorama(ctx, W, H, g('colorama'), t, energy, boost);
     if (g('rgbshift') > 0.04 && !draft) this._rgbShift(ctx, W, H, g('rgbshift'), t);
     if (g('zoomblur') > 0.04 && !draft) this._zoomBlur(ctx, W, H, g('zoomblur') * (0.6 + energy * boost * 0.6), t);
     if (g('vhs') > 0.05 && !draft) this._vhs(ctx, W, H, g('vhs'), t);
@@ -1263,6 +1273,10 @@ class FXEngine {
     if (g('lightleak') > 0.04) this._lightLeak(ctx, t, W, H, C, g('lightleak'));
     if (g('flash') > 0.04) this._flash(ctx, W, H, C, g('flash'), t, energy, boost);
     if (g('oldfilm') > 0.05 && !draft) this._oldFilm(ctx, W, H, g('oldfilm'), t);
+    if (g('blinds') > 0.03) this._blinds(ctx, W, H, g('blinds'), t);
+    if (g('speedlines') > 0.03) this._speedLines(ctx, W, H, g('speedlines'), t, energy, boost);
+    if (g('lightning') > 0.03) this._lightning(ctx, W, H, g('lightning'), t, energy, boost);
+    if (g('cinema') > 0.03 && !draft) this._cinema(ctx, W, H, g('cinema'));
     if (g('letterbox') > 0.02) this._letterbox(ctx, W, H, g('letterbox'));
   }
 
@@ -1419,6 +1433,101 @@ class FXEngine {
     if (bh < 1) return;
     ctx.save(); ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, W, bh); ctx.fillRect(0, H - bh, W, bh);
+    ctx.restore();
+  }
+
+  /* --- 参考: もう石田「MV-Effects」でよく使われるボカロMVエフェクト --- */
+
+  // 一瞬コロラマ: 輝度を虹色に写像する極彩色フラッシュ。ビートで一瞬強く出る
+  _colorama(ctx, W, H, amt, t, energy, boost) {
+    this._copyFrame(W, H);
+    const pulse = Math.pow(Math.max(0, Math.sin(t * 6.0)), 6) * (0.4 + energy * boost);
+    const a = Math.min(1, amt * (0.5 + pulse));
+    ctx.save();
+    ctx.filter = `saturate(${(1 + amt * 3).toFixed(2)}) hue-rotate(${((t * 120) % 360) | 0}deg)`;
+    ctx.globalAlpha = a; ctx.drawImage(this.post, 0, 0); ctx.filter = 'none';
+    ctx.globalCompositeOperation = 'color';           // 虹色グラデを色として乗せる
+    ctx.globalAlpha = a * 0.55;
+    const g = ctx.createLinearGradient(0, 0, W, H), hueOff = (t * 90) % 360;
+    for (let i = 0; i <= 6; i++) g.addColorStop(i / 6, `hsl(${(hueOff + i * 60) % 360},100%,55%)`);
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+    ctx.restore();
+  }
+
+  // 流線(集中線): アニメ調の斜めスピードライン。中央は空け画面端に集中させる
+  _speedLines(ctx, W, H, amt, t, energy, boost) {
+    const ang = -Math.PI / 3, cos = Math.cos(ang), sin = Math.sin(ang), diag = Math.hypot(W, H);
+    const n = Math.round(30 + amt * 90), scroll = t * (120 + energy * boost * 240);
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.strokeStyle = this._alpha(this.timeline?.colors?.accent || '#ffffff', 1);
+    for (let i = 0; i < n; i++) {
+      const perp = (((this._hash01('sl' + i) * diag * 2 - diag + scroll) % (diag * 2)) + diag * 2) % (diag * 2) - diag;
+      const edge = Math.abs(perp) / diag;                         // 中央=0 端=1
+      if (edge < 0.18) continue;                                  // 中央は空ける
+      const px = W / 2 + (-sin) * perp, py = H / 2 + cos * perp;
+      const len = diag * (0.5 + this._hash01('sll' + i) * 0.5);
+      ctx.globalAlpha = Math.min(0.5, amt * edge * (0.25 + this._hash01('sla' + i) * 0.5));
+      ctx.lineWidth = Math.max(0.6, (0.6 + this._hash01('slw' + i) * 2.4) * (W / 1280));
+      ctx.beginPath();
+      ctx.moveTo(px - cos * len / 2, py - sin * len / 2);
+      ctx.lineTo(px + cos * len / 2, py + sin * len / 2);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  // フラッシュ稲妻: ジグザグの稲妻と閃光を断続的に走らせる
+  _lightning(ctx, W, H, amt, t) {
+    const bucket = Math.floor(t * 3);                             // ~0.33秒ごとに抽選
+    if (this._hash01('lg' + bucket) > 0.15 + amt * 0.5) return;
+    const flash = Math.pow(1 - ((t * 3) % 1), 3);                 // 立ち上がり後すぐ減衰
+    if (flash < 0.03) return;
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.fillStyle = this._alpha('#cfe3ff', amt * 0.35 * flash); ctx.fillRect(0, 0, W, H);
+    let x = W * (0.2 + this._hash01('lx' + bucket) * 0.6), y = 0;
+    ctx.strokeStyle = this._alpha('#eaf2ff', Math.min(1, amt * 1.2 * flash));
+    ctx.lineWidth = Math.max(1.5, (2 + amt * 3) * (W / 1280));
+    ctx.shadowColor = '#9cc2ff'; ctx.shadowBlur = 18 * (W / 1280);
+    ctx.beginPath(); ctx.moveTo(x, y);
+    const segs = 10;
+    for (let i = 1; i <= segs; i++) {
+      y = H * i / segs;
+      x = Math.max(0, Math.min(W, x + (this._hash01('lz' + bucket + '_' + i) - 0.5) * W * 0.16));
+      ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // さりげないブラインド: 横方向の細い暗帯をゆっくり流す
+  _blinds(ctx, W, H, amt, t) {
+    const gap = Math.max(6, Math.round(H / 26)), bar = gap * (0.3 + amt * 0.35);
+    const scroll = (t * gap * 0.5) % gap;
+    ctx.save();
+    ctx.fillStyle = this._alpha('#000', Math.min(0.5, amt * 0.5));
+    for (let y = -gap + scroll; y < H; y += gap) ctx.fillRect(0, y, W, bar);
+    ctx.restore();
+  }
+
+  // 色調補正(シネマ): ティール&オレンジのフィルミックグレード+周辺減光
+  _cinema(ctx, W, H, amt) {
+    this._copyFrame(W, H);
+    ctx.save();
+    ctx.globalAlpha = Math.min(1, amt);
+    ctx.filter = `contrast(${(1 + amt * 0.18).toFixed(2)}) saturate(${(1 + amt * 0.15).toFixed(2)}) brightness(0.98)`;
+    ctx.drawImage(this.post, 0, 0); ctx.filter = 'none';
+    ctx.globalCompositeOperation = 'multiply'; ctx.globalAlpha = amt * 0.28;
+    let g = ctx.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0, '#123a44'); g.addColorStop(1, '#0a2630');   // 影をティール
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+    ctx.globalCompositeOperation = 'screen'; ctx.globalAlpha = amt * 0.2;
+    ctx.fillStyle = '#ff7a2a'; ctx.fillRect(0, 0, W, H);          // ハイライトをオレンジ
+    ctx.globalCompositeOperation = 'multiply'; ctx.globalAlpha = amt * 0.5;
+    const vg = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.3, W / 2, H / 2, Math.max(W, H) * 0.72);
+    vg.addColorStop(0, 'rgba(255,255,255,1)'); vg.addColorStop(1, 'rgba(40,40,40,1)');   // 周辺減光
+    ctx.fillStyle = vg; ctx.fillRect(0, 0, W, H);
     ctx.restore();
   }
 
