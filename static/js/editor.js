@@ -15,6 +15,11 @@ const ANIMS = [
   ['rise-soft', 'ふわり上昇'], ['spin-in', 'スピンイン'], ['flip-in', 'フリップ(横)'], ['swing-in', 'スイング'],
   ['blur-in', 'ブラーイン'], ['stretch-in', 'ストレッチ'], ['typewriter', 'タイプライター'], ['cascade', 'カスケード(一字ずつ)'],
   ['wave', 'ウェーブ(波打ち)'], ['tumble', 'タンブル(一字ずつ回転)'],
+  // 文字PV / キネティックタイポ系
+  ['punch-in', 'パンチイン(巨大→収束)'], ['slam-down', 'スラムダウン(叩きつけ)'], ['squash-in', 'スカッシュ&ストレッチ'],
+  ['slide-left', 'スライド(左から)'], ['slide-right', 'スライド(右から)'], ['whoosh', 'ホワッシュ(横ブラー)'],
+  ['fly-through', 'フライスルー(奥→手前)'], ['roll-in', 'ロールイン(転がり)'], ['bounce-in', 'バウンス(弾む)'],
+  ['neon-flicker', 'ネオン点滅'], ['char-pop', '一字ポップ'], ['char-blur', '一字ブラー'], ['scatter-in', '飛散集合(四方から)'],
 ];
 const SCENES = [['city', 'ネオン都市'], ['sky', '夜空'], ['stars', '星空(高密度)'], ['grid', 'サイバーグリッド'], ['sunset', 'レトロサンセット'], ['stage', 'ステージ(照明)'], ['flat', 'フラット']];
 const LETTERINGS = [

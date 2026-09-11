@@ -853,13 +853,15 @@ class FXEngine {
   // entranceStart = 行の開始時刻。行が出た瞬間に全語が素早く一緒に入場(YouTube風・カラオケ無し)。
   _wordAnim(entranceStart, w, t, fs, anim, active, energy, lineOut, ci, cn) {
     ci = ci || 0; cn = cn || 1;
-    // 一字ずつ入場する系(タイプライター/カスケード/タンブル)は文字ごとに開始をずらす
-    const perCharStep = anim === 'typewriter' ? 0.055 : (anim === 'cascade' || anim === 'tumble') ? 0.04 : 0;
+    // 一字ずつ入場する系は文字ごとに開始をずらす(値=ディレイ秒)
+    const PC_STEP = { typewriter: 0.055, cascade: 0.04, tumble: 0.04, 'char-pop': 0.045, 'char-blur': 0.04, 'scatter-in': 0.03 };
+    const perCharStep = PC_STEP[anim] || 0;
     const dur = anim === 'typewriter' ? 0.05 : 0.2;
     const start = entranceStart - 0.12 + ci * perCharStep;
     const p = Math.min(1, Math.max(0, (t - start) / dur));
     const ease = 1 - Math.pow(1 - p, 3);
     const eob = 1 + 2.70158 * Math.pow(p - 1, 3) + 1.70158 * Math.pow(p - 1, 2);   // easeOutBack
+    const eoe = p >= 1 ? 1 : 1 - Math.pow(2, -10 * p);                              // easeOutExpo(キレのある減速)
     // 減衰振動(スイング/バウンス用)
     const damp = p < 1 ? Math.cos(p * Math.PI * 2.2) * (1 - p) : 0;
     let dx = 0, dy = 0, scale = 1, alpha = 1, rot = 0, sx = 1, sy = 1, blur = 0;
@@ -881,6 +883,24 @@ class FXEngine {
     else if (anim === 'cascade') { alpha = ease; dy = (1 - ease) * fs * 0.6; }
     else if (anim === 'tumble') { alpha = Math.min(1, ease * 1.4); dy = -(1 - eob) * fs * 0.9; rot = (1 - ease) * (ci % 2 ? 0.7 : -0.7); }
     else if (anim === 'wave') { alpha = ease; dy = Math.sin(t * 4 + ci * 0.7) * fs * 0.12; }   // 入場後もずっと波打つ
+    // ---- 文字PV / キネティックタイポ系(参考: KERU「文字PVお手軽技8選」他) ----
+    else if (anim === 'punch-in') { scale = 1 + (1 - eoe) * 1.8; alpha = Math.min(1, ease * 2.4); blur = (1 - p) * fs * 0.45; }        // 巨大→パンッと収まる
+    else if (anim === 'slam-down') { alpha = Math.min(1, ease * 2.6); dy = -(1 - eob) * fs * 1.6; sx = 1 + damp * 0.2; sy = 1 - damp * 0.2; } // 上から叩きつけ+着地スカッシュ
+    else if (anim === 'squash-in') { alpha = Math.min(1, ease * 1.7); sx = 1.5 - 0.5 * eob; sy = 0.55 + 0.45 * eob; }                   // 潰れ→伸び(行き過ぎ)
+    else if (anim === 'slide-left') { alpha = Math.min(1, ease * 1.6); dx = -(1 - eoe) * fs * 3.5; }                                   // 左から流入
+    else if (anim === 'slide-right') { alpha = Math.min(1, ease * 1.6); dx = (1 - eoe) * fs * 3.5; }                                   // 右から流入
+    else if (anim === 'whoosh') { alpha = Math.min(1, ease * 2); dx = (1 - eoe) * fs * 2.6; blur = (1 - p) * fs * 0.55; sx = 1 + (1 - eoe) * 0.5; } // 横ブラーで滑走
+    else if (anim === 'fly-through') { scale = 0.15 + eob * 0.85; alpha = Math.min(1, ease * 1.8); blur = (1 - ease) * fs * 0.35; }     // 奥から手前へ迫る
+    else if (anim === 'roll-in') { alpha = Math.min(1, ease * 1.5); dx = -(1 - eob) * fs * 2.2; rot = (1 - ease) * -1.1; }              // 転がりながら流入
+    else if (anim === 'bounce-in') { alpha = ease; dy = -Math.abs(damp) * fs * 1.4; }                                                 // 弾んで着地
+    else if (anim === 'neon-flicker') { alpha = p >= 1 ? 1 : (this._hash01(w.id + ':nf' + Math.floor(t * 20)) < 0.45 ? 0.12 : 1); }    // ネオン点灯の点滅
+    else if (anim === 'char-pop') { scale = 0.35 + eob * 0.65; alpha = Math.min(1, ease * 1.8); }                                     // 一字ずつポップ
+    else if (anim === 'char-blur') { alpha = ease; blur = (1 - ease) * fs * 0.32; dy = (1 - ease) * fs * 0.2; }                        // 一字ずつブラー解除
+    else if (anim === 'scatter-in') {                                                                                                  // 各字が四方から集合
+      const rx = this._hash01(w.id + ':qx' + ci), ry = this._hash01(w.id + ':qy' + ci), rr = this._hash01(w.id + ':qr' + ci);
+      dx = (rx - 0.5) * fs * 5 * (1 - eob); dy = (ry - 0.5) * fs * 5 * (1 - eob);
+      rot = (rr - 0.5) * 2.6 * (1 - ease); scale = 0.5 + ease * 0.5; alpha = Math.min(1, ease * 1.6);
+    }
     else { alpha = ease; }   // 不明な指定はフェード
     if (active) scale += Math.sin(t * 7 + w.start * 3) * 0.02 * (0.5 + energy);
     return { dx, dy, scale, alpha: alpha * (1 - lineOut), rot, sx, sy, blur, p };
@@ -1070,7 +1090,7 @@ class FXEngine {
     tracking = tracking || 0;
     const preset = style.lettering || 'neon';
     const entrance = lineStart != null ? lineStart : w.start;
-    const perChar = anim === 'typewriter' || anim === 'cascade' || anim === 'wave' || anim === 'tumble';
+    const perChar = ['typewriter', 'cascade', 'wave', 'tumble', 'char-pop', 'char-blur', 'scatter-in'].includes(anim);
     const glow = (style.glow ?? 0.6) * boost * (0.75 + energy * 0.5);
     const chars = [...w.word];
     const cn = chars.length;
@@ -1146,7 +1166,7 @@ class FXEngine {
         const w = wc.w;
         const isHead = w.id === headId;
         const glow = (style.glow ?? 0.6) * boost * (0.75 + energy * 0.5);
-        const perChar = anim === 'typewriter' || anim === 'cascade' || anim === 'wave' || anim === 'tumble';
+        const perChar = ['typewriter', 'cascade', 'wave', 'tumble', 'char-pop', 'char-blur', 'scatter-in'].includes(anim);
         const aw = perChar ? null : this._wordAnim(lineStartV, w, t, fs, anim, false, energy, lineOut);
         const cn = wc.chars.length;
         wc.chars.forEach((ch, i) => {
