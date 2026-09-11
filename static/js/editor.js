@@ -90,6 +90,8 @@ class Editor {
     this.destroyed = false;
     this.metronomeOn = false;
     try { this.metronomeOn = localStorage.getItem('lf_metronome') === '1'; } catch (_) {}
+    this.guides = { safe: false, center: false, grid: false };   // プレビュー専用ガイド(書き出し非対象)
+    try { const g = JSON.parse(localStorage.getItem('lf_guides') || '{}'); this.guides = { safe: !!g.safe, center: !!g.center, grid: !!g.grid }; } catch (_) {}
     this._metroScheduled = -Infinity;   // 予約済みの最終拍番号
   }
 
@@ -229,6 +231,11 @@ class Editor {
             <div class="aspect-mini" id="aspect-mini">
               ${Object.keys(ASPECTS).map(a => `<button data-a="${a}" class="${this.project.aspect_ratio === a ? 'sel' : ''}">${a}</button>`).join('')}
             </div>
+            <div class="t-guides" id="t-guides" title="ガイド表示（プレビューのみ・書き出しには含まれません）">
+              <button data-g="safe" class="${this.guides.safe ? 'on' : ''}" title="セーフゾーン">⛶</button>
+              <button data-g="center" class="${this.guides.center ? 'on' : ''}" title="中央の印">✛</button>
+              <button data-g="grid" class="${this.guides.grid ? 'on' : ''}" title="グリッド線（三分割）">▦</button>
+            </div>
           </div>
         </section>
         <aside class="ed-right" id="right-pane"></aside>
@@ -271,6 +278,13 @@ class Editor {
     $('#tp-end').onclick = () => this.seek(this.tl.duration || 0);
     $('#tp-prev').onclick = () => this.stepFrame(-1);
     $('#tp-next').onclick = () => this.stepFrame(1);
+    this.root.querySelectorAll('#t-guides button').forEach(b => b.onclick = () => {
+      const k = b.dataset.g;
+      this.guides[k] = !this.guides[k];
+      b.classList.toggle('on', this.guides[k]);
+      try { localStorage.setItem('lf_guides', JSON.stringify(this.guides)); } catch (_) {}
+      this.frame();   // 即座に再描画
+    });
     $('#tp-vol').oninput = e => { this.audio.volume = e.target.value / 100; };
     $('#title-in').onchange = e => { this.project.title = e.target.value; API.put('/projects/' + this.pid, { title: e.target.value }); };
     $('#quality-chip').onclick = () => {
@@ -441,6 +455,7 @@ class Editor {
     if (this.playing && this.t >= (this.tl.duration || 0)) { this.pause(); this.t = this.tl.duration || 0; }
     if (this.playing && this.metronomeOn && this.tl.bpm) this._metroTick();
     this.engine.render(this.t);
+    this._drawGuides();   // プレビュー専用ガイド(書き出しには含めない)
     const tt = this.root.querySelector('#tp-time');
     if (tt) tt.textContent = `${fmtTime(this.t)} / ${fmtTime(this.tl.duration || 0)}`;
     const sc = this.engine.sceneAt(this.t);
@@ -506,6 +521,42 @@ class Editor {
     const step = 1 / (this.tl.fps || 30);
     this.seek(this.t + dir * step);
     if (!this.playing) this.frame();   // 停止中はループが描かないので即描画
+  }
+
+  /* プレビュー専用ガイド(セーフゾーン/中央印/三分割グリッド)をステージに上描き。
+     エディタのframe()からのみ呼ぶため、書き出し(offscreenレンダ)には一切含まれない。 */
+  _drawGuides() {
+    const g = this.guides;
+    if (!g || (!g.safe && !g.center && !g.grid)) return;
+    const cv = this.engine?.canvas; if (!cv) return;
+    const ctx = cv.getContext('2d'); const W = cv.width, H = cv.height;
+    if (!W || !H) return;
+    ctx.save();
+    ctx.lineWidth = Math.max(1, W / 900);
+    if (g.grid) {   // 三分割グリッド
+      ctx.strokeStyle = 'rgba(255,255,255,0.28)';
+      ctx.beginPath();
+      for (let i = 1; i <= 2; i++) {
+        ctx.moveTo(W * i / 3, 0); ctx.lineTo(W * i / 3, H);
+        ctx.moveTo(0, H * i / 3); ctx.lineTo(W, H * i / 3);
+      }
+      ctx.stroke();
+    }
+    if (g.safe) {   // アクション/タイトルセーフ(90% / 80%)
+      ctx.strokeStyle = 'rgba(0,212,255,0.7)';
+      for (const m of [0.05, 0.10]) {
+        ctx.strokeRect(W * m, H * m, W * (1 - 2 * m), H * (1 - 2 * m));
+      }
+    }
+    if (g.center) {   // 中央のクロスマーク
+      ctx.strokeStyle = 'rgba(255,80,120,0.85)';
+      const cx = W / 2, cy = H / 2, s = Math.min(W, H) * 0.03;
+      ctx.beginPath();
+      ctx.moveTo(cx - s, cy); ctx.lineTo(cx + s, cy);
+      ctx.moveTo(cx, cy - s); ctx.lineTo(cx, cy + s);
+      ctx.stroke();
+    }
+    ctx.restore();
   }
 
   /* ---------------- left pane ---------------- */
