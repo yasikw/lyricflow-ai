@@ -868,6 +868,7 @@ class Editor {
         <div class="prop-row"><span>字間</span><input type="range" id="st-track" min="0" max="60" value="${(st.tracking || 0) * 100}"></div>
         <div class="prop-row"><span>グロー</span><input type="range" id="st-glow" min="0" max="100" value="${(st.glow ?? 0.6) * 100}"></div>
         <label class="chk-row"><input type="checkbox" id="st-randsize" ${st.randomSize ? 'checked' : ''}><span>文字サイズをランダム化</span></label>
+        <label class="chk-row"><input type="checkbox" id="st-randrot" ${st.randomRot ? 'checked' : ''}><span>文字の回転をランダム化</span></label>
         <div class="prop-row"><span>横位置</span><input type="range" id="st-posx" min="4" max="96" value="${Math.round((st.posX ?? 0.5) * 100)}"></div>
         <div class="prop-row"><span>縦位置</span><input type="range" id="st-posy" min="4" max="96" value="${Math.round((st.posY ?? ((this.project.aspect_ratio === '9:16') ? 0.5 : 0.58)) * 100)}"></div>
         <div class="prop-row"><span>傾き(斜め文字)</span><input type="range" id="st-tilt" min="-20" max="20" value="${Math.round(st.tilt || 0)}"></div>
@@ -972,6 +973,7 @@ class Editor {
     $('#st-track').oninput = e => { this.tl.lyricStyle.tracking = e.target.value / 100; this.markDirty(); };
     $('#st-glow').oninput = e => { this.tl.lyricStyle.glow = e.target.value / 100; this.markDirty(); };
     $('#st-randsize').onchange = e => { this.tl.lyricStyle.randomSize = e.target.checked; this.markDirty(); };
+    $('#st-randrot').onchange = e => { this.tl.lyricStyle.randomRot = e.target.checked; this.markDirty(); };
     $('#st-posx').oninput = e => { this.tl.lyricStyle.posX = e.target.value / 100; this.markDirty(); };
     $('#st-posy').oninput = e => { this.tl.lyricStyle.posY = e.target.value / 100; this.markDirty(); };
     $('#st-tilt').oninput = e => { this.tl.lyricStyle.tilt = +e.target.value; this.markDirty(); };

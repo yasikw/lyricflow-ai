@@ -1116,6 +1116,8 @@ class FXEngine {
       const py = gy + (perChar ? ac.dy : 0);
       if (perChar) this._applyAnimTransform(tc, ac, center, py);
       if (f !== 1) { tc.translate(center, py); tc.scale(f, f); tc.translate(-center, -py); }
+      // 一文字ずつランダム回転(決定論的=毎フレーム同じ)
+      if (style.randomRot) { const rr = (this._hash01(w.id + ':rr' + i) - 0.5) * 0.52; tc.translate(center, py); tc.rotate(rr); tc.translate(-center, -py); }
       this._paintGlyph(tc, ch, center, py, cw, fs, preset, true, ac.alpha, glow, C, style, t, w);
       tc.restore();
       lx += cw + (i < chars.length - 1 ? tracking : 0);
@@ -1177,8 +1179,9 @@ class FXEngine {
           tc.save();
           const gy = cy + a.dy;
           const px = cx + (a.dx || 0);
+          const rr = style.randomRot ? (this._hash01(w.id + ':rr' + i) - 0.5) * 0.52 : 0;
           tc.translate(px, gy);
-          if (a.rot) tc.rotate(a.rot);
+          if (a.rot || rr) tc.rotate(a.rot + rr);
           tc.scale(a.scale * (a.sx || 1) * jf, a.scale * (a.sy || 1) * jf);
           tc.translate(-px, -gy);
           if (a.blur && this.quality !== 'draft') { try { tc.filter = `blur(${a.blur.toFixed(1)}px)`; } catch (e) {} }
