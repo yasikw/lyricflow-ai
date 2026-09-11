@@ -148,6 +148,8 @@ class Editor {
       if (this._tapActive) return;                 // タップ同期中はSpaceを譲る
       if (e.target.matches('input,textarea,select')) return;
       if (e.code === 'Space') { e.preventDefault(); this.togglePlay(); }
+      if (e.code === 'ArrowRight') { e.preventDefault(); this.stepFrame(1); }
+      if (e.code === 'ArrowLeft') { e.preventDefault(); this.stepFrame(-1); }
       if (e.code === 'Delete' || e.code === 'Backspace') this.deleteSel();
     };
     document.addEventListener('keydown', this.keyHandler);
@@ -218,7 +220,9 @@ class Editor {
           </div>
           <div class="transport">
             <button class="t-btn" id="tp-start" title="先頭へ">⏮</button>
+            <button class="t-btn" id="tp-prev" title="1フレーム戻る（←）">◁</button>
             <button class="t-btn play" id="tp-play">▶</button>
+            <button class="t-btn" id="tp-next" title="1フレーム進む（→）">▷</button>
             <button class="t-btn" id="tp-end" title="末尾へ">⏭</button>
             <span class="t-time" id="tp-time">00:00.00 / 00:00.00</span>
             <input type="range" id="tp-vol" min="0" max="100" value="80" style="width:90px" title="音量">
@@ -265,6 +269,8 @@ class Editor {
     $('#tp-play').onclick = () => this.togglePlay();
     $('#tp-start').onclick = () => this.seek(0);
     $('#tp-end').onclick = () => this.seek(this.tl.duration || 0);
+    $('#tp-prev').onclick = () => this.stepFrame(-1);
+    $('#tp-next').onclick = () => this.stepFrame(1);
     $('#tp-vol').oninput = e => { this.audio.volume = e.target.value / 100; };
     $('#title-in').onchange = e => { this.project.title = e.target.value; API.put('/projects/' + this.pid, { title: e.target.value }); };
     $('#quality-chip').onclick = () => {
@@ -493,6 +499,13 @@ class Editor {
     this.t = Math.max(0, Math.min(this.tl.duration || 0, t));
     if (this.audio.src) this.audio.currentTime = this.t;
     this._syncBeatCursor();
+  }
+  /* 1フレーム送り/戻し(dir=+1/-1)。再生中は一時停止してコマ送り、その場で1フレーム描画 */
+  stepFrame(dir) {
+    if (this.playing) this.pause();
+    const step = 1 / (this.tl.fps || 30);
+    this.seek(this.t + dir * step);
+    if (!this.playing) this.frame();   // 停止中はループが描かないので即描画
   }
 
   /* ---------------- left pane ---------------- */
