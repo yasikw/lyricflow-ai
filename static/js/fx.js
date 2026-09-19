@@ -1067,13 +1067,16 @@ class FXEngine {
     const colored = preset in TINTED;
     if (glow > 0.05 && this.quality !== 'draft') {
       tc.shadowColor = TINTED[preset] || (active ? C.accent : this._alpha(C.accent2, 0.8));
-      tc.shadowBlur = fs * 0.45 * glow * (colored ? 0.8 : 1);
+      tc.shadowBlur = fs * 0.28 * Math.min(1.15, glow) * (colored ? 0.8 : 1);   // 可読性優先で控えめに
     }
     tc.fillStyle = fill;
     tc.fillText(text, cx, cy);
-    // 芯の発光(白): 色を飛ばさないよう色付きプリセットとmarkerでは省く
-    if (active && glow > 0.3 && preset !== 'marker' && !colored) {
-      tc.shadowBlur = fs * 0.14; tc.fillStyle = '#ffffff'; tc.globalAlpha = alpha * 0.5;
+    // 芯を1回描き直して縁をシャープに保つ(グローで潰れないように)
+    tc.shadowBlur = 0;
+    tc.fillText(text, cx, cy);
+    // 芯の発光(白): 色を飛ばさないよう色付きプリセットとmarkerでは省く。控えめに
+    if (active && glow > 0.5 && preset !== 'marker' && !colored) {
+      tc.shadowBlur = fs * 0.1; tc.fillStyle = '#ffffff'; tc.globalAlpha = alpha * 0.28;
       tc.fillText(text, cx, cy); tc.globalAlpha = alpha;
     }
     tc.shadowBlur = 0;
@@ -1091,7 +1094,7 @@ class FXEngine {
     const preset = style.lettering || 'neon';
     const entrance = lineStart != null ? lineStart : w.start;
     const perChar = ['typewriter', 'cascade', 'wave', 'tumble', 'char-pop', 'char-blur', 'scatter-in'].includes(anim);
-    const glow = (style.glow ?? 0.6) * boost * (0.75 + energy * 0.5);
+    const glow = (style.glow ?? 0.6) * (0.7 + boost * 0.3) * (0.85 + energy * 0.25);   // 滲み過ぎ防止に振れ幅を抑制
     const chars = [...w.word];
     const cn = chars.length;
     // 語まとめアニメ(既定): 語ごとに一括変形。per-charアニメは各文字を個別に変形。
@@ -1167,7 +1170,7 @@ class FXEngine {
       for (const wc of col) {
         const w = wc.w;
         const isHead = w.id === headId;
-        const glow = (style.glow ?? 0.6) * boost * (0.75 + energy * 0.5);
+        const glow = (style.glow ?? 0.6) * (0.7 + boost * 0.3) * (0.85 + energy * 0.25);   // 滲み過ぎ防止に振れ幅を抑制
         const perChar = ['typewriter', 'cascade', 'wave', 'tumble', 'char-pop', 'char-blur', 'scatter-in'].includes(anim);
         const aw = perChar ? null : this._wordAnim(lineStartV, w, t, fs, anim, false, energy, lineOut);
         const cn = wc.chars.length;
