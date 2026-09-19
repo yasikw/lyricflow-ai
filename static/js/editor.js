@@ -36,10 +36,16 @@ const FONTS = [
   ["'M PLUS Rounded 1c', sans-serif", 'M PLUS Rounded 1c (丸)', 'ゴシック'],
   ["'Zen Maru Gothic', sans-serif", 'Zen丸ゴシック', 'ゴシック'],
   ["'Kosugi Maru', sans-serif", '小杉丸ゴシック', 'ゴシック'],
+  ["'BIZ UDPGothic', sans-serif", 'BIZ UDPゴシック', 'ゴシック'],
+  ["'Zen Kurenaido', sans-serif", 'Zenくれなゐど (硬筆)', 'ゴシック'],
   // 明朝 / セリフ
   ["'Noto Serif JP', serif", 'Noto Serif JP (明朝)', '明朝'],
   ["'Shippori Mincho', serif", 'しっぽり明朝', '明朝'],
   ["'Zen Old Mincho', serif", 'Zen Old明朝', '明朝'],
+  ["'Kaisei Tokumin', serif", 'Kaisei Tokumin (太明朝)', '明朝'],
+  ["'New Tegomin', serif", 'New Tegomin (時代劇風)', '明朝'],
+  ["'Zen Antique', serif", 'Zen Antique (レトロ明朝)', '明朝'],
+  ["'Hina Mincho', serif", 'ひな明朝 (繊細)', '明朝'],
   // ディスプレイ / 太字インパクト
   ["'Dela Gothic One', sans-serif", 'Dela Gothic One (極太)', 'ディスプレイ'],
   ["'Reggae One', sans-serif", 'Reggae One (極太)', 'ディスプレイ'],
@@ -55,6 +61,8 @@ const FONTS = [
   ["'Yusei Magic', sans-serif", '油性マジック', 'ポップ/手書き'],
   ["'Klee One', cursive", 'クレー (教科書体)', 'ポップ/手書き'],
   ["'Yuji Syuku', serif", 'Yuji Syuku (筆)', 'ポップ/手書き'],
+  ["'Yuji Mai', serif", 'Yuji Mai (崩し筆)', 'ポップ/手書き'],
+  ["'Yomogi', cursive", 'Yomogi (手書き)', 'ポップ/手書き'],
   // 欧文
   ["'Inter', sans-serif", 'Inter', '欧文'],
   ["'Montserrat', sans-serif", 'Montserrat', '欧文'],
@@ -62,6 +70,7 @@ const FONTS = [
   ["'Bebas Neue', sans-serif", 'Bebas Neue (見出し)', '欧文'],
   ["'Anton', sans-serif", 'Anton (極太)', '欧文'],
   ["'Playfair Display', serif", 'Playfair Display', '欧文'],
+  ["'Zen Dots', cursive", 'Zen Dots (サイバー)', '欧文'],
 ];
 // 画面全体エフェクト (fx.js の _screenFx と対応)
 const SCREEN_FX = [
@@ -891,6 +900,10 @@ class Editor {
             <option value="codex" ${App.codexAvailable ? '' : 'disabled'}>Codex${App.codexAvailable ? '' : ' (未接続)'}</option>
           </select>
         </div>
+        <div class="ai-brief">
+          <textarea class="input" id="ai-brief" rows="2" placeholder="例: 疾走感のあるサイバーロックMV。ネオン発光・集中線・パンチインの文字、力強いゴシック体で。">${esc(this.tl.brief || '')}</textarea>
+          <button class="ai-btn director" id="ai-direct"><span class="ic">🎬</span><span>会話でMV演出 (AIディレクター)<small>ブリーフから配色・フォント・アニメ・エフェクト・背景まで自動構成</small></span></button>
+        </div>
         <div class="ai-tools">
           <button class="ai-btn" id="ai-tap"><span class="ic">🎯</span><span>タップ同期<small>再生しながら行頭でタップ＝最も正確</small></span></button>
           <button class="ai-btn" id="ai-sync"><span class="ic">♪</span><span>${App.whisperAvailable ? 'AI自動同期 (Whisper)' : 'AI自動同期'}<small>${App.whisperAvailable ? '実音声を認識し強制アライメント(高精度)' : '無音を除外しオンセットにスナップ(近似)'}</small></span></button>
@@ -1023,6 +1036,12 @@ class Editor {
     engSel.value = this.aiEngine();
     engSel.onchange = e => { localStorage.setItem('lf_ai_engine', e.target.value); };
     $('#ai-suggest').onclick = () => this.runSuggest();
+    $('#ai-brief').oninput = e => { this.tl.brief = e.target.value; this.markDirty(); };
+    $('#ai-direct').onclick = () => {
+      const brief = (this.root.querySelector('#ai-brief').value || '').trim();
+      if (!brief) return toast('作りたいMVのイメージを一文で入力してください', 'err');
+      this.runSuggest(brief);
+    };
     $('#ai-tap').onclick = () => this.openTapSync();
     $('#ai-sync').onclick = () => this.runSync();
     $('#ai-scene').onclick = () => this.runSceneAnalysis();
@@ -1118,33 +1137,43 @@ class Editor {
     return (e === 'codex' && App.codexAvailable) ? 'codex' : 'builtin';
   }
 
-  async runSuggest() {
-    if (!this.tl.lyrics_text?.trim()) return toast('先に歌詞を入力してください(左の歌詞タブ)', 'err');
+  async runSuggest(brief) {
+    // briefあり=会話ディレクター(歌詞なしでも可)、briefなし=歌詞から提案
+    if (!brief && !this.tl.lyrics_text?.trim()) return toast('先に歌詞を入力するか、イメージを入力してください', 'err');
     const engine = this.aiEngine();
     const { job_id } = await API.post('/ai/suggest', {
-      workspace_id: this.project.workspace_id, lyrics_text: this.tl.lyrics_text, engine,
+      workspace_id: this.project.workspace_id, lyrics_text: this.tl.lyrics_text || '', engine,
+      brief: brief || '',
     });
     let res;
     try { res = await API.waitJob(job_id, j => this.showJob(j.stage, j.progress_pct)); }
     catch (e) { return toast('演出提案に失敗: ' + e.message, 'err'); }
-    const msg = `${res.engine === 'codex' ? 'Codex' : 'Built-in'} の提案:\n\n` +
+    const fontLabel = (FONTS.find(f => f[0] === res.font) || [])[1];
+    const sfxOn = res.screen_fx ? Object.entries(res.screen_fx).filter(([, v]) => v > 0.03).map(([k]) => k) : [];
+    const msg = `${res.engine === 'codex' ? 'Codex' : 'Built-in'} の演出設計:\n\n` +
       `背景: ${res.scene} / 粒子: ${res.particles} / アニメ: ${res.anim}` +
       `${res.lettering ? ' / 文字: ' + res.lettering : ''}${res.orient === 'vertical' ? ' / 縦書き' : ''}\n` +
+      `${fontLabel ? 'フォント: ' + fontLabel + '\n' : ''}` +
+      `${sfxOn.length ? '画面エフェクト: ' + sfxOn.join(', ') + '\n' : ''}` +
+      `${res.tilt ? '文字傾き: ' + res.tilt + '°\n' : ''}${res.random ? 'サイズランダム: ON\n' : ''}` +
       `${res.rationale || ''}\n\nこの演出を適用しますか?`;
     if (!confirm(msg)) return;
     const ls = { ...this.tl.lyricStyle, anim: res.anim, color: res.colors.text, glow: res.fx.bloom };
     if (res.lettering) ls.lettering = res.lettering;
     if (res.orient) ls.orient = res.orient;
+    if (res.font) { ls.font = res.font; this.ensureFont(res.font); }
+    if (res.tilt != null) ls.tilt = res.tilt;
+    if (res.random != null) ls.randomSize = !!res.random;
     Object.assign(this.tl, {
-      colors: res.colors, fx: { ...this.tl.fx, ...res.fx }, particles: res.particles, sceneDefault: res.scene,
-      lyricStyle: ls,
+      colors: res.colors, fx: { ...this.tl.fx, ...res.fx, ...(res.screen_fx || {}) },
+      particles: res.particles, sceneDefault: res.scene, lyricStyle: ls,
     });
     if (this.tl.tracks.background[0]) this.tl.tracks.background[0].scene = res.scene;
     else this.tl.tracks.background.push({ id: 'bg' + Date.now(), start: 0, end: this.tl.duration || 60, scene: res.scene });
     this.engine.particles = [];
     this.engine.setTimeline(this.tl);
     this.markDirty(); this.renderRight(); this.renderTimeline();
-    toast(`演出提案を適用しました (${res.engine})`, 'ok');
+    toast(`AIディレクターの演出を適用しました (${res.engine})`, 'ok');
   }
 
   /* ---------------- タップ同期 (最も正確な手動同期) ---------------- */

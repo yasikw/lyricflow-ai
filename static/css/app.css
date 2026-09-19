@@ -425,6 +425,10 @@ pre.code {
 .ai-engine-row select { width: 128px; padding: 5px 8px; font-size: 12px; }
 .chk-row { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); cursor: pointer; padding: 4px 2px; }
 .chk-row input[type=checkbox] { width: 15px; height: 15px; accent-color: var(--cyan); cursor: pointer; }
+.ai-brief { display: flex; flex-direction: column; gap: 7px; margin-bottom: 10px; }
+.ai-brief textarea { width: 100%; resize: vertical; min-height: 46px; font-size: 12px; line-height: 1.5; padding: 8px 10px; border-radius: 7px; }
+.ai-btn.director { border-color: var(--cyan); background: linear-gradient(135deg, rgba(0,212,255,.12), rgba(123,47,247,.14)); }
+.ai-btn.director:hover { border-color: var(--cyan); background: linear-gradient(135deg, rgba(0,212,255,.2), rgba(123,47,247,.22)); }
 .ai-tools { display: flex; flex-direction: column; gap: 8px; }
 .ai-btn {
   display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 7px; text-align: left;

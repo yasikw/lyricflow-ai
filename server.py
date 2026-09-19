@@ -749,22 +749,37 @@ SCENE_OPTS = ["city", "sky", "stars", "grid", "sunset", "stage", "flat"]
 PARTICLE_OPTS = ["rain", "sakura", "snow", "stars", "embers", "none"]
 ANIM_OPTS = ["glow-pop", "fade", "fade-up", "slide-up", "pop-scale", "glitch-in",
              "zoom-in", "drop-in", "rise-soft", "spin-in", "flip-in", "swing-in",
-             "blur-in", "stretch-in", "typewriter", "cascade", "wave", "tumble"]
+             "blur-in", "stretch-in", "typewriter", "cascade", "wave", "tumble",
+             "punch-in", "slam-down", "squash-in", "slide-left", "slide-right", "whoosh",
+             "fly-through", "roll-in", "bounce-in", "neon-flicker", "char-pop", "char-blur", "scatter-in"]
 LETTERING_OPTS = ["neon", "outline", "marker", "brush", "chrome", "longshadow",
                   "gold", "gradient", "rainbow", "fire", "ice", "shadow3d",
                   "glitch", "retro", "sticker", "pill"]
 ORIENT_OPTS = ["horizontal", "vertical"]
+# AIディレクターが選べるフォント(CSS font-family)。static/js/editor.js の FONTS と対応
+FONT_OPTS = ["'Zen Kaku Gothic New', sans-serif", "'Noto Sans JP', sans-serif", "'Dela Gothic One', sans-serif",
+             "'Reggae One', sans-serif", "'Anton', sans-serif", "'Oswald', sans-serif", "'Zen Dots', cursive",
+             "'Kaisei Tokumin', serif", "'Shippori Mincho', serif", "'Hina Mincho', serif", "'New Tegomin', serif",
+             "'Yuji Mai', serif", "'Mochiy Pop One', sans-serif", "'Hachi Maru Pop', cursive", "'Rampart One', sans-serif"]
+SCREEN_FX_OPTS = ["colorama", "speedlines", "lightning", "blinds", "cinema"]
 
-def suggest_direction(lyrics_text, mood="", engine="builtin"):
-    """歌詞の雰囲気から背景シーン・配色・パーティクル・エフェクト強度を提案する。"""
+def suggest_direction(lyrics_text, mood="", engine="builtin", brief=""):
+    """歌詞＋自然言語ブリーフから、MV全体の演出(背景/配色/フォント/文字アニメ/
+    レタリング/画面エフェクト/傾き)をひとまとめに設計する(AIディレクター)。"""
     if engine == "codex" and codex_available():
         try:
             schema = {"type": "object", "additionalProperties": False,
-                      "required": ["scene", "particles", "anim", "lettering", "orient", "colors", "fx", "rationale"],
+                      "required": ["scene", "particles", "anim", "lettering", "orient", "font",
+                                   "colors", "fx", "screen_fx", "tilt", "random", "rationale"],
                       "properties": {
                           "scene": {"type": "string", "enum": SCENE_OPTS},
                           "particles": {"type": "string", "enum": PARTICLE_OPTS},
                           "anim": {"type": "string", "enum": ANIM_OPTS},
+                          "font": {"type": "string", "enum": FONT_OPTS},
+                          "screen_fx": {"type": "object", "additionalProperties": False,
+                                        "required": SCREEN_FX_OPTS,
+                                        "properties": {k: {"type": "number"} for k in SCREEN_FX_OPTS}},
+                          "tilt": {"type": "number"}, "random": {"type": "boolean"},
                           "lettering": {"type": "string", "enum": LETTERING_OPTS},
                           "orient": {"type": "string", "enum": ORIENT_OPTS},
                           "colors": {"type": "object", "additionalProperties": False,
@@ -774,22 +789,31 @@ def suggest_direction(lyrics_text, mood="", engine="builtin"):
                                  "required": ["bloom", "glitch", "chroma", "wave", "godray", "flare", "dof"],
                                  "properties": {k: {"type": "number"} for k in ("bloom", "glitch", "chroma", "wave", "godray", "flare", "dof")}},
                           "rationale": {"type": "string"}}}
-            prompt = ("You are an art director for cinematic anime-style lyric music videos. Based on the lyrics' mood, "
-                      "design one cohesive visual look. Choose scene from " + str(SCENE_OPTS) +
+            prompt = ("You are an art director for cinematic anime-style lyric music videos (Japanese vocaloid / "
+                      "kinetic-typography style). Follow the USER BRIEF first, then the lyrics' mood, and design one "
+                      "cohesive look. Choose scene from " + str(SCENE_OPTS) +
                       " ('stage' = concert stage with spotlights), particles from " + str(PARTICLE_OPTS) +
-                      ", lyric animation from " + str(ANIM_OPTS) + ", lettering style from " + str(LETTERING_OPTS) +
-                      ", text orientation from " + str(ORIENT_OPTS) + " (vertical = Japanese tategaki, good for ballads). "
-                      "Provide 5 hex colors (bg1/bg2 dark background gradient, accent & accent2 neon highlights, "
-                      "text usually #ffffff) and fx intensities 0..1 (bloom, glitch, chroma, wave, godray=light shafts, "
-                      "flare=lens flare, dof=depth of field). Write a one-sentence Japanese rationale. Return JSON only.\n\n"
-                      + (f"Mood hint: {mood}\n" if mood else "") + "Lyrics:\n" + lyrics_text[:1500])
+                      ", lyric entrance animation from " + str(ANIM_OPTS) +
+                      " (punch-in/slam-down/whoosh/scatter-in etc. are punchy kinetic-type styles), "
+                      "lettering from " + str(LETTERING_OPTS) + ", text orientation from " + str(ORIENT_OPTS) +
+                      " (vertical = Japanese tategaki, good for ballads/wa), and a font CSS family from " + str(FONT_OPTS) +
+                      " (Dela Gothic One/Anton = bold impact; Zen Dots/Oswald = cyber/techno; Kaisei Tokumin/New Tegomin/"
+                      "Yuji Mai = dramatic or wa; Hina Mincho/Shippori Mincho = delicate ballad; Mochiy Pop One/Hachi Maru "
+                      "Pop = cute pop). Provide 5 hex colors (bg1/bg2 dark background gradient, accent & accent2 neon "
+                      "highlights, text usually #ffffff), fx intensities 0..1 (bloom, glitch, chroma, wave, godray=light "
+                      "shafts, flare=lens flare, dof=depth of field), and screen_fx intensities 0..1 for " + str(SCREEN_FX_OPTS) +
+                      " (colorama=psychedelic color, speedlines=anime concentration lines, lightning, blinds, cinema=teal/"
+                      "orange grade). tilt = lyric slant in degrees (-15..15, 0 if not wanted). random = true to randomize "
+                      "per-character size. Write a one-sentence Japanese rationale. Return JSON only.\n\n"
+                      + (f"USER BRIEF: {brief}\n" if brief else "") + (f"Mood hint: {mood}\n" if mood else "")
+                      + "Lyrics:\n" + lyrics_text[:1500])
             res = codex_json(prompt, schema, timeout=120)
             res["engine"] = "codex"
             return res
         except Exception as e:
             print("  codex suggest fallback:", e)
-    # builtin: 歌詞のキーワードからヒューリスティックに選ぶ
-    t = lyrics_text
+    # builtin: 歌詞＋ブリーフのキーワードからヒューリスティックに選ぶ
+    t = (brief or "") + "\n" + (lyrics_text or "")
     def has(*ws):
         return any(w in t for w in ws)
     if has("桜", "春", "花", "はな"):
@@ -816,7 +840,75 @@ def suggest_direction(lyrics_text, mood="", engine="builtin"):
         pick = dict(scene="city", particles="rain", anim="glow-pop",
                     colors=dict(bg1="#050a18", bg2="#1a0b38", accent="#00d4ff", accent2="#7b2ff7", text="#ffffff"),
                     fx=dict(bloom=0.8, glitch=0.15, chroma=0.5, wave=0.0))
-    pick["rationale"] = "歌詞のキーワードから雰囲気を推定し、配色とエフェクトを自動選定しました。"
+    # --- ブリーフ(自然言語)から フォント・レタリング・文字アニメ・画面エフェクト・傾き を上書き ---
+    def bk(*ws):
+        return any(w in t for w in ws)
+    # ブリーフの世界観で背景・粒子・配色も寄せる(brief優先)
+    if bk("サイバー", "テクノ", "未来", "EDM", "エレクトロ", "デジタル", "グリッチ"):
+        pick["scene"] = "grid"; pick["particles"] = "stars"
+        pick["colors"] = dict(bg1="#05030f", bg2="#0f0b3a", accent="#00e5ff", accent2="#b14bff", text="#ffffff")
+    elif bk("ライブ", "コンサート", "ステージ", "会場"):
+        pick["scene"] = "stage"
+    elif bk("宇宙", "星空", "銀河"):
+        pick["scene"] = "stars"; pick["particles"] = "stars"
+    elif bk("夕焼け", "夕日", "サンセット", "黄昏", "レトロ"):
+        pick["scene"] = "sunset"
+    # フォント選定
+    if bk("サイバー", "デジタル", "テクノ", "未来", "EDM", "エレクトロ"):
+        font = "'Zen Dots', cursive"
+    elif bk("力強", "激し", "ロック", "パワフル", "インパクト", "重厚", "攻め", "太い"):
+        font = "'Dela Gothic One', sans-serif"
+    elif bk("和風", "演歌", "時代", "武士", "侍", "純邦", "花魁"):
+        font = "'New Tegomin', serif"
+    elif bk("筆", "書道", "墨"):
+        font = "'Yuji Mai', serif"
+    elif bk("シネマ", "壮大", "ドラマ", "荘厳", "映画"):
+        font = "'Kaisei Tokumin', serif"
+    elif bk("バラード", "切な", "繊細", "静か", "儚", "しっとり"):
+        font = "'Hina Mincho', serif"
+    elif bk("かわいい", "可愛", "ポップ", "元気", "キュート"):
+        font = "'Mochiy Pop One', sans-serif"
+    else:
+        font = "'Zen Kaku Gothic New', sans-serif"
+    # レタリング
+    if bk("ネオン", "発光", "光る"): pick["lettering"] = "neon"
+    elif bk("ゴールド", "金色", "ゴージャス"): pick["lettering"] = "gold"
+    elif bk("炎", "燃"): pick["lettering"] = "fire"
+    elif bk("氷", "クール", "冷"): pick["lettering"] = "ice"
+    elif bk("レインボー", "虹", "カラフル"): pick["lettering"] = "rainbow"
+    elif bk("アウトライン", "縁取り", "袋文字"): pick["lettering"] = "outline"
+    elif bk("ステッカー", "シール"): pick["lettering"] = "sticker"
+    elif bk("グリッチ"): pick["lettering"] = "glitch"
+    elif bk("レトロ", "80s", "昭和"): pick["lettering"] = "retro"
+    elif bk("クローム", "メタル", "金属"): pick["lettering"] = "chrome"
+    else: pick.setdefault("lettering", "neon")
+    # 文字アニメ(ブリーフ優先)
+    if bk("パンチ", "ドカン", "叩き", "スラム"): pick["anim"] = "punch-in"
+    elif bk("飛散", "散らば", "四方", "集合"): pick["anim"] = "scatter-in"
+    elif bk("スライド", "横から", "流入"): pick["anim"] = "slide-left"
+    elif bk("タイプライタ", "打ち込み", "タイプ"): pick["anim"] = "typewriter"
+    elif bk("一字", "一文字ずつ", "カスケード"): pick["anim"] = "char-pop"
+    elif bk("バウンス", "弾む"): pick["anim"] = "bounce-in"
+    elif bk("回転", "転が", "スピン", "ロール"): pick["anim"] = "roll-in"
+    elif bk("奥から", "迫", "飛び込"): pick["anim"] = "fly-through"
+    elif bk("点滅"): pick["anim"] = "neon-flicker"
+    # 画面エフェクト
+    sfx = {k: 0 for k in SCREEN_FX_OPTS}
+    if bk("集中線", "スピードライン", "流線", "疾走"): sfx["speedlines"] = 0.7
+    if bk("稲妻", "雷", "ライトニング"): sfx["lightning"] = 0.6
+    if bk("コロラマ", "極彩色", "サイケ"): sfx["colorama"] = 0.6
+    if bk("ブラインド"): sfx["blinds"] = 0.5
+    if bk("シネマ", "映画", "フィルミック", "シネスコ"): sfx["cinema"] = 0.55
+    if bk("サイバー", "グリッチ") and not any(sfx.values()): sfx["colorama"] = 0.35
+    # 縦書き / 傾き / ランダム
+    if bk("縦書き"): pick["orient"] = "vertical"
+    else: pick.setdefault("orient", "horizontal")
+    pick["font"] = font
+    pick["screen_fx"] = sfx
+    pick["tilt"] = 8 if bk("斜め", "右上がり", "傾") else 0
+    pick["random"] = bool(bk("ランダム", "バラバラ", "賑やか", "散らし"))
+    src = "ブリーフ" if brief else "歌詞"
+    pick["rationale"] = f"{src}から雰囲気を解釈し、配色・フォント・文字アニメ・画面エフェクトを一括設計しました。"
     pick["engine"] = "builtin"
     return pick
 
@@ -965,8 +1057,9 @@ def run_ai_job(job_id):
         elif kind == "suggest":
             eng = payload.get("engine", "builtin")
             upd(35, "歌詞のムード解析 (Codex)" if eng == "codex" else "歌詞のムード解析")
-            upd(65, "配色・演出の設計")
-            result = suggest_direction(payload.get("lyrics_text", ""), payload.get("mood", ""), eng)
+            upd(65, "配色・フォント・演出の設計")
+            result = suggest_direction(payload.get("lyrics_text", ""), payload.get("mood", ""), eng,
+                                       payload.get("brief", ""))
         else:
             raise ValueError(f"unknown job kind {kind}")
         con.execute("UPDATE ai_jobs SET status='completed',progress_pct=100,stage='完了',result_json=?,completed_at=? WHERE id=?",
