@@ -72,6 +72,34 @@ const FONTS = [
   ["'Playfair Display', serif", 'Playfair Display', '欧文'],
   ["'Zen Dots', cursive", 'Zen Dots (サイバー)', '欧文'],
 ];
+// フォントの雰囲気タグと相性の良い動き(フォント見本・推奨表示に使う)。jp:false は日本語グリフ無し
+const FONT_MOODS = [['speed', '疾走感・攻撃的'], ['night', '夜・孤独・退廃'], ['cute', 'かわいい・ポップ'], ['cyber', '未来的・サイバー'], ['elegant', '高級感・切なさ'], ['uneasy', '不安・狂気'], ['wa', '和']];
+const FONT_MOTIONS = { pop: '拡大・振動・分裂', slide: '横移動・縦積み・画面分割', fade: 'フェード・ゆっくり移動', zoom: 'ゆっくりズーム・縦書き', type: '一文字ずつ出現', wave: '弾む・波打ち', blink: 'タイピング・点滅', emph: '一語の強調・タイトル' };
+const FONT_META = {
+  'Noto Sans JP': { m: ['speed', 'night'], mo: 'slide' }, 'Zen Kaku Gothic New': { m: ['speed', 'night'], mo: 'slide' },
+  'M PLUS Rounded 1c': { m: ['cute'], mo: 'wave' }, 'Zen Maru Gothic': { m: ['cute', 'night'], mo: 'fade' }, 'Kosugi Maru': { m: ['cute'], mo: 'wave' },
+  'BIZ UDPGothic': { m: ['night', 'cyber'], mo: 'fade' }, 'Zen Kurenaido': { m: ['night', 'uneasy'], mo: 'type' },
+  'Noto Serif JP': { m: ['elegant', 'night'], mo: 'zoom' }, 'Shippori Mincho': { m: ['elegant', 'night'], mo: 'zoom' }, 'Zen Old Mincho': { m: ['elegant', 'wa'], mo: 'zoom' },
+  'Kaisei Tokumin': { m: ['elegant', 'wa', 'speed'], mo: 'pop' }, 'New Tegomin': { m: ['wa', 'uneasy'], mo: 'zoom' }, 'Zen Antique': { m: ['wa', 'elegant'], mo: 'fade' },
+  'Hina Mincho': { m: ['night', 'elegant'], mo: 'fade' }, 'Dela Gothic One': { m: ['speed'], mo: 'pop' }, 'Reggae One': { m: ['speed', 'uneasy'], mo: 'pop' },
+  'RocknRoll One': { m: ['speed', 'cute'], mo: 'pop' }, 'Rampart One': { m: ['cyber', 'uneasy'], mo: 'emph' }, 'Train One': { m: ['cyber', 'uneasy'], mo: 'emph' },
+  'Kaisei Decol': { m: ['elegant', 'uneasy'], mo: 'emph' }, 'DotGothic16': { m: ['cyber'], mo: 'blink' }, 'Stick': { m: ['cyber', 'uneasy'], mo: 'slide' },
+  'Mochiy Pop One': { m: ['cute', 'speed'], mo: 'pop' }, 'Hachi Maru Pop': { m: ['cute'], mo: 'wave' }, 'Yusei Magic': { m: ['cute'], mo: 'type' },
+  'Klee One': { m: ['night', 'cute'], mo: 'type' }, 'Yuji Syuku': { m: ['wa'], mo: 'type' }, 'Yuji Mai': { m: ['wa', 'uneasy'], mo: 'type' }, 'Yomogi': { m: ['cute', 'night'], mo: 'type' },
+  'Inter': { m: ['cyber'], mo: 'slide', jp: false }, 'Montserrat': { m: ['speed'], mo: 'slide', jp: false }, 'Oswald': { m: ['speed', 'cyber'], mo: 'slide', jp: false },
+  'Bebas Neue': { m: ['speed'], mo: 'slide', jp: false }, 'Anton': { m: ['speed'], mo: 'pop', jp: false }, 'Playfair Display': { m: ['elegant'], mo: 'zoom', jp: false },
+  'Zen Dots': { m: ['cyber'], mo: 'blink', jp: false },
+};
+// 役割の組み合わせ(主役=メイン歌詞 / 強調=対比・強調語 / 補助=英訳・注釈など)
+const FONT_PAIRS = [
+  ['疾走・クリーン', "'Dela Gothic One', sans-serif", "'Zen Kaku Gothic New', sans-serif", "'BIZ UDPGothic', sans-serif"],
+  ['現代×文学', "'Zen Kaku Gothic New', sans-serif", "'Shippori Mincho', serif", "'BIZ UDPGothic', sans-serif"],
+  ['ポップ・感情', "'Mochiy Pop One', sans-serif", "'Yomogi', cursive", "'Zen Maru Gothic', sans-serif"],
+  ['テクノ・デジタル', "'Zen Kaku Gothic New', sans-serif", "'Rampart One', sans-serif", "'DotGothic16', sans-serif"],
+  ['映画的・余韻', "'Shippori Mincho', serif", "'Hina Mincho', serif", "'Noto Serif JP', serif"],
+  ['和・荘厳', "'Kaisei Tokumin', serif", "'Yuji Mai', serif", "'Zen Old Mincho', serif"],
+  ['不安・狂気', "'Reggae One', sans-serif", "'New Tegomin', serif", "'Zen Kurenaido', sans-serif"],
+];
 // 画面全体エフェクト (fx.js の _screenFx と対応)
 const SCREEN_FX = [
   ['flash', 'フラッシュ(明滅)'], ['zoomblur', '放射ズームブラー'], ['rgbshift', 'RGBずれ'], ['scanlines', '走査線(CRT)'],
@@ -159,6 +187,7 @@ class Editor {
       if (this._tapActive) return;                 // タップ同期中はSpaceを譲る
       if (e.target.matches('input,textarea,select')) return;
       if (e.code === 'Space') { e.preventDefault(); this.togglePlay(); }
+      if (e.code === 'KeyR' && !e.metaKey && !e.ctrlKey && !e.altKey) { e.preventDefault(); this.composeOmakase(); }
       if (e.code === 'ArrowRight') { e.preventDefault(); this.stepFrame(1); }
       if (e.code === 'ArrowLeft') { e.preventDefault(); this.stepFrame(-1); }
       if (e.code === 'Delete' || e.code === 'Backspace') this.deleteSel();
@@ -465,6 +494,7 @@ class Editor {
     if (this.playing && this.metronomeOn && this.tl.bpm) this._metroTick();
     this.engine.render(this.t);
     this._drawGuides();   // プレビュー専用ガイド(書き出しには含めない)
+    if (this.tl.compose && this.tl.compose.enabled && !this._exporting) this._composeCutPanel();   // カットが変わったら編集パネル更新
     const tt = this.root.querySelector('#tp-time');
     if (tt) tt.textContent = `${fmtTime(this.t)} / ${fmtTime(this.tl.duration || 0)}`;
     const sc = this.engine.sceneAt(this.t);
@@ -568,6 +598,596 @@ class Editor {
     ctx.restore();
   }
 
+  /* ---------------- 演出エンジン (カット演出) ----------------
+     歌詞をカットに分け、構図・登場/保持/退場・装飾・加工・カメラ・つなぎを割り当てる(static/js/compose/)。
+     データ: tl.compose = {enabled, seed, style, mood, motion, decor, density, ghost, camera, trans, useWa, cuts:{"line:part": 案}} */
+  _cm() {
+    if (!this.tl.compose) this.tl.compose = { enabled: false, seed: 1, density: 0.5, motion: 1, decor: 0.6, ghost: 1, camera: 0.5, trans: 0.28, useWa: true };
+    return this.tl.compose;
+  }
+  _composePanelHTML() {
+    const L = window.LFC;
+    if (!L) return '';
+    const cm = this._cm();
+    const cnt = L.count();
+    const styleOpts = L.STYLE_ORDER.map(k => `<option value="${k}" ${cm.style === k ? 'selected' : ''}>${esc(L.STYLES[k].name)}</option>`).join('');
+    const moodOpts = L.MOODS.map(([k, l]) => `<option value="${k}" ${cm.mood === k ? 'selected' : ''}>${l}</option>`).join('');
+    const sl = (id, label, v, tip) => `<div class="prop-row" title="${tip}"><span>${label}</span><input type="range" id="${id}" min="0" max="100" value="${Math.round((v == null ? 0.5 : v) * 100)}"></div>`;
+    const h = this._cmpHist || [];
+    return `
+      <div class="prop-group cmp-group">
+        <h4>🎬 演出エンジン <span class="cmp-count" title="構図・登場・保持・退場・装飾・加工・カメラ・つなぎ・配色の合計">${cnt.total}種</span></h4>
+        <label class="chk-row"><input type="checkbox" id="cmp-on" ${cm.enabled ? 'checked' : ''}><span>カット演出で歌詞を描く</span></label>
+        <button class="btn primary cmp-omakase" id="cmp-omakase" title="スタイル・雰囲気・動き・配色・構成をまるごと作り直す(キーボード R)">🎲 おまかせで作る <kbd>R</kbd></button>
+        <div class="cmp-hist">
+          <button class="btn sm" id="cmp-prev">◀ 前の案</button>
+          <span id="cmp-histpos">${h.length ? `${(this._cmpHistIdx ?? h.length - 1) + 1} / ${h.length}` : '—'}</span>
+          <button class="btn sm" id="cmp-next">次の案 ▶</button>
+        </div>
+        <div class="cmp-partial"><span>ここだけ変える</span>
+          <button class="btn sm" data-reroll="style">配色</button><button class="btn sm" data-reroll="layout">構図</button><button class="btn sm" data-reroll="motion">動き</button><button class="btn sm" data-reroll="decor">装飾</button><button class="btn sm" data-reroll="cam">カメラ</button>
+        </div>
+        <div class="prop-row"><span>スタイル</span><select class="input" id="cmp-style"><option value="">(プロジェクトの配色)</option>${styleOpts}</select></div>
+        <div class="prop-row"><span>雰囲気</span><select class="input" id="cmp-mood"><option value="">指定なし</option>${moodOpts}</select></div>
+        ${sl('cmp-motion', '動きの強さ', cm.motion, '登場/退場/保持/カメラの動きの大きさ')}
+        ${sl('cmp-decor', '装飾の量', cm.decor, '1カットに付く装飾の頻度(再計画)')}
+        ${sl('cmp-density', 'カット密度', cm.density, '長い行を何カットに分けるか(再計画)')}
+        ${sl('cmp-ghost', '色ずれ', cm.ghost, '動く文字に色ずれの残像を重ねる強さ')}
+        ${sl('cmp-camera', 'カメラ', cm.camera, 'カメラワークが付く頻度(再計画)')}
+        ${sl('cmp-trans', 'つなぎ', cm.trans, 'カット間のトランジションの頻度(再計画)')}
+        <label class="chk-row"><input type="checkbox" id="cmp-wa" ${cm.useWa === false ? '' : 'checked'}><span>和風の演出も使う</span></label>
+        <div class="cmp-summary" id="cmp-summary"></div>
+        <div class="cmp-cut" id="cmp-cut"></div>
+      </div>`;
+  }
+  _bindComposePanel(el) {
+    const L = window.LFC;
+    if (!L || !el.querySelector('#cmp-on')) return;
+    const $ = s => el.querySelector(s);
+    const cm = this._cm();
+    $('#cmp-on').onchange = e => {
+      cm.enabled = e.target.checked;
+      if (cm.enabled && !cm.cuts) this.composePlan();
+      this.markDirty(); this._composeRefresh(); this.renderTimeline();
+    };
+    $('#cmp-omakase').onclick = () => this.composeOmakase();
+    $('#cmp-prev').onclick = () => this.composeHist(-1);
+    $('#cmp-next').onclick = () => this.composeHist(1);
+    el.querySelectorAll('[data-reroll]').forEach(b => b.onclick = () => this.composeReroll(b.dataset.reroll));
+    $('#cmp-style').onchange = e => { this.composeApplyStyle(e.target.value); this._composePushHist(); this._composeRefresh(); };
+    $('#cmp-mood').onchange = e => { cm.mood = e.target.value || null; this.composePlan(); this._composePushHist(); };
+    const replanKeys = ['decor', 'density', 'camera', 'trans'];
+    for (const [id, k] of [['cmp-motion', 'motion'], ['cmp-decor', 'decor'], ['cmp-density', 'density'], ['cmp-ghost', 'ghost'], ['cmp-camera', 'camera'], ['cmp-trans', 'trans']]) {
+      $('#' + id).oninput = e => { cm[k] = e.target.value / 100; this.markDirty(); };
+      if (replanKeys.includes(k)) $('#' + id).onchange = () => { this.composePlan(); };
+    }
+    $('#cmp-wa').onchange = e => { cm.useWa = e.target.checked; this.composePlan(); };
+    this._composeRefresh();
+  }
+  /* 全カットを計画し直す(固定したカットは保持)。opts.only で一部だけ */
+  composePlan(opts = {}) {
+    const L = window.LFC;
+    if (!L) return;
+    const cv = this.engine.canvas;
+    L.planAll(this.tl, { W: cv.width, H: cv.height, seed: opts.seed, only: opts.only });
+    this.markDirty();
+    this._composeRefresh();
+    this.renderTimeline();
+  }
+  composeApplyStyle(key) {
+    const L = window.LFC;
+    const cm = this._cm();
+    const st = L && L.getStyle(key);
+    cm.style = key || null;
+    if (st && st.colors) this.tl.colors = Object.assign({}, st.colors);
+    if (st && st.fonts) for (const f of [].concat(...Object.values(st.fonts))) if (f) this.ensureFont(f);
+    this.markDirty();
+  }
+  /* おまかせ: 雰囲気→それに合うスタイル→スライダー→新しい種で全カットを計画。歌詞・タイミング・固定カットは触らない */
+  composeOmakase() {
+    const L = window.LFC;
+    if (!L) return;
+    const cm = this._cm();
+    if (!this._cmpHist || !this._cmpHist.length) this._composePushHist();   // 最初の状態も戻れるように
+    const rng = L.rng((Date.now() ^ Math.floor(Math.random() * 1e9)) >>> 0);   // UI操作の乱数(描画には使わない)
+    const RANGES = {
+      pop: { motion: [0.75, 1], decor: [0.6, 0.9], density: [0.45, 0.75], ghost: [0.3, 0.7], camera: [0.4, 0.7], trans: [0.2, 0.4] },
+      calm: { motion: [0.3, 0.6], decor: [0.25, 0.5], density: [0.15, 0.4], ghost: [0, 0.3], camera: [0.2, 0.5], trans: [0.1, 0.25] },
+      emotional: { motion: [0.45, 0.75], decor: [0.35, 0.6], density: [0.25, 0.5], ghost: [0.2, 0.5], camera: [0.3, 0.6], trans: [0.15, 0.3] },
+      glitch: { motion: [0.8, 1], decor: [0.5, 0.85], density: [0.55, 0.9], ghost: [0.7, 1], camera: [0.5, 0.8], trans: [0.3, 0.5] },
+      graphic: { motion: [0.7, 1], decor: [0.55, 0.85], density: [0.45, 0.75], ghost: [0.3, 0.6], camera: [0.4, 0.7], trans: [0.25, 0.45] },
+      editorial: { motion: [0.45, 0.75], decor: [0.45, 0.75], density: [0.3, 0.55], ghost: [0.1, 0.35], camera: [0.2, 0.45], trans: [0.15, 0.3] },
+      cyber: { motion: [0.75, 1], decor: [0.6, 0.9], density: [0.5, 0.8], ghost: [0.6, 1], camera: [0.45, 0.75], trans: [0.3, 0.5] },
+      dark: { motion: [0.6, 0.95], decor: [0.4, 0.7], density: [0.45, 0.8], ghost: [0.4, 0.8], camera: [0.4, 0.7], trans: [0.2, 0.4] },
+      wa: { motion: [0.4, 0.7], decor: [0.45, 0.75], density: [0.25, 0.5], ghost: [0.1, 0.35], camera: [0.2, 0.45], trans: [0.15, 0.3] },
+    };
+    const moods = L.MOODS.map(m => m[0]).filter(m => cm.useWa !== false || m !== 'wa');
+    const mood = rng.pick(moods);
+    const styles = L.STYLE_ORDER.map(k => L.STYLES[k]).filter(s => cm.useWa !== false || !(s.moods || []).includes('wa'));
+    const fit = styles.filter(s => (s.moods || []).includes(mood));
+    const st = fit.length && rng() < 0.75 ? rng.pick(fit) : (styles.length ? rng.pick(styles) : null);
+    const R = RANGES[mood] || RANGES.pop;
+    cm.mood = mood;
+    for (const k of Object.keys(R)) cm[k] = +rng.range(R[k][0], R[k][1]).toFixed(2);
+    cm.enabled = true;
+    if (st) this.composeApplyStyle(st.key);
+    cm.seed = rng.int(1, 2e9);
+    const cv = this.engine.canvas;
+    L.planAll(this.tl, { W: cv.width, H: cv.height, seed: cm.seed });
+    this.markDirty();
+    this._composePushHist();
+    this.renderRight();
+    this.renderTimeline();
+    const ml = (L.MOODS.find(m => m[0] === mood) || [])[1] || mood;
+    toast(`おまかせ: ${st ? st.name + ' / ' : ''}${ml}`, 'ok');
+  }
+  composeReroll(part) {
+    const L = window.LFC;
+    if (!L) return;
+    const cm = this._cm();
+    if (!cm.enabled) { cm.enabled = true; }
+    if (!this._cmpHist || !this._cmpHist.length) this._composePushHist();
+    const rng = L.rng((Date.now() ^ Math.floor(Math.random() * 1e9)) >>> 0);
+    if (part === 'style') {
+      const all = L.STYLE_ORDER.filter(k => k !== cm.style && (cm.useWa !== false || !(L.STYLES[k].moods || []).includes('wa')));
+      const same = all.filter(k => cm.mood && (L.STYLES[k].moods || []).includes(cm.mood));
+      const pick = same.length && rng() < 0.6 ? rng.pick(same) : rng.pick(all);
+      if (pick) this.composeApplyStyle(pick);
+    } else {
+      cm.seed = rng.int(1, 2e9);
+      const cv = this.engine.canvas;
+      if (!cm.cuts) L.planAll(this.tl, { W: cv.width, H: cv.height, seed: cm.seed });
+      else L.planAll(this.tl, { W: cv.width, H: cv.height, seed: cm.seed, only: part });
+    }
+    this.markDirty();
+    this._composePushHist();
+    this.renderRight();
+    this.renderTimeline();
+    toast({ style: '配色', layout: '構図', motion: '動き', decor: '装飾', cam: 'カメラ' }[part] + 'だけ変えました', 'ok');
+  }
+  _composePushHist() {
+    const h = this._cmpHist || (this._cmpHist = []);
+    if (this._cmpHistIdx != null && this._cmpHistIdx < h.length - 1) h.splice(this._cmpHistIdx + 1);
+    h.push(JSON.parse(JSON.stringify({ cm: this._cm(), colors: this.tl.colors })));
+    if (h.length > 60) h.shift();
+    this._cmpHistIdx = h.length - 1;
+    const pos = this.root.querySelector('#cmp-histpos');
+    if (pos) pos.textContent = `${this._cmpHistIdx + 1} / ${h.length}`;
+  }
+  composeHist(d) {
+    const h = this._cmpHist || [];
+    const i = (this._cmpHistIdx == null ? h.length - 1 : this._cmpHistIdx) + d;
+    if (i < 0 || i >= h.length) return toast(d < 0 ? 'これより前の案はありません' : 'これより後の案はありません');
+    this._cmpHistIdx = i;
+    const s = JSON.parse(JSON.stringify(h[i]));
+    this.tl.compose = s.cm;
+    this.tl.compose.planVersion = Date.now();        // キャッシュ済みのカット案を確実に入れ替える
+    if (s.colors) this.tl.colors = s.colors;
+    const st = window.LFC && window.LFC.getStyle(s.cm.style);
+    if (st && st.fonts) for (const f of [].concat(...Object.values(st.fonts))) if (f) this.ensureFont(f);
+    this.markDirty();
+    this.renderRight();
+    this.renderTimeline();
+  }
+  _composeRefresh() {
+    const L = window.LFC;
+    const el = this.root.querySelector('#cmp-summary');
+    if (!L || !el) return;
+    const cm = this._cm();
+    const cuts = L.buildCuts(this.tl);
+    const st = L.getStyle(cm.style);
+    const used = new Set();
+    cuts.forEach(c => { const p = (cm.cuts || {})[c.line + ':' + c.part]; if (p && p.layout) used.add(p.layout); });
+    const cnt = L.count();
+    const col = this.tl.colors || {};
+    const sw = ['bg1', 'bg2', 'accent', 'accent2', 'text'].map(k => `<i style="background:${esc(col[k] || '#000')}"></i>`).join('');
+    const disp = st && st.fonts && st.fonts.display ? String([].concat(st.fonts.display)[0]).split(',')[0].replace(/'/g, '') : '(歌詞スタイルのフォント)';
+    el.innerHTML = `
+      <div class="cmp-now"><b>いまの案</b></div>
+      <div>スタイル: ${st ? esc(st.name) : 'プロジェクトの配色'} <span class="cmp-sw">${sw}</span></div>
+      <div>見出し書体: ${esc(disp)}</div>
+      <div>構成: ${cuts.length} カット・構図 ${used.size} 種${cm.enabled ? '' : '（OFF中）'}</div>
+      <div class="cmp-lib">ライブラリ: 構図${cnt.layout} 登場${cnt.enter} 保持${cnt.hold} 退場${cnt.exit} 装飾${cnt.decor} 加工${cnt.treat} カメラ${cnt.cam} つなぎ${cnt.trans} 配色${cnt.style}</div>`;
+    this._cmpCutIdx = -2;
+    this._composeCutPanel();
+  }
+  /* 再生位置のカットを編集するパネル(カットが変わった時だけ描き直す) */
+  _composeCutPanel(force) {
+    const L = window.LFC;
+    const box = this.root.querySelector('#cmp-cut');
+    if (!L || !box) return;
+    const cuts = L.buildCuts(this.tl);
+    const ci = L.cutAt(cuts, this.t);
+    if (!force && ci === this._cmpCutIdx) return;
+    this._cmpCutIdx = ci;
+    const cut = cuts[ci];
+    if (!cut || this.t > cut.end + 0.01) { box.innerHTML = '<div class="empty-note" style="padding:6px 2px">再生位置にカットがありません</div>'; return; }
+    const cm = this._cm();
+    const key = cut.line + ':' + cut.part;
+    const W = this.engine.canvas.width, H = this.engine.canvas.height;
+    L.resolveCut(this.tl, cut, cuts, W, H);
+    const p = cut.plan || {};
+    const opt = (g, cur, none) => (none ? '<option value="">なし</option>' : '') +
+      L.list(g).map(d => `<option value="${d.key}" ${cur === d.key ? 'selected' : ''}>${esc(d.name)}</option>`).join('');
+    const row = (label, g, cur, none) => `<div class="prop-row"><span>${label}</span><select class="input sm" data-cg="${g}">${opt(g.replace(/\d$/, ''), cur, none)}</select></div>`;
+    const dk = i => ((p.decor || [])[i] || {}).key;
+    box.innerHTML = `
+      <div class="cmp-cut-head">カット ${ci + 1} / ${cuts.length}　「${esc(cut.text.slice(0, 16))}${cut.text.length > 16 ? '…' : ''}」</div>
+      ${row('構図', 'layout', p.layout)}
+      ${row('登場', 'enter', p.enter, true)}
+      ${row('保持', 'hold', p.hold, true)}
+      ${row('退場', 'exit', p.exit, true)}
+      ${row('加工', 'treat', p.treat, true)}
+      ${row('装飾', 'decor0', dk(0), true)}
+      ${row('装飾2', 'decor1', dk(1), true)}
+      ${row('カメラ', 'cam', p.cam, true)}
+      ${row('つなぎ', 'trans', p.trans, true)}
+      <div class="cmp-cut-btns">
+        <button class="btn sm" id="cmp-cut-dice">🎲 このカットだけ振り直す</button>
+        <label class="chk-row"><input type="checkbox" id="cmp-cut-lock" ${p.locked ? 'checked' : ''}><span>🔒 固定</span></label>
+      </div>`;
+    const materialize = () => {
+      cm.cuts = cm.cuts || {};
+      if (!cm.cuts[key]) cm.cuts[key] = JSON.parse(JSON.stringify(p));
+      return cm.cuts[key];
+    };
+    const st = L.getStyle(cm.style) || {};
+    const bump = () => { cm.planVersion = (cm.planVersion || 0) + 1; this.markDirty(); this.renderTimeline(); };
+    box.querySelectorAll('[data-cg]').forEach(s => s.onchange = () => {
+      const g = s.dataset.cg, q = materialize(), v = s.value || null;
+      if (g === 'layout') {
+        q.layout = v;
+        const d = L.get('layout', v);
+        q.params = d && d.plan ? d.plan(L.rng(L.h(cm.seed, key, v)), { text: cut.text, n: cut.n, W, H, dur: cut.dur, portrait: H > W, emph: !!cut.emph, words: cut.words }, st) : {};
+      } else if (g === 'decor0' || g === 'decor1') {
+        const i = g === 'decor0' ? 0 : 1;
+        const arr = (q.decor || []).slice();
+        if (v) arr[i] = { key: v, P: (arr[i] && arr[i].P) || { seed: L.h(key, i), v: i, r: 0.5, right: i === 1, low: false, accent: true, big: false, n: 2, corner: i } };
+        else arr[i] = null;
+        q.decor = arr.filter(Boolean);
+      } else if (g === 'treat' || g === 'cam' || g === 'trans') {
+        q[g] = v;
+        const d = v && L.get(g, v);
+        q[g + 'P'] = d && d.plan ? d.plan(L.rng(L.h(key, g, v)), st) : {};
+      } else q[g] = v;
+      bump();
+    });
+    box.querySelector('#cmp-cut-dice').onclick = () => {
+      const q = materialize();
+      const reroll = (q.reroll || 0) + 1;
+      const moods = [].concat(cm.mood ? [cm.mood] : [], st.moods || []);
+      const rng = L.rng(L.h(cm.seed, 'plan', cut.line, cut.part, reroll));
+      const np = L.planCut(cut, { rng, st: L.getStyle(cm.style), moods, cm, portrait: H > W, recent: {}, W, H, keep: null, prevCut: cuts[ci - 1], seed: cm.seed });
+      np.reroll = reroll;
+      cm.cuts[key] = np;
+      bump();
+      this._composeCutPanel(true);
+    };
+    box.querySelector('#cmp-cut-lock').onchange = e => { materialize().locked = e.target.checked; this.markDirty(); };
+  }
+
+  /* ---------------- After Effects 用書き出し (.jsx) ----------------
+     AE で「ファイル > スクリプト > スクリプトファイルを実行」すると、コンポ・背景・(任意で)曲・
+     カットごとの編集可能なテキストレイヤー(登場/退場をキーフレーム化)・マーカーを組み立てる。
+     構図は簡略化(中央配置)。フォントは PostScript 名で指定し、未インストールなら代替書体。 */
+  exportAE(state) {
+    const L = window.LFC;
+    const [W, H] = EXPORT_RES[(state && state.res) || '1080p'][this.project.aspect_ratio] || [1920, 1080];
+    const fps = (state && state.fps) || 30;
+    const cm = this._cm();
+    const col = this.tl.colors || {};
+    const PS = {
+      'Dela Gothic One': 'DelaGothicOne-Regular', 'Reggae One': 'ReggaeOne-Regular', 'RocknRoll One': 'RocknRollOne-Regular',
+      'Rampart One': 'RampartOne-Regular', 'Train One': 'TrainOne-Regular', 'Zen Kaku Gothic New': 'ZenKakuGothicNew-Black',
+      'Noto Sans JP': 'NotoSansJP-Black', 'BIZ UDPGothic': 'BIZUDPGothic-Bold', 'M PLUS Rounded 1c': 'MPLUSRounded1c-ExtraBold',
+      'Zen Maru Gothic': 'ZenMaruGothic-Black', 'Kosugi Maru': 'KosugiMaru-Regular', 'Zen Kurenaido': 'ZenKurenaido-Regular',
+      'Noto Serif JP': 'NotoSerifJP-Black', 'Shippori Mincho': 'ShipporiMincho-ExtraBold', 'Zen Old Mincho': 'ZenOldMincho-Black',
+      'Kaisei Tokumin': 'KaiseiTokumin-ExtraBold', 'New Tegomin': 'NewTegomin-Regular', 'Zen Antique': 'ZenAntique-Regular',
+      'Hina Mincho': 'HinaMincho-Regular', 'Kaisei Decol': 'KaiseiDecol-Bold', 'Mochiy Pop One': 'MochiyPopOne-Regular',
+      'Hachi Maru Pop': 'HachiMaruPop-Regular', 'Yusei Magic': 'YuseiMagic-Regular', 'Klee One': 'KleeOne-SemiBold',
+      'Yuji Syuku': 'YujiSyuku-Regular', 'Yuji Mai': 'YujiMai-Regular', 'Yomogi': 'Yomogi-Regular', 'DotGothic16': 'DotGothic16-Regular',
+      'Stick': 'Stick-Regular', 'Anton': 'Anton-Regular', 'Bebas Neue': 'BebasNeue-Regular', 'Oswald': 'Oswald-Bold',
+      'Montserrat': 'Montserrat-ExtraBold', 'Inter': 'Inter-Black', 'Playfair Display': 'PlayfairDisplay-ExtraBold', 'Zen Dots': 'ZenDots-Regular',
+    };
+    const famOf = css => String(css || '').split(',')[0].replace(/'/g, '').trim();
+    const fontsFor = css => [PS[famOf(css)], 'HiraginoSans-W8', 'HiraKakuStdN-W8', 'YuGothic-Bold', 'KozGoPr6N-Heavy', 'ArialMT'].filter(Boolean);
+    const aeKind = (key, name) => {
+      const s = `${key || ''} ${name || ''}`.toLowerCase();
+      if (!key) return 'none';
+      if (/type|タイプ|cursor|カーソル|打ち/.test(s)) return 'type';
+      if (/wipe|clip|reveal|iris|curtain|blind|ワイプ|幕|ブラインド|アイリス/.test(s)) return 'wipe';
+      if (/slide|whip|push|スライド|流入|ホワッシュ|whoosh/.test(s)) return 'slide';
+      if (/drop|fall|bounce|slam|落|バウンス|叩/.test(s)) return 'drop';
+      if (/rise|float|上昇|浮|fade-up|slide-up/.test(s)) return 'rise';
+      if (/punch|zoom|huge|fly|ズーム|パンチ|迫|奥から/.test(s)) return 'zoom';
+      if (/pop|scale|stamp|squash|ポップ|拡大|スカッシュ/.test(s)) return 'pop';
+      if (/blur|focus|light|flash|glow|ブラー|光|閃|フォーカス/.test(s)) return 'blur';
+      return 'fade';
+    };
+    const main = (cm.fonts && cm.fonts.display) || (L && L.getStyle(cm.style) && [].concat(L.getStyle(cm.style).fonts.display)[0]) || this.tl.lyricStyle.font || "'Noto Sans JP', sans-serif";
+    let cuts = [];
+    if (L && cm.enabled) {
+      const lc = L.buildCuts(this.tl);
+      cuts = lc.map(c => {
+        L.resolveCut(this.tl, c, lc, W, H);
+        const text = L.splitLines(c.text, c.n > 12 ? Math.ceil(c.n / 2) : 99).join('\n');
+        const size = Math.round(L.fitSize(text, main, W * 0.84, H * 0.42, { max: Math.min(W, H) * 0.2 }));
+        return { text, start: c.start, end: c.end, inDur: c.inDur, outDur: c.outDur, size, x: W / 2, y: H / 2,
+          enter: aeKind(c.plan && c.plan.enter, c.enterDef && c.enterDef.name), exit: aeKind(c.plan && c.plan.exit, c.exitDef && c.exitDef.name),
+          color: col.text || '#ffffff', fonts: fontsFor(main) };
+      });
+    } else {
+      // 従来表示: 行ごと
+      const byLine = new Map();
+      for (const w of this.tl.tracks.lyrics || []) { if (!byLine.has(w.line)) byLine.set(w.line, []); byLine.get(w.line).push(w); }
+      const lines = [...byLine.values()].map(ws => ws.sort((a, b) => a.start - b.start)).sort((a, b) => a[0].start - b[0].start);
+      const st = this.tl.lyricStyle || {};
+      cuts = lines.map((ws, i) => {
+        const text = ws.map(w => w.word).join('');
+        const start = ws[0].start - 0.1, next = lines[i + 1] ? lines[i + 1][0].start : Infinity;
+        const end = Math.min(next - 0.02, ws[ws.length - 1].end + 0.6);
+        const size = Math.round((st.size || 64) * (W / 1280));
+        return { text, start, end: Math.max(end, start + 0.4), inDur: 0.25, outDur: 0.25, size, x: W * (st.posX ?? 0.5), y: H * (st.posY ?? 0.58),
+          enter: aeKind(st.anim, st.anim), exit: 'fade', color: st.color || col.text || '#ffffff', fonts: fontsFor(st.font) };
+      });
+    }
+    const data = {
+      title: this.project.title || 'LyricFlow', w: W, h: H, fps, duration: Math.max(1, this.tl.duration || 10),
+      colors: { bg1: col.bg1 || '#0d1117', bg2: col.bg2 || col.bg1 || '#1a2040', accent: col.accent || '#00d4ff' },
+      glow: (this.tl.fx && this.tl.fx.bloom) || 0.5, cuts,
+    };
+    const jsx = this._aeScript(data);
+    const blob = new Blob(['﻿' + jsx], { type: 'application/javascript' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `${(this.project.title || 'lyricflow').replace(/[\\/:*?"<>|]/g, '_')}_AE.jsx`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+    toast(`After Effects用スクリプトを書き出しました（${cuts.length}カット）`, 'ok');
+  }
+  /* ExtendScript(ES3)本体。非ASCIIは \\uXXXX に置換して文字コード問題を避ける */
+  _aeScript(data) {
+    const body = `// LyricFlow -> After Effects import script (generated)
+// Usage: After Effects > File > Scripts > Run Script File... > choose this file
+#target aftereffects
+(function () {
+var D = ${JSON.stringify(data)};
+function hex(c) { c = String(c || '#ffffff').replace('#', ''); if (c.length === 3) { c = c.charAt(0) + c.charAt(0) + c.charAt(1) + c.charAt(1) + c.charAt(2) + c.charAt(2); } return [parseInt(c.substr(0, 2), 16) / 255, parseInt(c.substr(2, 2), 16) / 255, parseInt(c.substr(4, 2), 16) / 255]; }
+function pad(n) { var s = String(n); while (s.length < 3) { s = '0' + s; } return s; }
+function setFont(td, list) { for (var i = 0; i < list.length; i++) { try { td.font = list[i]; if (td.font === list[i]) { return list[i]; } } catch (e) {} } return null; }
+function ease(prop) {
+  try {
+    var n = 1;
+    if (prop.propertyValueType !== PropertyValueType.TwoD_SPATIAL && prop.propertyValueType !== PropertyValueType.ThreeD_SPATIAL && prop.value instanceof Array) { n = prop.value.length; }
+    for (var k = 1; k <= prop.numKeys; k++) { var arr = []; for (var j = 0; j < n; j++) { arr.push(new KeyframeEase(0, 70)); } prop.setTemporalEaseAtKey(k, arr, arr); }
+  } catch (e) {}
+}
+function keys(prop, a, b, hidden, rest, isIn) { prop.setValueAtTime(a, isIn ? hidden : rest); prop.setValueAtTime(b, isIn ? rest : hidden); ease(prop); }
+function motion(L, kind, a, b, isIn, c) {
+  if (kind === 'none' || b <= a) { return; }
+  var tr = L.property('ADBE Transform Group');
+  var op = tr.property('ADBE Opacity'), pos = tr.property('ADBE Position'), sc = tr.property('ADBE Scale');
+  var p0 = [c.x, c.y], s0 = [100, 100];
+  if (kind !== 'type' && kind !== 'wipe') { keys(op, a, b, 0, 100, isIn); }
+  if (kind === 'rise') { keys(pos, a, b, [p0[0], p0[1] + c.size * 0.8], p0, isIn); }
+  else if (kind === 'drop') { keys(pos, a, b, [p0[0], p0[1] - c.size * 1.3], p0, isIn); }
+  else if (kind === 'slide') { keys(pos, a, b, [p0[0] + (isIn ? D.w * 0.22 : -D.w * 0.22), p0[1]], p0, isIn); }
+  else if (kind === 'pop') { keys(sc, a, b, [35, 35], s0, isIn); }
+  else if (kind === 'zoom') { keys(sc, a, b, [190, 190], s0, isIn); }
+  else if (kind === 'blur') { try { var gb = L.property('ADBE Effect Parade').addProperty('ADBE Gaussian Blur 2'); keys(gb.property(1), a, b, 45, 0, isIn); } catch (e) {} }
+  else if (kind === 'wipe') { try { var lw = L.property('ADBE Effect Parade').addProperty('ADBE Linear Wipe'); lw.property(2).setValue(isIn ? 270 : 90); lw.property(3).setValue(c.size * 0.4); keys(lw.property(1), a, b, 100, 0, isIn); } catch (e) { keys(op, a, b, 0, 100, isIn); } }
+  else if (kind === 'type') {
+    try {
+      var an = L.property('ADBE Text Properties').property('ADBE Text Animators').addProperty('ADBE Text Animator');
+      an.name = isIn ? 'Type In' : 'Type Out';
+      an.property('ADBE Text Animator Properties').addProperty('ADBE Text Opacity').setValue(0);
+      var sel = an.property('ADBE Text Selectors').addProperty('ADBE Text Selector');
+      keys(sel.property('ADBE Text Percent Start'), a, b, 0, 100, isIn);
+    } catch (e) { keys(op, a, b, 0, 100, isIn); }
+  }
+}
+app.beginUndoGroup('LyricFlow import');
+var proj = app.project || app.newProject();
+var folder = proj.items.addFolder(D.title + ' (LyricFlow)');
+var comp = proj.items.addComp(D.title, D.w, D.h, 1, D.duration, D.fps);
+comp.parentFolder = folder;
+comp.bgColor = hex(D.colors.bg1);
+var bg = comp.layers.addSolid(hex(D.colors.bg1), 'BG', D.w, D.h, 1, D.duration);
+try { var ramp = bg.property('ADBE Effect Parade').addProperty('ADBE Ramp'); ramp.property(1).setValue([0, 0]); ramp.property(2).setValue(hex(D.colors.bg1)); ramp.property(3).setValue([D.w, D.h]); ramp.property(4).setValue(hex(D.colors.bg2)); } catch (e) {}
+var missing = {};
+for (var i = 0; i < D.cuts.length; i++) {
+  var c = D.cuts[i];
+  var L = comp.layers.addText(String(c.text).replace(/\\n/g, '\\r'));
+  L.name = pad(i + 1) + ' ' + String(c.text).replace(/\\n/g, ' ');
+  var tp = L.property('ADBE Text Properties').property('ADBE Text Document');
+  var td = tp.value;
+  try { td.resetCharStyle(); td.resetParagraphStyle(); } catch (e) {}
+  if (!setFont(td, c.fonts)) { missing[c.fonts[0]] = true; }
+  td.fontSize = c.size; td.applyFill = true; td.fillColor = hex(c.color); td.applyStroke = false;
+  td.justification = ParagraphJustification.CENTER_JUSTIFY;
+  tp.setValue(td);
+  L.startTime = 0; L.inPoint = Math.max(0, c.start); L.outPoint = Math.min(D.duration, Math.max(c.end, c.start + 0.1));
+  try { var r = L.sourceRectAtTime(L.inPoint, false); L.property('ADBE Transform Group').property('ADBE Anchor Point').setValue([r.left + r.width / 2, r.top + r.height / 2]); } catch (e) {}
+  L.property('ADBE Transform Group').property('ADBE Position').setValue([c.x, c.y]);
+  motion(L, c.enter, L.inPoint, L.inPoint + c.inDur, true, c);
+  motion(L, c.exit, L.outPoint - c.outDur, L.outPoint, false, c);
+  try { comp.markerProperty.setValueAtTime(Math.max(0, c.start), new MarkerValue(String(c.text).replace(/\\n/g, ' '))); } catch (e) {}
+}
+if (D.glow > 0.2) { try { var adj = comp.layers.addSolid([1, 1, 1], 'Glow', D.w, D.h, 1, D.duration); adj.adjustmentLayer = true; var gl = adj.property('ADBE Effect Parade').addProperty('ADBE Glo2'); gl.property(2).setValue(40); gl.property(3).setValue(0.6 + D.glow * 0.8); } catch (e) {} }
+var f = File.openDialog('Select the song audio file (Cancel = no audio)');
+if (f) { try { var it = proj.importFile(new ImportOptions(f)); it.parentFolder = folder; var al = comp.layers.add(it); al.moveToEnd(); } catch (e) {} }
+comp.openInViewer();
+app.endUndoGroup();
+var miss = []; for (var k in missing) { miss.push(k); }
+alert('LyricFlow: ' + D.cuts.length + ' text layers created.' + (miss.length ? '\\nMissing fonts (fallback used): ' + miss.join(', ') : ''));
+})();
+`;
+    return body.replace(/[^\x00-\x7F]/g, ch => '\\u' + ch.charCodeAt(0).toString(16).padStart(4, '0'));
+  }
+
+  /* ---------------- フォント見本 ----------------
+     実際の歌詞を各フォントで「そのフォントに合う動き」でループ表示して比較し、
+     歌詞(従来表示)/主役/強調/補助(演出エンジンの役割フォント)に割り当てる。 */
+  openFontLab() {
+    const L = window.LFC;
+    const cm = this._cm();
+    const famOf = css => String(css).split(',')[0].replace(/'/g, '').trim();
+    let sample = '';
+    if (L) { const cuts = L.buildCuts(this.tl); const ci = L.cutAt(cuts, this.t); if (ci >= 0 && cuts[ci]) sample = cuts[ci].text; }
+    if (!sample) { const ln = (this.tl.lyrics_text || '').split('\n').map(s => s.trim()).find(Boolean); if (ln) sample = L ? L.parseNotation(ln).text : ln; }
+    if (!sample) sample = 'ぼくらは夜明けを待っている ーABC 123';
+    const state = { mood: '', jpOnly: true, sample };
+    const bg = document.createElement('div');
+    bg.className = 'modal-bg';
+    bg.innerHTML = `
+      <div class="modal wide fontlab">
+        <div class="m-head"><h2>🔤 フォント見本 — 歌詞で動かして選ぶ</h2><button class="x-btn">×</button></div>
+        <div class="m-body">
+          <div class="fl-bar">
+            <input class="input" id="fl-sample" value="${esc(sample)}" placeholder="試す歌詞(漢字・かな・濁音・小さい文字・長音・英数字を含むと弱点が分かります)">
+            <label class="chk-row"><input type="checkbox" id="fl-jp" checked><span>日本語対応のみ</span></label>
+          </div>
+          <div class="fl-moods" id="fl-moods"><button class="fl-chip sel" data-m="">すべて</button>${FONT_MOODS.map(([k, l]) => `<button class="fl-chip" data-m="${k}">${l}</button>`).join('')}</div>
+          <div class="fl-pairs"><span>おすすめの組み合わせ（主役／強調／補助）</span>${FONT_PAIRS.map((p, i) => `<button class="btn sm" data-pair="${i}" title="${famOf(p[1])} / ${famOf(p[2])} / ${famOf(p[3])}">${p[0]}</button>`).join('')}</div>
+          <div class="fl-roles" id="fl-roles"></div>
+          <div class="fl-grid" id="fl-grid"></div>
+          <p class="p-sub" style="margin-top:10px">主役は太めで読みやすい書体、明朝・手書きは短いフレーズや強調語に。書体は2〜3種類に絞ると画面がまとまります。主役/強調/補助は演出エンジン(カット演出)で使われます。</p>
+        </div>
+      </div>`;
+    document.body.appendChild(bg);
+    const $ = s => bg.querySelector(s);
+    const grid = $('#fl-grid');
+    const cards = [];
+    const roleName = { lyric: '歌詞', display: '主役', serif: '強調', body: '補助' };
+    const renderRoles = () => {
+      const f = cm.fonts || {};
+      const item = (k, css) => `<span class="fl-role"><em>${roleName[k]}</em><b style="font-family:${css || 'inherit'}">${css ? esc(famOf(css)) : '（スタイル既定）'}</b></span>`;
+      $('#fl-roles').innerHTML = item('lyric', this.tl.lyricStyle.font) + item('display', f.display) + item('serif', f.serif) + item('body', f.body) +
+        (cm.fonts ? '<button class="btn sm ghost" id="fl-reset">役割をスタイル既定に戻す</button>' : '');
+      const rs = $('#fl-reset');
+      if (rs) rs.onclick = () => { delete cm.fonts; cm.planVersion = (cm.planVersion || 0) + 1; this.markDirty(); renderRoles(); };
+    };
+    const assign = (role, css) => {
+      if (role === 'lyric') this.tl.lyricStyle.font = css;
+      else { cm.fonts = Object.assign({}, cm.fonts || {}, { [role]: css }); cm.planVersion = (cm.planVersion || 0) + 1; }
+      this.ensureFont(css);
+      this.markDirty();
+      renderRoles();
+      toast(`${roleName[role]}フォント: ${famOf(css)}${role !== 'lyric' && !cm.enabled ? '（演出エンジンON時に反映）' : ''}`, 'ok');
+    };
+    const renderGrid = () => {
+      const list = FONTS.filter(([css]) => {
+        const m = FONT_META[famOf(css)] || { m: [] };
+        if (state.jpOnly && m.jp === false) return false;
+        return !state.mood || (m.m || []).includes(state.mood);
+      });
+      grid.innerHTML = list.map(([css, label, cat]) => {
+        const m = FONT_META[famOf(css)] || { m: [], mo: 'fade' };
+        const tags = (m.m || []).map(k => (FONT_MOODS.find(x => x[0] === k) || [])[1]).filter(Boolean).map(s => `<i>${s}</i>`).join('');
+        return `<div class="fl-card" data-css="${css.replace(/"/g, '&quot;')}">
+          <canvas width="560" height="180"></canvas>
+          <div class="fl-info"><b style="font-family:${css}">${esc(label)}</b><span class="fl-cat">${cat}${m.jp === false ? '・欧文のみ' : ''}</span></div>
+          <div class="fl-tags">${tags}</div>
+          <div class="fl-mo">推奨の動き: ${FONT_MOTIONS[m.mo] || '—'}</div>
+          <div class="fl-btns"><button class="btn sm" data-role="lyric">歌詞に使う</button><button class="btn sm" data-role="display">主役</button><button class="btn sm" data-role="serif">強調</button><button class="btn sm" data-role="body">補助</button></div>
+        </div>`;
+      }).join('') || '<div class="empty-note">該当するフォントがありません</div>';
+      cards.length = 0;
+      grid.querySelectorAll('.fl-card').forEach((card, i) => {
+        const css = card.dataset.css;
+        if (document.fonts && document.fonts.load) document.fonts.load(`900 48px ${css}`, state.sample).catch(() => {});
+        cards.push({ cv: card.querySelector('canvas'), css, mo: (FONT_META[famOf(css)] || {}).mo || 'fade', off: i * 0.37 });
+        card.querySelectorAll('[data-role]').forEach(b => b.onclick = () => assign(b.dataset.role, css));
+      });
+    };
+    $('#fl-sample').oninput = e => { state.sample = e.target.value || ' '; };
+    $('#fl-jp').onchange = e => { state.jpOnly = e.target.checked; renderGrid(); };
+    bg.querySelectorAll('#fl-moods .fl-chip').forEach(b => b.onclick = () => {
+      bg.querySelectorAll('#fl-moods .fl-chip').forEach(x => x.classList.toggle('sel', x === b));
+      state.mood = b.dataset.m; renderGrid();
+    });
+    bg.querySelectorAll('[data-pair]').forEach(b => b.onclick = () => {
+      const p = FONT_PAIRS[+b.dataset.pair];
+      cm.fonts = { display: p[1], serif: p[2], body: p[3] };
+      [p[1], p[2], p[3]].forEach(f => this.ensureFont(f));
+      cm.planVersion = (cm.planVersion || 0) + 1;
+      this.markDirty(); renderRoles();
+      toast(`組み合わせ「${p[0]}」を主役/強調/補助に設定${cm.enabled ? '' : '（演出エンジンON時に反映）'}`, 'ok');
+    });
+    renderRoles();
+    renderGrid();
+    const t0 = performance.now();
+    let raf = 0;
+    const tick = () => {
+      if (!bg.isConnected) return;
+      const t = (performance.now() - t0) / 1000;
+      const vh = window.innerHeight;
+      for (const c of cards) {
+        const r = c.cv.getBoundingClientRect();
+        if (r.bottom < 0 || r.top > vh) continue;
+        this._drawFontSample(c.cv, c.css, state.sample, c.mo, (t + c.off) % 2.8);
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    const close = () => { cancelAnimationFrame(raf); bg.remove(); this.renderRight(); };
+    bg.querySelector('.x-btn').onclick = close;
+    bg.onclick = e => { if (e.target === bg) close(); };
+  }
+  /* フォント見本の1コマ: 字を実際に並べ、そのフォントに合う動きで出入りさせる(2.8秒ループ) */
+  _drawFontSample(cv, css, text, mo, t) {
+    const g = cv.getContext('2d');
+    const W = cv.width, H = cv.height;
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    const bgGrad = g.createLinearGradient(0, 0, W, H);
+    bgGrad.addColorStop(0, '#0f1422'); bgGrad.addColorStop(1, '#221a3d');
+    g.fillStyle = bgGrad; g.fillRect(0, 0, W, H);
+    const chars = Array.from(text || ' ');
+    g.font = `900 100px ${css}`;
+    const w100 = g.measureText(text || ' ').width || 1;
+    const size = Math.max(10, Math.min(H * 0.46, (W * 0.88) / w100 * 100));
+    g.font = `900 ${size}px ${css}`;
+    g.textBaseline = 'middle'; g.textAlign = 'center';
+    const widths = chars.map(ch => g.measureText(ch).width);
+    const total = widths.reduce((a, b) => a + b, 0);
+    const x0 = (W - total) / 2, cy = H / 2;
+    const eo = x => 1 - Math.pow(1 - x, 3);
+    const ob = x => 1 + 2.70158 * Math.pow(x - 1, 3) + 1.70158 * Math.pow(x - 1, 2);
+    const pin = Math.min(1, t / 0.6), pout = Math.max(0, (t - 2.25) / 0.5);
+    let x = x0;
+    let shown = 0;
+    chars.forEach((ch, i) => {
+      const w = widths[i];
+      const pi = Math.min(1, Math.max(0, (t - i * 0.05) / 0.45));
+      let dx = 0, dy = 0, s = 1, a = 1, show = true;
+      if (mo === 'pop') { s = 0.4 + 0.6 * ob(pi); a = Math.min(1, pi * 2); if (t > 0.8 && t < 2.2) dx = Math.sin(t * 40 + i) * size * 0.012; }
+      else if (mo === 'slide') { dx = (1 - eo(pin)) * W * 0.45; a = pin; }
+      else if (mo === 'fade') { a = eo(pin); dy = (1 - eo(pin)) * size * 0.25; }
+      else if (mo === 'zoom') { s = 0.86 + 0.14 * eo(Math.min(1, t / 2.2)); a = eo(pin); }
+      else if (mo === 'type' || mo === 'blink') { show = t > i * 0.07; }
+      else if (mo === 'wave') { a = pi; dy = Math.sin(t * 5 + i * 0.7) * size * 0.07 + (1 - ob(pi)) * size * 0.4; }
+      else if (mo === 'emph') { s = i < 2 ? 0.55 + 0.6 * ob(pi) : 1; a = pi; }
+      a *= 1 - pout;
+      if (show) shown++;
+      if (show && a > 0.01) {
+        g.save();
+        g.globalAlpha = Math.min(1, a);
+        g.translate(x + w / 2 + dx, cy + dy);
+        g.scale(s, s);
+        g.shadowColor = 'rgba(0,212,255,.35)'; g.shadowBlur = 8;
+        g.fillStyle = '#ffffff';
+        g.fillText(ch, 0, 0);
+        g.restore();
+      }
+      x += w;
+    });
+    if (mo === 'blink' && Math.floor(t * 3) % 2 === 0 && pout < 1) {
+      const cx = x0 + widths.slice(0, shown).reduce((a, b) => a + b, 0);
+      g.fillStyle = 'rgba(0,212,255,.9)';
+      g.fillRect(cx + 3, cy - size * 0.42, Math.max(3, size * 0.07), size * 0.84);
+    }
+  }
+
   /* ---------------- left pane ---------------- */
   renderLeft() {
     const el = this.root.querySelector('#left-pane');
@@ -614,6 +1234,14 @@ class Editor {
         <label class="fld"><span>歌詞テキスト (1行=1フレーズ)</span>
           <textarea class="input" id="lyr-text" rows="10" placeholder="ここに歌詞を入力…">${esc(this.tl.lyrics_text || '')}</textarea>
         </label>
+        <details class="notation-help">
+          <summary>演出エンジンの記法</summary>
+          <div><code>*強調*</code> 強調語(大きな構図・色で目立たせる)</div>
+          <div><code>行の末尾に !</code> 衝撃(強いカメラ・大きな構図に寄せる)</div>
+          <div><code>本文|注釈</code> 注釈を小さく添える</div>
+          <div><code>語の後ろに /</code> そこでカットを分ける</div>
+          <div class="nh-ex">例) 夜明けの*鼓動*を / 聞かせて!</div>
+        </details>
         <div style="display:flex;gap:7px;margin-bottom:9px">
           <button class="btn sm" id="lrc-btn" style="flex:1;justify-content:center">LRC/SRT読込</button>
           <input type="file" id="lrc-file" accept=".lrc,.srt" style="display:none">
@@ -917,6 +1545,7 @@ class Editor {
           <div class="pbar"><i id="jb-fill" style="width:0%"></i></div>
         </div>
       </div>
+      ${this._composePanelHTML()}
       ${selWord ? `
       <div class="prop-group">
         <h4>選択クリップ「${esc(selWord.word)}」</h4>
@@ -934,6 +1563,7 @@ class Editor {
             return cats.map(cat => `<optgroup label="${cat}">${FONTS.filter(f => f[2] === cat).map(([v, l]) =>
               `<option value="${v.replace(/"/g, '&quot;')}" ${cur === v ? 'selected' : ''} style="font-family:${v}">${l}</option>`).join('')}</optgroup>`).join('');
           })()}</select></div>
+        <button class="btn sm" id="st-fontlab" style="width:100%;justify-content:center;margin:2px 0 6px" title="実際の歌詞を各フォントで動かして比較し、主役・強調・補助に割り当てる">🔤 フォント見本（歌詞で動かして選ぶ）</button>
         <div class="prop-row"><span>サイズ</span><input type="range" id="st-size" min="28" max="300" value="${st.size || 64}"></div>
         <div class="prop-row"><span>カラー</span><input type="color" id="st-color" value="${st.color || '#ffffff'}"></div>
         <div class="prop-row"><span>組方向</span>
@@ -1036,6 +1666,7 @@ class Editor {
     engSel.value = this.aiEngine();
     engSel.onchange = e => { localStorage.setItem('lf_ai_engine', e.target.value); };
     $('#ai-suggest').onclick = () => this.runSuggest();
+    this._bindComposePanel(el);
     $('#ai-brief').oninput = e => { this.tl.brief = e.target.value; this.markDirty(); };
     $('#ai-direct').onclick = () => {
       const brief = (this.root.querySelector('#ai-brief').value || '').trim();
@@ -1048,6 +1679,7 @@ class Editor {
     $('#ai-bg').onclick = () => this.openBgStudio();
     $('#ai-trans').onclick = () => this.runTranslate();
     $('#st-font').onchange = e => { this.tl.lyricStyle.font = e.target.value; this.ensureFont(e.target.value); this.markDirty(); };
+    $('#st-fontlab').onclick = () => this.openFontLab();
     $('#st-size').oninput = e => { this.tl.lyricStyle.size = +e.target.value; this.markDirty(); };
     $('#st-color').oninput = e => { this.tl.lyricStyle.color = e.target.value; this.markDirty(); };
     $('#st-anim').onchange = e => { this.tl.lyricStyle.anim = e.target.value; this.markDirty(); };
@@ -1172,8 +1804,38 @@ class Editor {
     else this.tl.tracks.background.push({ id: 'bg' + Date.now(), start: 0, end: this.tl.duration || 60, scene: res.scene });
     this.engine.particles = [];
     this.engine.setTimeline(this.tl);
+    if (brief) this._composeFromBrief(brief, res);   // ブリーフがあれば演出エンジンで全カットを構成
     this.markDirty(); this.renderRight(); this.renderTimeline();
     toast(`AIディレクターの演出を適用しました (${res.engine})`, 'ok');
+  }
+  /* ブリーフ→雰囲気→合うスタイル(役割フォント)で演出エンジンを構成。配色はAIの提案を保つ */
+  _composeFromBrief(brief, res) {
+    const L = window.LFC;
+    if (!L) return;
+    const cm = this._cm();
+    const MAP = [
+      ['cyber', /サイバー|テクノ|未来|デジタル|EDM|エレクトロ/], ['glitch', /グリッチ|ノイズ|バグ|壊れ/],
+      ['pop', /かわいい|可愛|ポップ|明る|元気|キュート/], ['calm', /バラード|切な|静か|しっとり|穏やか/],
+      ['emotional', /エモ|涙|青春|泣/], ['editorial', /誌面|雑誌|エディトリアル|おしゃれ|ミニマル|洗練/],
+      ['dark', /ロック|激し|ダーク|退廃|赤黒|狂気/], ['wa', /和風|和の|着物|祭|神社|筆/], ['graphic', /図形|グラフィック|幾何|ポスター/],
+    ];
+    const hit = MAP.find(([, re]) => re.test(brief));
+    const mood = hit ? hit[0] : null;
+    const styles = L.STYLE_ORDER.map(k => L.STYLES[k]);
+    const fit = mood ? styles.filter(s => (s.moods || []).includes(mood)) : [];
+    const st = fit.length ? fit[L.h(brief) % fit.length] : null;
+    if (!this._cmpHist || !this._cmpHist.length) this._composePushHist();
+    cm.enabled = true;
+    if (mood) cm.mood = mood;
+    if (st) {
+      cm.style = st.key;                                   // 役割フォント・演出の重みはスタイルから(配色はAIの提案を維持)
+      for (const f of [].concat(...Object.values(st.fonts || {}))) if (f) this.ensureFont(f);
+    }
+    if (res && res.font) { cm.fonts = Object.assign({}, cm.fonts || {}, { display: res.font }); this.ensureFont(res.font); }
+    const cv = this.engine.canvas;
+    cm.seed = L.h(brief, Date.now()) % 2000000000;
+    L.planAll(this.tl, { W: cv.width, H: cv.height, seed: cm.seed });
+    this._composePushHist();
   }
 
   /* ---------------- タップ同期 (最も正確な手動同期) ---------------- */
@@ -1612,6 +2274,8 @@ class Editor {
       ['AUDIO', 'audio', '#00d4ff'], ['LYRICS', 'lyrics', '#00d4ff'],
       ['BG', 'background', '#7b2ff7'], ['FX', 'effects', '#ff7edb'], ['OVERLAY', 'overlay', '#3fd58f'],
     ];
+    const composeOn = !!(this.tl.compose && this.tl.compose.enabled && window.LFC);
+    if (composeOn) trackDefs.splice(2, 0, ['演出', 'cuts', '#ffb03a']);   // カットごとの構図(クリックで移動)
     // ルーラー目盛り
     const step = pps > 60 ? 1 : pps > 24 ? 2 : pps > 10 ? 5 : 10;
     let ruler = '';
@@ -1649,6 +2313,7 @@ class Editor {
                    style="left:${w.start * pps}px;width:${Math.max(14, (w.end - w.start) * pps)}px">
                 <span class="rz l"></span>${esc(w.word)}<span class="rz r"></span>
               </div>`).join('') : ''}
+            ${key === 'cuts' ? this._cutChips(pps) : ''}
             ${key === 'background' ? (this.tl.tracks.background || []).map(b => `
               <div class="clip bg" style="left:${b.start * pps}px;width:${Math.max(14, (b.end - b.start) * pps)}px">${b.scene}</div>`).join('') : ''}
             ${key === 'effects' ? (this.tl.tracks.effects || []).map(f => `
@@ -1661,6 +2326,30 @@ class Editor {
       <div class="playhead" id="playhead" style="left:${labelW + this.t * pps}px"></div>`;
     this.drawWaveform();
     this.bindTimeline(labelW, pps);
+    inner.querySelectorAll('.clip.cut').forEach(el => {
+      el.onmousedown = e => e.stopPropagation();
+      el.onclick = e => {
+        e.stopPropagation();
+        const cut = (window.LFC.buildCuts(this.tl) || [])[+el.dataset.cut];
+        if (cut) { this.seek(cut.start + Math.min(cut.dur * 0.5, cut.inDur + 0.4)); this._composeCutPanel(true); }
+      };
+    });
+  }
+  /* 演出トラック: カットごとに構図名のチップ(色は構図ごとに固定) */
+  _cutChips(pps) {
+    const L = window.LFC;
+    if (!L) return '';
+    const cuts = L.buildCuts(this.tl);
+    const W = this.engine.canvas.width || 1920, H = this.engine.canvas.height || 1080;
+    return cuts.map(c => {
+      L.resolveCut(this.tl, c, cuts, W, H);
+      const d = c.layoutDef || {};
+      const hue = L.h(d.key || 'center') % 360;
+      const lock = c.plan && c.plan.locked ? '🔒' : '';
+      const tip = `${c.text}\n構図: ${d.name || ''} / 登場: ${(c.enterDef || {}).name || 'なし'} / 退場: ${(c.exitDef || {}).name || 'なし'}`;
+      return `<div class="clip cut" data-cut="${c.idx}" title="${esc(tip)}"
+        style="left:${c.start * pps}px;width:${Math.max(10, c.dur * pps - 1)}px;background:hsla(${hue},70%,55%,.22);border-color:hsla(${hue},75%,62%,.85)">${lock}${esc(d.name || '')}</div>`;
+    }).join('');
   }
 
   // トラック高さ(localStorageに保存)。既定=AUDIO 54px / それ以外 34px
@@ -1876,9 +2565,16 @@ class Editor {
             ${fmtOpt('gif', 'GIF', 'SNSサムネイル')}
           </div>
           <label class="fld"><span>フレームレート</span></label>
-          <div class="exp-grid" id="fps-grid" style="grid-template-columns:1fr 1fr">
+          <div class="exp-grid" id="fps-grid" style="grid-template-columns:1fr 1fr 1fr">
+            <div class="exp-opt" data-fps="24"><b>24 fps</b><small>映画調</small></div>
             <div class="exp-opt sel" data-fps="30"><b>30 fps</b><small>標準・高速</small></div>
             <div class="exp-opt" data-fps="60"><b>60 fps</b><small>より滑らか</small></div>
+          </div>
+          <label class="fld"><span>背景</span></label>
+          <div class="exp-grid" id="key-grid" style="grid-template-columns:1fr 1fr 1fr">
+            <div class="exp-opt sel" data-key=""><b>通常</b><small>背景・エフェクト込み</small></div>
+            <div class="exp-opt" data-key="green"><b>グリーンバック</b><small>合成用 (#00FF00)</small></div>
+            <div class="exp-opt" data-key="black"><b>ブラックバック</b><small>合成用 (黒地)</small></div>
           </div>
           <label class="fld"><span>アスペクト比 (${state.aspect} — エディターで変更)</span></label>
           <label class="fld"><span>歌詞ファイル同時出力</span></label>
@@ -1888,6 +2584,8 @@ class Editor {
             <button class="btn sm" data-sub="vtt">WebVTT</button>
             <button class="btn sm" data-sub="ass">ASS</button>
           </div>
+          <label class="fld" style="margin-top:12px"><span>After Effects 用（編集可能なテキストレイヤー＋キーフレーム＋マーカー）</span></label>
+          <button class="btn sm" id="ae-btn" style="width:100%;justify-content:center">🎞 After Effects用スクリプト (.jsx) を書き出す</button>
           <div class="job-bar" id="exp-bar" style="display:none;margin-top:16px">
             <div class="jb-label"><span id="exp-stage">レンダリング中…</span><span id="exp-pct">0%</span></div>
             <div class="pbar"><i id="exp-fill" style="width:0%"></i></div>
@@ -1909,6 +2607,10 @@ class Editor {
       bg.querySelectorAll('#fps-grid .exp-opt').forEach(x => x.classList.toggle('sel', x === o));
       state.fps = +o.dataset.fps;
     });
+    bg.querySelectorAll('#key-grid .exp-opt').forEach(o => o.onclick = () => {
+      bg.querySelectorAll('#key-grid .exp-opt').forEach(x => x.classList.toggle('sel', x === o));
+      state.keyMode = o.dataset.key || '';
+    });
     bg.querySelectorAll('#res-grid .exp-opt').forEach(o => o.onclick = () => {
       if (o.dataset.locked) return toast('この解像度はProプラン以上で利用できます', 'err');
       bg.querySelectorAll('#res-grid .exp-opt').forEach(x => x.classList.toggle('sel', x === o));
@@ -1920,6 +2622,7 @@ class Editor {
       state.fmt = o.dataset.fmt;
     });
     bg.querySelectorAll('[data-sub]').forEach(b => b.onclick = () => this.downloadSubs(b.dataset.sub));
+    bg.querySelector('#ae-btn').onclick = () => this.exportAE(state);
     bg.querySelector('#exp-start').onclick = () => this.startRender(bg, state);
   }
 
@@ -1970,7 +2673,13 @@ class Editor {
     const prevQ = this.engine.quality;
     this.engine.quality = 'full';
     this.engine.resize(W, H);
+    this.engine.keyMode = state.keyMode || null;   // グリーン/ブラックバック(合成用)
     const canvas = this.root.querySelector('#stage');
+    // 演出エンジンの役割フォントも事前ロード
+    if (this.tl.compose?.enabled && window.LFC && document.fonts?.load) {
+      const fams = LFC.fontsUsed(this.tl).map(f => f.split(',')[0].trim());
+      await Promise.all(fams.flatMap(f => ['500', '700', '900'].map(w => document.fonts.load(`${w} 64px ${f}`, '夜明けあアA').catch(() => {}))));
+    }
     const ext = { mp4: 'mp4', webm: 'webm', prores: 'mov', gif: 'gif' }[state.fmt] || 'mp4';
     // フォントを事前ロード(決定論レンダで1フレーム目から正しい書体で描画されるように)
     if (this.tl.lyricStyle?.font && document.fonts?.load) {
@@ -2037,6 +2746,7 @@ class Editor {
     } finally {
       this._exporting = false;
       this.engine.quality = prevQ;
+      this.engine.keyMode = null;
       this.fitStage();
       startBtn.disabled = false;
     }

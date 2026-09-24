@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="ja"><head><meta charset="utf-8">
+<title>LyricFlow editor harness (mock API)</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Noto+Sans+JP:wght@400;500;700;900&family=Noto+Serif+JP:wght@500;700;900&family=Zen+Kaku+Gothic+New:wght@500;700;900&family=Zen+Maru+Gothic:wght@500;700;900&family=M+PLUS+Rounded+1c:wght@500;700;800&family=Kosugi+Maru&family=Shippori+Mincho:wght@500;700;800&family=Zen+Old+Mincho:wght@400;700;900&family=Klee+One:wght@400;600&family=Yuji+Syuku&family=Dela+Gothic+One&family=RocknRoll+One&family=Reggae+One&family=Rampart+One&family=Train+One&family=Mochiy+Pop+One&family=Hachi+Maru+Pop&family=Yusei+Magic&family=DotGothic16&family=Stick&family=Kaisei+Decol:wght@500;700&family=Montserrat:wght@500;700;800&family=Oswald:wght@500;700&family=Bebas+Neue&family=Playfair+Display:wght@600;800&family=Anton&family=BIZ+UDPGothic:wght@400;700&family=Zen+Kurenaido&family=Kaisei+Tokumin:wght@500;700;800&family=New+Tegomin&family=Zen+Antique&family=Hina+Mincho&family=Yuji+Mai&family=Yomogi&family=Zen+Dots&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../../static/css/app.css">
+</head><body>
+<div id="toast-root"></div>
+<div id="root"></div>
+<script src="../../static/js/api.js"></script>
+<script src="../../static/js/fx.js"></script>
+<script src="../../static/js/compose/core.js"></script>
+<script src="../../static/js/compose/loader.js"></script>
+<script src="../../static/js/editor.js"></script>
+<script>
+/* 開発用: 本物のエディタを API モックで動かす(ログイン不要)。サンプル歌詞はオリジナル */
+window.App = { ws: { limits: {} }, codexAvailable: false, whisperAvailable: false };
+const LINES = ['夜明けまで走り出せ', 'ひかりの粒が*降る*', 'もう一度だけ君の名前を呼びたい!', 'STAY AWAKE TONIGHT', '心'];
+const words = [];
+let t = 0.6;
+LINES.forEach((ln, li) => {
+  const chunks = LFC.chunks(ln.replace(/[*!]/g, '')).map((c, i, a) => i === a.length - 1 && /!$/.test(ln) ? c + '!' : c);
+  const marked = ln.includes('*') ? chunks.map(c => (ln.includes('*' + c + '*') ? '*' + c + '*' : c)) : chunks;
+  marked.forEach(c => { words.push({ id: 'w' + words.length, word: c, line: li, start: +t.toFixed(2), end: +(t + 0.55).toFixed(2) }); t += 0.62; });
+  t += 0.9;
+});
+const DUR = Math.ceil(t + 1);
+const project = {
+  id: 'p1', title: '演出エンジン検証', status: 'draft', aspect_ratio: '16:9', role: 'owner', plan: 'pro', watermark: false, workspace_id: 'ws1',
+  timeline_data: {
+    duration: DUR, lyrics_text: LINES.join('\n'), language: 'ja', sceneDefault: 'city',
+    lyricStyle: { font: "'Noto Sans JP', sans-serif", size: 64, color: '#ffffff', anim: 'glow-pop', glow: 0.6 },
+    tracks: { lyrics: words, background: [{ id: 'bg1', start: 0, end: DUR, scene: 'city' }], effects: [], overlay: [] },
+    scenes: [{ label: 'Verse', start: 0, end: DUR / 2, energy: 0.5 }, { label: 'Chorus', start: DUR / 2, end: DUR, energy: 0.9 }],
+    fx: { bloom: 0.5 }, colors: { bg1: '#0e1422', bg2: '#27204a', accent: '#29d3ff', accent2: '#ff5fa2', text: '#ffffff' }, particles: 'none',
+  },
+};
+API.get = async p => {
+  if (p.startsWith('/projects/')) return JSON.parse(JSON.stringify(project));
+  if (p === '/templates') return { templates: [] };
+  if (p.includes('/assets')) return { assets: [] };
+  return {};
+};
+API.put = async () => ({});
+API.post = async () => ({});
+API.del = async () => ({});
+(async () => {
+  const ed = new Editor(document.getElementById('root'), 'p1');
+  await ed.init();
+  window.ed = ed;
+  document.title = 'READY ' + JSON.stringify(LFC.count());
+})().catch(e => { document.title = 'ERROR ' + e.message; console.error(e); });
+</script>
+</body></html>

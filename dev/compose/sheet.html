@@ -1,0 +1,343 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;700;900&family=Noto+Serif+JP:wght@500;700;900&family=Zen+Kaku+Gothic+New:wght@500;700;900&family=Zen+Maru+Gothic:wght@500;700;900&family=M+PLUS+Rounded+1c:wght@500;700;800&family=Shippori+Mincho:wght@500;700;800&family=Zen+Old+Mincho:wght@400;700;900&family=Klee+One:wght@400;600&family=Yuji+Syuku&family=Dela+Gothic+One&family=RocknRoll+One&family=Reggae+One&family=Rampart+One&family=Train+One&family=Mochiy+Pop+One&family=Hachi+Maru+Pop&family=DotGothic16&family=Kaisei+Decol:wght@500;700&family=Oswald:wght@500;700&family=Bebas+Neue&family=Anton&family=Kaisei+Tokumin:wght@500;700;800&family=New+Tegomin&family=Zen+Antique&family=Hina+Mincho&family=Yuji+Mai&family=Yomogi&family=Zen+Dots&family=BIZ+UDPGothic:wght@400;700&display=block" rel="stylesheet">
+<style>body{margin:0;background:#111;color:#ddd;font:12px sans-serif}pre{white-space:pre-wrap}</style>
+</head><body>
+<pre id="report">pending</pre>
+<script src="../../static/js/compose/core.js"></script>
+<script src="../../static/js/compose/loader.js"></script>
+<script>
+/* LyricFlow 演出エンジン 開発用コンタクトシート
+   ?group=layout&ids=a,b|all&mode=sheet|smoke&style=<key> */
+(async () => {
+const Q = new URLSearchParams(location.search);
+const GROUP = Q.get('group') || 'layout';
+const MODE = Q.get('mode') || 'sheet';
+const STYLE = Q.get('style') || '';
+const L = window.LFC;
+const TEXTS = ['心', 'ひかりの粒', '夜明けまで走り出せ', 'もう一度だけ君の名前を呼びたい', 'STAY AWAKE TONIGHT'];
+const errors = {};
+const noteErr = (id, e) => { (errors[id] = errors[id] || []).push(String(e && (e.stack || e.message) || e).split('\n').slice(0, 3).join(' | ')); };
+let CUR = '?';
+window.addEventListener('error', ev => noteErr(CUR, ev.message));
+const origWarn = console.warn;
+console.warn = (...a) => { if (String(a[0]).includes('[LFC]')) noteErr(CUR, a.map(String).join(' ')); origWarn(...a); };
+
+try { await Promise.race([document.fonts.ready, new Promise(r => setTimeout(r, 6000))]);
+  await Promise.race([Promise.all(Object.values(L.DEFAULT_FONTS).concat(["'Noto Serif JP'", "'Zen Maru Gothic'", "'Mochiy Pop One'", "'Kaisei Tokumin'", "'Anton'"]).map(f => document.fonts.load('900 40px ' + f, '夜明けあA'))), new Promise(r => setTimeout(r, 6000))]);
+} catch (e) {}
+
+function makeTL(text, plan, opt = {}) {
+  const chunks = L.chunks(text);
+  const span = opt.span || 2.4, t0 = opt.t0 || 0;
+  const words = chunks.map((c, i) => ({ id: 'w' + i, word: c, line: opt.line || 0, start: t0 + span * i / chunks.length, end: t0 + span * (i + 1) / chunks.length }));
+  return { words, plan };
+}
+function engineFor(lines, compose) {
+  const tl = {
+    colors: { bg1: '#0e1422', bg2: '#27204a', accent: '#29d3ff', accent2: '#ff5fa2', text: '#ffffff' },
+    tracks: { lyrics: [] }, compose: Object.assign({ enabled: true, seed: 7, density: 0, style: STYLE || undefined, cuts: {} }, compose),
+  };
+  lines.forEach((ln, li) => { ln.words.forEach(w => tl.tracks.lyrics.push(Object.assign({}, w, { line: li }))); if (ln.plan) tl.compose.cuts[li + ':0'] = ln.plan; });
+  const st = L.getStyle(tl.compose.style);
+  if (st && st.colors) tl.colors = Object.assign({}, st.colors);
+  return { timeline: tl, quality: 'full', sceneAt: () => null };
+}
+function bgFill(ctx, W, H, tl) {
+  const c = tl.colors, g = ctx.createLinearGradient(0, 0, W, H);
+  g.addColorStop(0, c.bg1); g.addColorStop(1, c.bg2 || c.bg1);
+  ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+}
+function planWith(layoutKey, text, W, H, extra = {}) {
+  const def = L.get('layout', layoutKey) || L.get('layout', 'center');
+  const rng = L.rng(L.h('sheet', layoutKey, text));
+  const n = L.glyphCount(text);
+  const params = def.plan ? def.plan(rng, { text, n, W, H, dur: 3.9, portrait: H > W, emph: false, words: [] }, L.getStyle(STYLE) || {}) : {};
+  return Object.assign({ layout: def.key, params, enter: 'fade', hold: 'still', exit: 'fade', decor: [], treat: null, cam: null, trans: null }, extra);
+}
+/* 1コマ描画して所要msを返す */
+function frame(canvas, eng, t) {
+  const ctx = canvas.getContext('2d');
+  bgFill(ctx, canvas.width, canvas.height, eng.timeline);
+  const t0 = performance.now();
+  L.render(eng, ctx, t, canvas.width, canvas.height, 0.6, 1);
+  return performance.now() - t0;
+}
+function cutsOf(eng) { return L.buildCuts(eng.timeline); }
+
+const ASPECTS = { '16:9': [384, 216], '9:16': [144, 256], '1:1': [216, 216] };
+const SMALL = [192, 108], SMALLP = [72, 128];
+
+function newSheet(w, h) { const c = document.createElement('canvas'); c.width = w; c.height = h; const g = c.getContext('2d'); g.fillStyle = '#16161a'; g.fillRect(0, 0, w, h); return c; }
+function label(g, x, y, s, col = '#9aa') { g.fillStyle = col; g.font = '12px sans-serif'; g.textAlign = 'left'; g.textBaseline = 'top'; g.fillText(s, x, y); }
+function blit(g, c, x, y) { g.drawImage(c, x, y); g.strokeStyle = '#333'; g.strokeRect(x - 0.5, y - 0.5, c.width + 1, c.height + 1); }
+let slowest = {};
+function track(id, ms) { slowest[id] = Math.max(slowest[id] || 0, ms); }
+
+function sheetLayout(id) {
+  const def = L.get('layout', id);
+  const S = newSheet(1010, 1590);
+  const g = S.getContext('2d');
+  label(g, 8, 6, `layout: ${id}  「${def.name}」  tags=${(def.tags || []).join(',')}  w=${def.w}`, '#fff');
+  let y = 28;
+  TEXTS.slice(0, 5).forEach((text, ti) => {
+    const n = L.glyphCount(text);
+    if (def.fits && !def.fits(n)) { label(g, 8, y + 4, `「${text}」 (n=${n}) fits=false`, '#766'); y += 24; return; }
+    let x = 8;
+    for (const [asp, [w, h]] of Object.entries(ASPECTS)) {
+      const c = document.createElement('canvas'); c.width = w; c.height = h;
+      CUR = id;
+      try { const eng = engineFor([Object.assign(makeTL(text), { plan: planWith(id, text, w, h) })]); const cut = cutsOf(eng)[0]; track(id, frame(c, eng, cut.start + cut.inDur + 0.6)); } catch (e) { noteErr(id, e); }
+      blit(g, c, x, y); x += w + 10;
+    }
+    label(g, x, y + 4, `「${text}」 n=${n}`);
+    y += 256 + 14;
+  });
+  // タイムライン(出入りのアニメが付いているか)
+  const text = TEXTS[2];
+  if (!def.fits || def.fits(L.glyphCount(text))) {
+    label(g, 8, y, 'timeline (fade in/out): 装飾・プレートが出入りでアニメするか');
+    y += 16;
+    const eng = engineFor([Object.assign(makeTL(text), { plan: planWith(id, text, SMALL[0], SMALL[1]) })]);
+    const cut = cutsOf(eng)[0];
+    const ts = [0.02, 0.15, 0.35, cut.inDur + 0.6, cut.dur - cut.outDur * 0.6, cut.dur - 0.05].map(v => cut.start + v);
+    ts.forEach((t, i) => { const c = document.createElement('canvas'); c.width = SMALL[0]; c.height = SMALL[1]; CUR = id; try { track(id, frame(c, eng, t)); } catch (e) { noteErr(id, e); } blit(g, c, 8 + i * (SMALL[0] + 8), y); });
+  }
+  return S;
+}
+
+function sheetMotion(group, id) {
+  const def = L.get(group, id);
+  const S = newSheet(1400, 640);
+  const g = S.getContext('2d');
+  label(g, 8, 6, `${group}: ${id}  「${def.name}」  tags=${(def.tags || []).join(',')}  w=${def.w}`, '#fff');
+  let y = 28;
+  const ps = [0.04, 0.15, 0.3, 0.45, 0.6, 0.75, 0.9];
+  const texts = [TEXTS[2], TEXTS[3], TEXTS[1]];
+  texts.forEach((text, ri) => {
+    const port = ri === 2;
+    const [w, h] = port ? SMALLP : SMALL;
+    const extra = group === 'enter' ? { enter: id } : group === 'exit' ? { exit: id } : { hold: id };
+    const lay = ri === 1 && L.get('layout', 'center') ? 'center' : 'center';
+    const eng = engineFor([Object.assign(makeTL(text), { plan: planWith(lay, text, w, h, extra) })]);
+    const cut = cutsOf(eng)[0];
+    ps.forEach((p, i) => {
+      let t;
+      if (group === 'enter') t = cut.start + p * cut.inDur;
+      else if (group === 'exit') t = cut.start + cut.dur - cut.outDur + p * cut.outDur;
+      else t = cut.start + cut.inDur + 0.2 + p * 2.6;
+      const c = document.createElement('canvas'); c.width = w; c.height = h; CUR = id;
+      try { track(id, frame(c, eng, t)); } catch (e) { noteErr(id, e); }
+      blit(g, c, 8 + i * ((port ? 80 : 196)), y);
+    });
+    label(g, 8 + 7 * (port ? 80 : 196) + 6, y + 4, `「${text}」`);
+    y += h + 16;
+  });
+  label(g, 8, y, group === 'hold' ? 't = 静止後 0.2s → 2.8s' : `p = ${ps.join(' ')}`);
+  return S;
+}
+
+function sheetDecor(id) {
+  const def = L.get('decor', id);
+  const S = newSheet(1240, 700);
+  const g = S.getContext('2d');
+  label(g, 8, 6, `decor: ${id}  「${def.name}」  layer=${def.layer || 'front'}  tags=${(def.tags || []).join(',')}`, '#fff');
+  let y = 28;
+  [TEXTS[1], TEXTS[3], TEXTS[2]].forEach((text, ri) => {
+    const port = ri === 2;
+    const [w, h] = port ? [144, 256] : [240, 135];
+    const eng = engineFor([Object.assign(makeTL(text), { plan: planWith('center', text, w, h, { decor: [{ key: id, P: { seed: 11 + ri, v: ri * 2, r: 0.3 + ri * 0.2, right: ri === 1, low: ri === 2, accent: ri !== 1, big: ri === 1, n: 1 + ri, corner: ri } }] }) })]);
+    const cut = cutsOf(eng)[0];
+    [0.05, 0.2, 0.4, cut.inDur + 0.7, cut.inDur + 1.6, cut.dur - cut.outDur * 0.5].forEach((v, i) => {
+      const c = document.createElement('canvas'); c.width = w; c.height = h; CUR = id;
+      try { track(id, frame(c, eng, cut.start + v)); } catch (e) { noteErr(id, e); }
+      blit(g, c, 8 + i * (w + 8), y);
+    });
+    y += h + 14;
+  });
+  return S;
+}
+
+function sheetSimple(group, id) {
+  const def = group === 'style' ? L.getStyle(id) : L.get(group, id);
+  const S = newSheet(1240, 560);
+  const g = S.getContext('2d');
+  label(g, 8, 6, `${group}: ${id}  「${def.name}」  tags=${(def.tags || def.moods || []).join(',')}`, '#fff');
+  let y = 28;
+  if (group === 'style') {
+    const cols = def.colors || {};
+    Object.entries(cols).forEach(([k, v], i) => { g.fillStyle = v; g.fillRect(8 + i * 70, y, 60, 30); label(g, 8 + i * 70, y + 34, k); });
+    label(g, 400, y + 4, `fonts: ${JSON.stringify(def.fonts || {})}`.slice(0, 120));
+    y += 60;
+  }
+  [TEXTS[2], TEXTS[3], TEXTS[1]].forEach((text, ri) => {
+    const [w, h] = [288, 162];
+    let lines, compose = {};
+    if (group === 'trans') {
+      lines = [Object.assign(makeTL(TEXTS[1], {}, { span: 1.2 }), { plan: planWith('center', TEXTS[1], w, h) }), Object.assign(makeTL(text, {}, { t0: 1.3, span: 1.8, line: 1 }), { plan: planWith('center', text, w, h, { trans: id, transP: def.plan ? def.plan(L.rng(5), {}) : {} }) })];
+    } else {
+      const extra = group === 'treat' ? { treat: id, treatP: def.plan ? def.plan(L.rng(ri + 3), {}) : {} } : group === 'cam' ? { cam: id, camP: def.plan ? def.plan(L.rng(ri + 3), {}) : {} } : {};
+      if (group === 'style') compose.style = id;
+      lines = [Object.assign(makeTL(text), { plan: planWith('center', text, w, h, extra) })];
+    }
+    const eng = engineFor(lines, compose);
+    if (group === 'style') { const st = L.getStyle(id); if (st && st.colors) eng.timeline.colors = Object.assign({}, st.colors); }
+    const cuts = cutsOf(eng);
+    const cut = cuts[cuts.length - 1];
+    let ts;
+    if (group === 'trans') { const d = def.dur || 0.35; ts = [-0.1, 0.1, 0.3, 0.5, 0.7, 0.9, 1.1].map(p => cut.start + p * d); }
+    else if (group === 'cam') ts = [0.1, 0.4, 0.8, 1.2, 1.8, 2.6, 3.4].map(v => cut.start + v);
+    else ts = [cut.start + cut.inDur + 0.6];
+    ts.forEach((t, i) => { const c = document.createElement('canvas'); c.width = group === 'treat' || group === 'style' ? w : 168; c.height = group === 'treat' || group === 'style' ? h : 95; CUR = id; try { track(id, frame(c, eng, t)); } catch (e) { noteErr(id, e); } blit(g, c, 8 + i * (c.width + 8), y); });
+    y += (group === 'treat' || group === 'style' ? h : 95) + 14;
+  });
+  return S;
+}
+
+function idsFor(group) {
+  const all = group === 'style' ? L.STYLE_ORDER.slice() : L.keys(group);
+  const ids = Q.get('ids');
+  return !ids || ids === 'all' ? all : ids.split(',').filter(k => all.includes(k));
+}
+
+const out = [];
+const bboxReport = [];
+const contReport = [];
+if (MODE === 'motioncheck') {
+  /* 連続性: 退場の開始直前(p=0)は静止と同一、開始直後(p≈0.03)は小さな差。保持は amt=0 で無変化。登場の終端は静止と同一 */
+  const w = 320, h = 180;
+  const snap = (eng, t) => { const c = document.createElement('canvas'); c.width = w; c.height = h; frame(c, eng, t); return c.getContext('2d').getImageData(0, 0, w, h).data; };
+  const diff = (a, b) => { let s = 0; for (let i = 0; i < a.length; i += 4) s += Math.abs(a[i] - b[i]) + Math.abs(a[i + 1] - b[i + 1]) + Math.abs(a[i + 2] - b[i + 2]); return s / (a.length / 4) / 3; };
+  const text = '夜明けまで走り出せ';
+  const mk = extra => engineFor([Object.assign(makeTL(text), { plan: planWith('center', text, w, h, extra) })], { ghost: 0 });
+  const base = mk({});
+  const bc = cutsOf(base)[0];
+  const restT = bc.start + bc.inDur + 0.9;
+  const rest = snap(base, restT);
+  for (const id of L.keys('exit')) {
+    CUR = id;
+    try {
+      const e = mk({ exit: id }); const c = cutsOf(e)[0];
+      const t0 = c.start + c.dur - c.outDur;
+      const a = diff(snap(e, t0 - 0.004), snap(base, t0 - 0.004));
+      const b = diff(snap(e, t0 + c.outDur * 0.03), snap(base, t0 - 0.004));
+      contReport.push(['exit', id, +a.toFixed(2), +b.toFixed(2)]);
+    } catch (err) { noteErr(id, err); }
+  }
+  for (const id of L.keys('enter')) {
+    CUR = id;
+    try {
+      const e = mk({ enter: id }); const c = cutsOf(e)[0];
+      const a = diff(snap(e, c.start + c.inDur + 0.004), snap(base, c.start + c.inDur + 0.004));
+      contReport.push(['enter', id, +a.toFixed(2), 0]);
+    } catch (err) { noteErr(id, err); }
+  }
+  for (const id of L.keys('hold')) {
+    CUR = id;
+    try {
+      const e = mk({ hold: id }); const c = cutsOf(e)[0];
+      const a = diff(snap(e, c.start + c.inDur + 0.002), snap(base, c.start + c.inDur + 0.002));
+      const b = diff(snap(e, restT + 0.8), snap(base, restT + 0.8));
+      contReport.push(['hold', id, +a.toFixed(2), +b.toFixed(2)]);
+    } catch (err) { noteErr(id, err); }
+  }
+} else if (MODE === 'bbox') {
+  /* 各構図で歌詞がどれくらいの大きさで置かれるか(静止時の bbox / 画面) */
+  const c = document.createElement('canvas');
+  for (const id of L.keys('layout')) {
+    const d = L.get('layout', id);
+    for (const [w, h, asp] of [[480, 270, '16:9'], [270, 480, '9:16']]) {
+      c.width = w; c.height = h;
+      for (const text of ['心', 'ひかりの粒', '夜明けまで走り出せ', 'もう一度だけ君の名前を呼びたい']) {
+        const n = L.glyphCount(text);
+        if (d.fits && !d.fits(n)) continue;
+        CUR = id;
+        try {
+          const eng = engineFor([Object.assign(makeTL(text), { plan: planWith(id, text, w, h) })]);
+          const cut = cutsOf(eng)[0];
+          const ctx = c.getContext('2d'); bgFill(ctx, w, h, eng.timeline);
+          const bb = L.render(eng, ctx, cut.start + cut.inDur + 0.8, w, h, 0.6, 1);
+          const hr = bb ? bb.h / Math.min(w, h) : 0, wr = bb ? bb.w / w : 0;
+          bboxReport.push([id, asp, n, +hr.toFixed(3), +wr.toFixed(3)]);
+        } catch (e) { noteErr(id, e); }
+      }
+    }
+  }
+} else if (MODE === 'plan') {
+  /* おまかせ計画の見え方: 8行の曲を planAll して、各カットの登場中・静止・退場前を並べる */
+  const SONG = ['夜明けまで走り出せ', 'ひかりの粒が*降る*', 'もう一度だけ君の名前を呼びたい!', 'STAY AWAKE TONIGHT', '心', '遠くで鳴る鐘の音|echo', '手を伸ばせば届く気がした', '明日へ'];
+  const seeds = (Q.get('seeds') || (Q.get('ids') && Q.get('ids') !== 'all' ? Q.get('ids').replace('@9x16', '') : '') || '11,22,33').split(',').map(Number);
+  const aspect = Q.get('aspect') || ((Q.get('ids') || '').includes('@9x16') ? '9:16' : '16:9');
+  const [w, h] = aspect === '9:16' ? [108, 192] : [256, 144];
+  for (const seed of seeds) {
+    const lines = []; let t0 = 0.5;
+    SONG.forEach((ln, li) => { const tl0 = makeTL(ln, null, { t0, span: 2.0, line: li }); lines.push(tl0); t0 += 3.0; });
+    const eng = engineFor(lines, { style: STYLE || undefined, seed, density: 0.5, motion: 1, decor: 0.7, camera: 0.5, trans: 0.3 });
+    L.planAll(eng.timeline, { W: w, H: h, seed });
+    const cuts = cutsOf(eng);
+    const S = newSheet(Math.min(1400, 12 + 3 * (w + 8)) * 2, 40 + Math.ceil(cuts.length / 2) * (h + 30));
+    const g = S.getContext('2d');
+    label(g, 8, 6, `plan seed=${seed} style=${STYLE || '(none)'} cuts=${cuts.length}`, '#fff');
+    cuts.forEach((cut, i) => {
+      L.resolveCut(eng.timeline, cut, cuts, w, h);
+      const p = cut.plan;
+      const col = i % 2, row = Math.floor(i / 2);
+      const x0 = 8 + col * (3 * (w + 8) + 16), y0 = 28 + row * (h + 30);
+      [cut.start + cut.inDur * 0.5, cut.start + cut.inDur + 0.5, cut.end - cut.outDur * 0.5].forEach((t, k) => {
+        const c = document.createElement('canvas'); c.width = w; c.height = h; CUR = p.layout;
+        try { track(p.layout, frame(c, eng, t)); } catch (e) { noteErr(p.layout, e); }
+        blit(g, c, x0 + k * (w + 8), y0);
+      });
+      label(g, x0, y0 + h + 3, `${i + 1}. ${cut.layoutDef.name} / ${(cut.enterDef || {}).name || '-'} / ${(cut.exitDef || {}).name || '-'} / ${cut.decorList.map(d => d.def.name).join('+') || '-'}${cut.treatDef ? ' / ' + cut.treatDef.name : ''}${cut.camDef ? ' / ' + cut.camDef.name : ''}${cut.transDef ? ' / つなぎ:' + cut.transDef.name : ''}`.slice(0, 95));
+    });
+    const pre = document.createElement('pre'); pre.className = 'png'; pre.dataset.id = 'plan_' + seed + '_' + (STYLE || 'none') + '_' + aspect.replace(':', 'x'); pre.textContent = S.toDataURL('image/png'); document.body.appendChild(pre);
+  }
+} else if (MODE === 'sheet') {
+  for (const id of idsFor(GROUP)) {
+    let S;
+    try {
+      if (GROUP === 'layout') S = sheetLayout(id);
+      else if (['enter', 'exit', 'hold'].includes(GROUP)) S = sheetMotion(GROUP, id);
+      else if (GROUP === 'decor') S = sheetDecor(id);
+      else S = sheetSimple(GROUP, id);
+    } catch (e) { noteErr(id, e); S = newSheet(400, 60); }
+    const pre = document.createElement('pre'); pre.className = 'png'; pre.dataset.id = id; pre.textContent = S.toDataURL('image/png'); document.body.appendChild(pre);
+  }
+} else {
+  /* smoke: 全エントリを多数の組み合わせで描画してエラーと最遅フレームを調べる */
+  const groups = GROUP === 'all' ? L.GROUPS.concat(['style']) : [GROUP];
+  const c = document.createElement('canvas');
+  for (const grp of groups) for (const id of idsFor(grp)) {
+    for (const [w, h] of [[480, 270], [270, 480], [300, 300]]) {
+      c.width = w; c.height = h;
+      for (const text of TEXTS) {
+        const n = L.glyphCount(text);
+        const extra = {};
+        let lay = 'center';
+        if (grp === 'layout') { const d = L.get('layout', id); if (d.fits && !d.fits(n)) continue; lay = id; }
+        if (grp === 'enter') extra.enter = id; if (grp === 'exit') extra.exit = id; if (grp === 'hold') extra.hold = id;
+        if (grp === 'decor') extra.decor = [{ key: id, P: { seed: 3, v: n % 6, r: 0.5, right: n % 2 === 0, low: n % 3 === 0, accent: true, big: n > 8, n: 2, corner: n % 4 } }];
+        if (grp === 'treat') { const d = L.get('treat', id); extra.treat = id; extra.treatP = d.plan ? d.plan(L.rng(n), {}) : {}; }
+        if (grp === 'cam') { const d = L.get('cam', id); extra.cam = id; extra.camP = d.plan ? d.plan(L.rng(n), {}) : {}; }
+        let lines;
+        if (grp === 'trans') { const d = L.get('trans', id); lines = [Object.assign(makeTL(TEXTS[1], {}, { span: 1.2 }), { plan: planWith('center', TEXTS[1], w, h) }), Object.assign(makeTL(text, {}, { t0: 1.3, span: 1.8, line: 1 }), { plan: planWith('center', text, w, h, { trans: id, transP: d.plan ? d.plan(L.rng(1), {}) : {} }) })]; }
+        else lines = [Object.assign(makeTL(text), { plan: planWith(lay, text, w, h, extra) })];
+        const compose = grp === 'style' ? { style: id } : {};
+        CUR = id;
+        try {
+          const eng = engineFor(lines, compose);
+          const cuts = cutsOf(eng);
+          for (const cut of cuts) for (const f of [0.02, 0.2, 0.5, 0.8, 1.0]) {
+            const t = cut.start + f * cut.dur;
+            track(id, frame(c, eng, t));
+          }
+        } catch (e) { noteErr(id, e); }
+      }
+    }
+  }
+}
+const report = { mode: MODE, group: GROUP, counts: L.count(), errors, bbox: bboxReport, cont: contReport, slow: Object.entries(slowest).filter(([, ms]) => ms > 12).sort((a, b) => b[1] - a[1]).slice(0, 40).map(([k, v]) => k + ':' + v.toFixed(1)) };
+document.getElementById('report').textContent = JSON.stringify(report);
+})();
+</script>
+</body></html>

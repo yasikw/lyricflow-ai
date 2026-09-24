@@ -539,3 +539,54 @@ pre.code {
 .bgm-cat:first-child { margin-top: 0; }
 .bgm-moodrow { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 4px; }
 .bgm-moods { max-height: 210px; overflow-y: auto; padding-right: 4px; }
+
+/* ---- 演出エンジン (カット演出) パネル ---- */
+.cmp-group h4 { display: flex; align-items: center; gap: 8px; }
+.cmp-count { font-size: 10.5px; font-weight: 700; color: var(--cyan); border: 1px solid rgba(0, 212, 255, .45); border-radius: 999px; padding: 1px 8px; }
+.cmp-omakase { width: 100%; justify-content: center; margin: 8px 0 6px; padding: 10px 12px; font-size: 13.5px; font-weight: 800; }
+.cmp-omakase kbd { font: 700 10px 'Inter', monospace; background: rgba(0, 0, 0, .25); border-radius: 4px; padding: 1px 5px; margin-left: 6px; }
+.cmp-hist { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-bottom: 8px; }
+.cmp-hist span { font-size: 11px; color: var(--muted); font-family: 'Inter', monospace; }
+.cmp-partial { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-bottom: 10px; }
+.cmp-partial > span { font-size: 11px; color: var(--muted); margin-right: 2px; width: 100%; }
+.cmp-partial .btn { padding: 3px 9px; }
+.cmp-summary { margin-top: 10px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: rgba(255, 255, 255, .02); font-size: 11.5px; line-height: 1.7; color: var(--text); }
+.cmp-summary .cmp-now { color: var(--cyan); }
+.cmp-sw { display: inline-flex; gap: 2px; vertical-align: middle; margin-left: 4px; }
+.cmp-sw i { width: 12px; height: 12px; border-radius: 3px; border: 1px solid rgba(255, 255, 255, .25); display: inline-block; }
+.cmp-lib { color: var(--faint); font-size: 10.5px; }
+.cmp-cut { margin-top: 10px; padding: 8px 10px; border: 1px dashed var(--border); border-radius: 8px; }
+.cmp-cut-head { font-size: 11.5px; font-weight: 700; margin-bottom: 6px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cmp-cut-btns { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-top: 6px; }
+
+/* ---- フォント見本 ---- */
+.modal.fontlab { max-width: 1180px; width: 94vw; }
+.fl-bar { display: flex; gap: 12px; align-items: center; margin-bottom: 10px; }
+.fl-bar .input { flex: 1; }
+.fl-moods { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.fl-chip { border: 1px solid var(--border); background: var(--panel-2); color: var(--muted); border-radius: 999px; padding: 4px 12px; font-size: 12px; font-weight: 600; }
+.fl-chip.sel { color: var(--cyan); border-color: var(--cyan); background: rgba(0, 212, 255, .08); }
+.fl-pairs { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 10px; }
+.fl-pairs > span { font-size: 12px; color: var(--muted); width: 100%; }
+.fl-roles { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: rgba(255, 255, 255, .02); }
+.fl-role { display: inline-flex; gap: 6px; align-items: baseline; font-size: 12px; }
+.fl-role em { font-style: normal; color: var(--muted); font-size: 11px; }
+.fl-role b { font-size: 14px; }
+.fl-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(270px, 1fr)); gap: 12px; max-height: 58vh; overflow: auto; padding-right: 4px; }
+.fl-card { border: 1px solid var(--border); border-radius: 10px; background: var(--panel); padding: 8px; display: flex; flex-direction: column; gap: 5px; }
+.fl-card canvas { width: 100%; height: auto; aspect-ratio: 560 / 180; border-radius: 6px; display: block; }
+.fl-info { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; }
+.fl-info b { font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fl-cat { font-size: 10.5px; color: var(--faint); white-space: nowrap; }
+.fl-tags { display: flex; flex-wrap: wrap; gap: 4px; min-height: 18px; }
+.fl-tags i { font-style: normal; font-size: 10px; color: var(--pink); border: 1px solid rgba(255, 126, 219, .35); border-radius: 999px; padding: 0 7px; }
+.fl-mo { font-size: 10.5px; color: var(--muted); }
+.fl-btns { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; }
+.fl-btns .btn { padding: 4px 4px; font-size: 11px; justify-content: center; }
+.clip.cut { color: var(--text); font-size: 10.5px; font-weight: 700; border: 1px solid; border-radius: 5px; padding: 0 5px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; cursor: pointer; }
+.clip.cut:hover { filter: brightness(1.25); }
+.notation-help { margin: -6px 0 10px; font-size: 11.5px; color: var(--muted); }
+.notation-help summary { cursor: pointer; color: var(--cyan); font-weight: 600; margin-bottom: 4px; }
+.notation-help div { line-height: 1.8; }
+.notation-help code { color: var(--text); background: var(--panel-3); border-radius: 4px; padding: 0 5px; margin-right: 4px; }
+.notation-help .nh-ex { color: var(--faint); }

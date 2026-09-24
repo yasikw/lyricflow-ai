@@ -97,6 +97,7 @@ class FXEngine {
     const { ctx, canvas } = this;
     const W = canvas.width, H = canvas.height;
     if (!tl || !W) return;
+    if (this.keyMode === 'green' || this.keyMode === 'black') return this._renderKeyed(t, W, H);
     const colors = tl.colors || { bg1: '#0d1117', bg2: '#1a2040', accent: '#00d4ff', accent2: '#7b2ff7', text: '#fff' };
     const energy = this.energyAt(t);
     const boost = this.boostAt(t);
@@ -117,7 +118,7 @@ class FXEngine {
     this._drawDance(ctx, t, W, H, energy, boost);
     // パーティクル(粒子) — 前景キャラ/被写体より前面に降らせる
     this._stepParticles(ctx, t, W, H, colors, energy * boost);
-    if (!this.hideLyrics) this._drawLyrics(t, W, H, colors, energy, boost, fx);   // タップ同期中は歌詞を隠す
+    if (!this.hideLyrics) this._drawLyricLayer(t, W, H, colors, energy, boost, fx);   // タップ同期中は歌詞を隠す
     this._drawOverlays(ctx, t, W, H, colors);
 
     // ---- post processing ----
@@ -749,6 +750,37 @@ class FXEngine {
   }
 
   /* ---------------- lyrics (word-level animation) ---------------- */
+  /* 歌詞レイヤー: 演出エンジン(カット演出)が有効ならそちら、無効/失敗時は従来の行表示 */
+  _drawLyricLayer(t, W, H, C, energy, boost, fx) {
+    const cm = this.timeline && this.timeline.compose;
+    if (cm && cm.enabled && window.LFC) {
+      this._lyricBox = null;
+      try { window.LFC.render(this, this.ctx, t, W, H, energy, boost); return; }
+      catch (e) { if (!this._lfcWarned) { this._lfcWarned = true; console.warn('[LFC] render failed, fallback to classic', e); } }
+    }
+    this._drawLyrics(t, W, H, C, energy, boost, fx);
+  }
+
+  /* 合成用の書き出し: 背景・粒子・後処理を省き、歌詞だけを黒地(ブラックバック)/緑地(グリーンバック)に描く。
+     透明に歌詞を描いてから背面に地色を敷く(destination-over)ので文字色はそのまま保たれる */
+  _renderKeyed(t, W, H) {
+    const tl = this.timeline, ctx = this.ctx;
+    const saved = tl.colors;
+    tl.colors = Object.assign({}, saved || {}, { bg1: '#000000', bg2: '#000000' });
+    tl._keyMode = this.keyMode;
+    try {
+      ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.globalAlpha = 1; ctx.filter = 'none';
+      ctx.globalCompositeOperation = 'source-over'; ctx.clearRect(0, 0, W, H); ctx.restore();
+      if (!this.hideLyrics) this._drawLyricLayer(t, W, H, tl.colors, this.energyAt(t), this.boostAt(t), tl.fx || {});
+      ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.globalAlpha = 1; ctx.filter = 'none';
+      ctx.globalCompositeOperation = 'destination-over';
+      ctx.fillStyle = this.keyMode === 'green' ? '#00ff00' : '#000000';
+      ctx.fillRect(0, 0, W, H);
+      ctx.restore();
+      if (tl.watermark) this._watermark(ctx, W, H);
+    } finally { tl.colors = saved; delete tl._keyMode; }
+  }
+
   _drawLyrics(t, W, H, C, energy, boost, fx) {
     this._lyricBox = null;   // このフレームで歌詞が描かれなければドラッグ対象なし
     const words = this.timeline?.tracks?.lyrics || [];

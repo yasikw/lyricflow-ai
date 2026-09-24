@@ -1,6 +1,21 @@
 # HANDOFF — LyricFlow AI
 
-最終更新: 2026-08-24 (Claude Code)
+最終更新: 2026-09-24 (Claude Code)
+
+## 演出エンジン(カット演出)の契約 — 破壊的変更禁止
+
+- 実装: `static/js/compose/core.js`(グローバル `window.LFC`) + パック `static/js/compose/p_*.js`、読込一覧は `loader.js`。
+  エディタ・書き出し・開発シートが同じ一覧を使う。パック作成の契約は `docs/COMPOSE_PACKS.md`、調査は `docs/JIZURA_RESEARCH.md`。
+- タイムライン: `timeline.compose = {enabled, seed, style, mood, motion, decor, density, ghost, camera, trans, useWa, fonts:{display,serif,body}, cuts:{"<line>:<part>": 案}, planVersion}`
+  案 = `{layout, params, enter, hold, exit, decor:[{key,P}], treat, treatP, cam, camP, trans, transP, seed, locked, reroll}`。
+  `enabled=false`(既定) なら従来の歌詞描画(`FXEngine._drawLyrics`)。既存プロジェクトの見た目は変わらない。
+- 描画入口: `FXEngine._drawLyricLayer` → `LFC.render(engine, ctx, t, W, H, energy, boost)`。失敗時は従来描画にフォールバック。
+- カットのキャッシュ `timeline._lfcCuts` は**非列挙**(保存JSONに入らない)。案を変えたら `compose.planVersion` を増やす。
+- レイアウトの key は接頭辞で担当パックを分ける(`a_` `b_` `c_` `d_`)。group 内で key は一意。
+- 歌詞記法: `*強調*` / 行末の半角 `!`=衝撃 / `本文|注釈` / 語末 `/`=カット分割(表示時に記号は消える。従来描画には記号が残る)。
+- 書き出し: `engine.keyMode = 'green'|'black'` で合成用(背景・後処理なし、透明に描いて背面に地色)。AE用 `.jsx` は `Editor.exportAE()`(中央配置の簡略版)。
+- 検証: `dev/compose/sheet.sh <group> <ids|all> <out> [sheet|smoke|plan|bbox] [style]`(chrome-headless-shell で PNG + report.json)、
+  `dev/compose/editor_test.html`(本物のエディタを API モックで起動。`python3 -m http.server 4299` をリポ直下で)。
 
 ## VRM Atelier連携(3Dダンスレイヤー)の契約 — 破壊的変更禁止
 
@@ -27,9 +42,11 @@
 
 ## in-flight
 
-- なし(3Dダンスレイヤー Phase1 完了・E2E確認済み)
+- なし(3Dダンスレイヤー Phase1 完了・E2E確認済み / 演出エンジン 442種 完了・スモーク/連続性テスト済み)
 
 ## 次にやること
 
 - Phase 2: セクション連動カメラ/表情、3Dポストエフェクト(ブルーム/DoFを3D側にも)
 - Phase 3: ダンスMVテンプレート、書き出しプリセット
+- 演出エンジン: ブラウザ内 WebCodecs 書き出し、AE への構図の忠実再現、中国語/韓国語の役割フォント自動切替、曲頭タイトルカード・間奏カット
+- 太い縁取り系の文字加工(sticker/doubleLine/extrude3d/cutout)は CPU 描画で 1080p 4〜7ms。書き出し時間が気になれば軽量化
