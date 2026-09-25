@@ -590,3 +590,9 @@ pre.code {
 .notation-help div { line-height: 1.8; }
 .notation-help code { color: var(--text); background: var(--panel-3); border-radius: 4px; padding: 0 5px; margin-right: 4px; }
 .notation-help .nh-ex { color: var(--faint); }
+
+/* ---- モーションリール ---- */
+.cmp-reel { width: 100%; justify-content: center; margin: 0 0 8px; }
+.modal.reelmaker { max-width: 620px; width: 94vw; }
+.rm-row { display: grid; grid-template-columns: 1fr 1fr 1.3fr; gap: 10px; }
+.rm-sum { margin-top: 8px; font: 600 12.5px 'Inter', monospace; color: var(--cyan); }

@@ -619,6 +619,7 @@ class Editor {
         <h4>🎬 演出エンジン <span class="cmp-count" title="構図・登場・保持・退場・装飾・加工・カメラ・つなぎ・配色の合計">${cnt.total}種</span></h4>
         <label class="chk-row"><input type="checkbox" id="cmp-on" ${cm.enabled ? 'checked' : ''}><span>カット演出で歌詞を描く</span></label>
         <button class="btn primary cmp-omakase" id="cmp-omakase" title="スタイル・雰囲気・動き・配色・構成をまるごと作り直す(キーボード R)">🎲 おまかせで作る <kbd>R</kbd></button>
+        <button class="btn sm cmp-reel" id="cmp-reel" title="言葉とBPMから、拍にぴったり合ったモーショングラフィックスとBGMを作る">🎞 モーションリールを作る（拍同期）</button>
         <div class="cmp-hist">
           <button class="btn sm" id="cmp-prev">◀ 前の案</button>
           <span id="cmp-histpos">${h.length ? `${(this._cmpHistIdx ?? h.length - 1) + 1} / ${h.length}` : '—'}</span>
@@ -651,6 +652,7 @@ class Editor {
       this.markDirty(); this._composeRefresh(); this.renderTimeline();
     };
     $('#cmp-omakase').onclick = () => this.composeOmakase();
+    $('#cmp-reel').onclick = () => this.openReelMaker();
     $('#cmp-prev').onclick = () => this.composeHist(-1);
     $('#cmp-next').onclick = () => this.composeHist(1);
     el.querySelectorAll('[data-reroll]').forEach(b => b.onclick = () => this.composeReroll(b.dataset.reroll));
@@ -864,6 +866,227 @@ class Editor {
       this._composeCutPanel(true);
     };
     box.querySelector('#cmp-cut-lock').onchange = e => { materialize().locked = e.target.checked; this.markDirty(); };
+  }
+
+  /* ---------------- モーションリール(拍同期モーショングラフィックス) ----------------
+     言葉とBPMから、全イベントを拍番号で決めた短い映像を組む: 言葉を拍に配置 → 拍ロックの演出計画
+     (滑り込み/図形モーフ/弾む/グラフ/トンネル/立方体/…/最後は粒子で文字を組んで爆散) + 同じ拍で作曲したBGM。 */
+  openReelMaker() {
+    const L = window.LFC;
+    if (!L || !L.get('layout', 'm_particles')) return toast('モーショングラフィックスの演出パックが読み込まれていません', 'err');
+    const bg = document.createElement('div');
+    bg.className = 'modal-bg';
+    const words = 'はじまり\nうごく\nかたち\nリズム\n奥へ\nまわる\nLYRICFLOW';
+    bg.innerHTML = `
+      <div class="modal reelmaker">
+        <div class="m-head"><h2>🎞 モーションリールを作る</h2><button class="x-btn">×</button></div>
+        <div class="m-body">
+          <p class="p-sub">言葉を拍に並べ、拍にぴったり合った演出と、同じ拍で自動作曲したBGMの短いモーショングラフィックスを作ります。最後の言葉は粒子が集まって形になります。</p>
+          <label class="fld"><span>言葉（1行に1つ・3〜10個）</span><textarea class="input" id="rm-words" rows="7">${words}</textarea></label>
+          <div class="rm-row">
+            <label class="fld"><span>テンポ (BPM)</span><input class="input" type="number" id="rm-bpm" min="70" max="180" value="${this.tl.bpm && this.tl.bpm >= 70 ? Math.round(this.tl.bpm) : 128}"></label>
+            <label class="fld"><span>1語あたりの拍</span><select class="input" id="rm-per"><option value="2">2拍（速い）</option><option value="4" selected>4拍（標準）</option><option value="8">8拍（ゆったり）</option></select></label>
+            <label class="fld"><span>スタイル</span><select class="input" id="rm-style"><option value="reelPaper">モーションリール(紙)</option><option value="reelNight">モーションリール(夜)</option></select></label>
+          </div>
+          <label class="chk-row"><input type="checkbox" id="rm-bgm" checked><span>同じ拍でBGMを自動作曲して曲に設定する</span></label>
+          <div class="rm-sum" id="rm-sum"></div>
+          <p class="p-sub" style="margin-top:8px">書き出し時に「モーションブラー 10サンプル」を選ぶと、速い動きがなめらかにぶれて映像らしくなります。</p>
+        </div>
+        <div class="m-foot"><button class="btn" id="rm-cancel">キャンセル</button><button class="btn primary" id="rm-go">🎞 作成する</button></div>
+      </div>`;
+    document.body.appendChild(bg);
+    const $ = s => bg.querySelector(s);
+    const read = () => {
+      const ws = $('#rm-words').value.split('\n').map(s => s.trim()).filter(Boolean).slice(0, 10);
+      const bpm = Math.max(70, Math.min(180, +$('#rm-bpm').value || 128));
+      const per = +$('#rm-per').value || 4;
+      const beats = 2 + per * Math.max(0, ws.length - 1) + (per + 2) + 2;
+      return { words: ws, bpm, per, beats, style: $('#rm-style').value, bgm: $('#rm-bgm').checked };
+    };
+    const sum = () => { const o = read(); $('#rm-sum').textContent = `${o.words.length}語 ・ 合計 ${o.beats}拍 ＝ ${(o.beats * 60 / o.bpm).toFixed(1)}秒`; };
+    $('#rm-words').oninput = sum; $('#rm-bpm').oninput = sum; $('#rm-per').onchange = sum;
+    sum();
+    const close = () => bg.remove();
+    bg.querySelector('.x-btn').onclick = close;
+    $('#rm-cancel').onclick = close;
+    $('#rm-go').onclick = async () => {
+      const o = read();
+      if (o.words.length < 2) return toast('言葉を2つ以上入力してください', 'err');
+      if ((this.tl.tracks.lyrics || []).length && !confirm('いまの歌詞・タイミング・曲をモーションリール用に置き換えます。よろしいですか？（元に戻すは「履歴」から）')) return;
+      $('#rm-go').disabled = true;
+      try { await this.buildMotionReel(o); close(); }
+      catch (e) { toast('作成に失敗: ' + e.message, 'err'); $('#rm-go').disabled = false; }
+    };
+  }
+  async buildMotionReel(o) {
+    const L = window.LFC;
+    const bl = 60 / o.bpm;
+    const intro = 2;
+    const lyr = [];
+    let beat = intro;
+    o.words.forEach((w, i) => {
+      const last = i === o.words.length - 1;
+      const len = last ? o.per + 2 : o.per;
+      lyr.push({ id: 'mg' + i + '_' + Date.now().toString(36), word: w, line: i, start: +(beat * bl).toFixed(3), end: +((beat + len - 0.5) * bl).toFixed(3) });
+      beat += len;
+    });
+    const finaleBeat = intro + o.per * (o.words.length - 1);
+    const totalBeats = beat + 2;
+    const tl = this.tl;
+    this.pause();
+    tl.lyrics_text = o.words.join('\n');
+    tl.tracks.lyrics = lyr;
+    tl.duration = +(totalBeats * bl).toFixed(3);
+    tl.bpm = o.bpm; tl.beatOffset = 0; tl.showBeats = true;
+    tl.sceneDefault = 'flat'; tl.particles = 'none';
+    tl.tracks.background = [{ id: 'bg' + Date.now(), start: 0, end: tl.duration, scene: 'flat' }];
+    tl.scenes = [];
+    tl.fx = Object.assign({}, tl.fx, { bloom: 0.25, glitch: 0.08, chroma: 0.3 });
+    const cm = this._cm();
+    Object.assign(cm, { enabled: true, beatLock: true, density: 0, motion: 1, decor: 0.8, ghost: 0.6, camera: 0.3, trans: 0, useWa: true, mood: 'graphic' });
+    this.composeApplyStyle(o.style);
+    cm.seed = L.h('reel', o.words.join('|'), o.bpm) % 2000000000;
+    // 拍ロックのカットに、場面ごとの演出を順番に割り当てる
+    const SEQ = [
+      { layout: 'center', enter: 'slideL', exit: 'whipLeft', scene: 'MOVE' },
+      { layout: 'm_morph', enter: 'pop', exit: 'shrinkPoint', scene: 'SHAPE' },
+      { layout: 'center', enter: 'dropBounce', exit: 'dropFall', scene: 'RHYTHM' },
+      { layout: 'm_graph', enter: 'fade', exit: 'wipeL', scene: 'EASING' },
+      { layout: 'm_tunnel', enter: 'zoomFar', exit: 'zoomThrough', scene: 'DEPTH' },
+      { layout: 'm_cube', enter: 'spinIn', exit: 'glitchOut', scene: '3D' },
+    ];
+    const FINAL = { layout: 'm_particles', enter: 'fade', exit: 'particleOut', scene: 'FINALE' };
+    const cv = this.engine.canvas;
+    const W = cv.width, H = cv.height;
+    const cuts = L.buildCuts(tl);
+    const st = L.getStyle(cm.style) || {};
+    cm.cuts = {};
+    cuts.forEach((c, i) => {
+      const spec = i === cuts.length - 1 ? FINAL : SEQ[i % SEQ.length];
+      const pick = (g, k, fb) => (L.get(g, k) ? k : fb);
+      const lay = L.get('layout', spec.layout) || L.get('layout', 'center');
+      const rng = L.rng(L.h(cm.seed, 'reel', i));
+      cm.cuts[c.line + ':' + c.part] = {
+        layout: lay.key,
+        params: lay.plan ? lay.plan(rng, { text: c.text, n: c.n, W, H, dur: c.dur, portrait: H > W, emph: i === cuts.length - 1, words: c.words }, st) : {},
+        enter: pick('enter', spec.enter, 'fade'), hold: 'still', exit: pick('exit', spec.exit, 'fade'),
+        decor: [{ key: 'mgHud', P: { title: 'LYRICFLOW / MOTION REEL', scene: i === 0 ? 'INTRO' : spec.scene } }],
+        treat: null, cam: null, trans: null, seed: L.h(cm.seed, 'cut', i),
+      };
+    });
+    cm.planVersion = (cm.planVersion || 0) + 1;
+    this.engine.setTimeline(tl);
+    this.sel = null;
+    this.markDirty();
+    this.renderAll();
+    this._composePushHist();
+    toast(`モーションリールを作成しました（${o.words.length}語・${totalBeats}拍・${o.bpm}BPM）`, 'ok');
+    if (o.bgm) {
+      toast('BGMを作曲中…');
+      const wav = await this._synthReelBGM(o.bpm, totalBeats, finaleBeat + 2);
+      const file = new File([wav], `motion_reel_${o.bpm}bpm.wav`, { type: 'audio/wav' });
+      try { await this.uploadAsset(file); }
+      catch (e) { toast('BGMのアップロードに失敗: ' + e.message + '（映像はそのまま使えます）', 'err'); }
+      tl.duration = Math.max(tl.duration, +(totalBeats * bl).toFixed(3));
+      this.renderTimeline();
+    }
+  }
+  /* 拍で作曲するBGM(完全に計算で合成・オリジナル): キック/ハット/スネア/ノコギリ7本の和音/ベース/
+     キックでのサイドチェイン/決めの前のライザーと0.1秒の無音/決めの一撃。WAV(16bit)を返す */
+  async _synthReelBGM(bpm, totalBeats, hitBeat) {
+    const sr = 44100, bl = 60 / bpm;
+    const dur = totalBeats * bl;                                   // 曲長=拍の合計ちょうど(HUDの拍数と一致)
+    const ac = new OfflineAudioContext(2, Math.ceil(sr * dur), sr);
+    const master = ac.createGain(); master.gain.value = 0.85;
+    const comp = ac.createDynamicsCompressor(); comp.threshold.value = -12; comp.ratio.value = 5; comp.attack.value = 0.003; comp.release.value = 0.12;
+    comp.connect(master); master.connect(ac.destination);
+    const drums = ac.createGain(); drums.connect(comp);
+    const music = ac.createGain(); music.gain.value = 1; music.connect(comp);
+    // 決定論的なノイズ
+    const nb = ac.createBuffer(1, sr, sr), nd = nb.getChannelData(0);
+    let s = 20260926;
+    for (let i = 0; i < nd.length; i++) { s = (Math.imul(s, 1103515245) + 12345) >>> 0; nd[i] = s / 2147483648 - 1; }
+    const noise = (t, len, type, freq, q, gain, dest = drums) => {
+      const src = ac.createBufferSource(); src.buffer = nb;
+      const f = ac.createBiquadFilter(); f.type = type; f.frequency.value = freq; f.Q.value = q;
+      const g = ac.createGain(); g.gain.setValueAtTime(gain, t); g.gain.exponentialRampToValueAtTime(0.0001, t + len);
+      src.connect(f).connect(g).connect(dest); src.start(t, (t * 0.37) % 0.4); src.stop(t + len + 0.02);
+      return f;
+    };
+    const kick = (t, big = false) => {
+      const o = ac.createOscillator(), g = ac.createGain();
+      o.frequency.setValueAtTime(big ? 120 : 150, t); o.frequency.exponentialRampToValueAtTime(big ? 34 : 42, t + (big ? 0.3 : 0.14));
+      g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(big ? 1.2 : 1, t + 0.004); g.gain.exponentialRampToValueAtTime(0.0001, t + (big ? 1.1 : 0.36));
+      o.connect(g).connect(drums); o.start(t); o.stop(t + (big ? 1.2 : 0.4));
+      // サイドチェイン: キックのたびに他の音を一瞬小さく
+      music.gain.setValueAtTime(0.25, t); music.gain.linearRampToValueAtTime(1, t + bl * 0.45);
+    };
+    const hat = t => noise(t, 0.045, 'highpass', 7800, 0.7, 0.22);
+    const snare = t => {
+      noise(t, 0.2, 'bandpass', 1900, 0.8, 0.55);
+      const o = ac.createOscillator(), g = ac.createGain(); o.type = 'triangle';
+      o.frequency.setValueAtTime(200, t); o.frequency.exponentialRampToValueAtTime(140, t + 0.1);
+      g.gain.setValueAtTime(0.3, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.16);
+      o.connect(g).connect(drums); o.start(t); o.stop(t + 0.2);
+    };
+    const hz = n => 440 * Math.pow(2, (n - 69) / 12);
+    const CH = [[57, 60, 64], [53, 57, 60], [48, 52, 55], [55, 59, 62]];     // Am - F - C - G
+    const pad = (t, len, notes, lvl = 0.05) => {
+      const lp = ac.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 1900; lp.Q.value = 0.5;
+      const g = ac.createGain(); g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(lvl, t + 0.04);
+      g.gain.setValueAtTime(lvl, Math.max(t + 0.05, t + len - 0.08)); g.gain.linearRampToValueAtTime(0.0001, t + len);
+      lp.connect(g).connect(music);
+      for (const n of notes) for (let k = 0; k < 7; k++) {          // 少しずつ音程をずらしたノコギリ波を7本
+        const o = ac.createOscillator(); o.type = 'sawtooth'; o.frequency.value = hz(n); o.detune.value = (k - 3) * 8;
+        o.connect(lp); o.start(t); o.stop(t + len + 0.02);
+      }
+    };
+    const bass = (t, n) => {
+      const o = ac.createOscillator(), g = ac.createGain(), lp = ac.createBiquadFilter();
+      o.type = 'sawtooth'; o.frequency.value = hz(n - 24); lp.type = 'lowpass'; lp.frequency.value = 420;
+      g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.22, t + 0.01); g.gain.exponentialRampToValueAtTime(0.0001, t + bl * 0.45);
+      o.connect(lp).connect(g).connect(music); o.start(t); o.stop(t + bl * 0.5);
+    };
+    const tHit = hitBeat * bl;
+    for (let b = 0; b < totalBeats; b++) {
+      const t = b * bl, bar = Math.floor(b / 4), inBar = b % 4;
+      if (Math.abs(t - tHit) < 1e-6) continue;
+      const chord = CH[bar % CH.length];
+      if (t >= tHit - 2 * bl && t < tHit) {                       // 決めの前2拍: ハットの連打のみ
+        for (let k = 0; k < 4; k++) hat(t + k * bl / 4);
+        continue;
+      }
+      if (b >= 2) kick(t);
+      if (b >= 2) hat(t + bl / 2);
+      if (b >= 4 && (inBar === 1 || inBar === 3)) snare(t);
+      const room = t < tHit ? tHit - 2 * bl - t : Infinity;          // 決めの前2拍には和音を伸ばさない
+      const afterHit = t > tHit && t < tHit + bl * 4;                // 決めの和音と重ねない
+      if (inBar === 0 && !afterHit) pad(t, Math.max(bl, Math.min(bl * 4, room)), chord);
+      if (b >= 2) { bass(t, chord[0]); bass(t + bl / 2, chord[0]); }
+    }
+    // 決めの前: 上がっていく「シュッ」(ライザー) → 0.1秒の完全な無音 → 一撃
+    const rise = noise(tHit - 2 * bl, 2 * bl, 'bandpass', 500, 1.2, 0.35);
+    rise.frequency.setValueAtTime(400, tHit - 2 * bl); rise.frequency.exponentialRampToValueAtTime(7000, tHit - 0.1);
+    master.gain.setValueAtTime(0.85, tHit - 0.1 - 1e-3); master.gain.setValueAtTime(0, tHit - 0.1);
+    master.gain.setValueAtTime(0.85, tHit);
+    kick(tHit, true);
+    noise(tHit, 1.8, 'highpass', 3200, 0.5, 0.45);                // クラッシュ
+    pad(tHit, bl * 4, CH[0].concat([CH[0][0] + 12]), 0.07);
+    const buf = await ac.startRendering();
+    return this._wavBlob(buf);
+  }
+  _wavBlob(buf) {
+    const ch = buf.numberOfChannels, len = buf.length, sr = buf.sampleRate;
+    const data = new DataView(new ArrayBuffer(44 + len * ch * 2));
+    const w = (o, str) => { for (let i = 0; i < str.length; i++) data.setUint8(o + i, str.charCodeAt(i)); };
+    w(0, 'RIFF'); data.setUint32(4, 36 + len * ch * 2, true); w(8, 'WAVE'); w(12, 'fmt ');
+    data.setUint32(16, 16, true); data.setUint16(20, 1, true); data.setUint16(22, ch, true); data.setUint32(24, sr, true);
+    data.setUint32(28, sr * ch * 2, true); data.setUint16(32, ch * 2, true); data.setUint16(34, 16, true);
+    w(36, 'data'); data.setUint32(40, len * ch * 2, true);
+    const chans = Array.from({ length: ch }, (_, c) => buf.getChannelData(c));
+    let o = 44;
+    for (let i = 0; i < len; i++) for (let c = 0; c < ch; c++) { const v = Math.max(-1, Math.min(1, chans[c][i])); data.setInt16(o, v < 0 ? v * 0x8000 : v * 0x7fff, true); o += 2; }
+    return new Blob([data], { type: 'audio/wav' });
   }
 
   /* ---------------- After Effects 用書き出し (.jsx) ----------------
@@ -2576,6 +2799,12 @@ alert('LyricFlow: ' + D.cuts.length + ' text layers created.' + (miss.length ? '
             <div class="exp-opt" data-key="green"><b>グリーンバック</b><small>合成用 (#00FF00)</small></div>
             <div class="exp-opt" data-key="black"><b>ブラックバック</b><small>合成用 (黒地)</small></div>
           </div>
+          <label class="fld"><span>モーションブラー（1コマを複数回描いて平均・書き出しのみ）</span></label>
+          <div class="exp-grid" id="mb-grid" style="grid-template-columns:1fr 1fr 1fr">
+            <div class="exp-opt sel" data-mb="1"><b>なし</b><small>最速</small></div>
+            <div class="exp-opt" data-mb="5"><b>5サンプル</b><small>なめらか・約5倍の時間</small></div>
+            <div class="exp-opt" data-mb="10"><b>10サンプル</b><small>最もなめらか・約10倍</small></div>
+          </div>
           <label class="fld"><span>アスペクト比 (${state.aspect} — エディターで変更)</span></label>
           <label class="fld"><span>歌詞ファイル同時出力</span></label>
           <div class="sub-dl">
@@ -2606,6 +2835,10 @@ alert('LyricFlow: ' + D.cuts.length + ' text layers created.' + (miss.length ? '
     bg.querySelectorAll('#fps-grid .exp-opt').forEach(o => o.onclick = () => {
       bg.querySelectorAll('#fps-grid .exp-opt').forEach(x => x.classList.toggle('sel', x === o));
       state.fps = +o.dataset.fps;
+    });
+    bg.querySelectorAll('#mb-grid .exp-opt').forEach(o => o.onclick = () => {
+      bg.querySelectorAll('#mb-grid .exp-opt').forEach(x => x.classList.toggle('sel', x === o));
+      state.mblur = +o.dataset.mb || 1;
     });
     bg.querySelectorAll('#key-grid .exp-opt').forEach(o => o.onclick = () => {
       bg.querySelectorAll('#key-grid .exp-opt').forEach(x => x.classList.toggle('sel', x === o));
@@ -2709,10 +2942,26 @@ alert('LyricFlow: ' + D.cuts.length + ' text layers created.' + (miss.length ? '
         project_id: this.pid,
         settings: { format: state.fmt, resolution: state.res, aspect: state.aspect, width: W, height: H, fps: FPS },
       });
+      const MB = Math.max(1, state.mblur | 0);
+      const acc = MB > 1 ? document.createElement('canvas') : null;
+      const ag = acc ? (acc.width = W, acc.height = H, acc.getContext('2d')) : null;
       for (let i = 0; i < total; i++) {
         if (!bg.isConnected || !this._exporting) throw new Error('cancelled');
-        this.engine.render(i / FPS);                      // 正確な時刻で1フレーム描画
-        const blob = await new Promise(r => canvas.toBlob(r, 'image/jpeg', 0.92));
+        let src = canvas;
+        if (MB > 1) {
+          // モーションブラー: 1コマの前後(180°シャッター)を MB 回描いて累積平均
+          ag.globalAlpha = 1; ag.clearRect(0, 0, W, H);
+          for (let k = 0; k < MB; k++) {
+            this.engine.render(Math.max(0, (i + (k / MB - 0.5) * 0.5) / FPS));
+            ag.globalAlpha = 1 / (k + 1);
+            ag.drawImage(canvas, 0, 0);
+          }
+          ag.globalAlpha = 1;
+          src = acc;
+        } else {
+          this.engine.render(i / FPS);                    // 正確な時刻で1フレーム描画
+        }
+        const blob = await new Promise(r => src.toBlob(r, 'image/jpeg', 0.92));
         const res = await fetch(`/api/v1/render/frames/${job_id}/${i}`, {
           method: 'POST',
           headers: { Authorization: 'Bearer ' + API.token, 'Content-Type': 'image/jpeg', 'X-Total-Frames': String(total) },

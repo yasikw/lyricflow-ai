@@ -734,7 +734,7 @@ L.parseNotation = raw => {
 L.buildCuts = tl => {
   const words = (tl.tracks && tl.tracks.lyrics) || [];
   const cm = tl.compose || {};
-  let sig = words.length + '|' + (cm.density == null ? 0.5 : cm.density) + '|' + (tl.bpm || 0) + '|' + (tl.beatOffset || 0);
+  let sig = words.length + '|' + (cm.density == null ? 0.5 : cm.density) + '|' + (tl.bpm || 0) + '|' + (tl.beatOffset || 0) + '|' + (cm.beatLock ? 1 : 0);
   let acc = 0;
   for (const w of words) acc += (w.start || 0) * 7.13 + (w.end || 0) * 3.7 + (w.line || 0) * 1.1 + String(w.word || '').length;
   sig += '|' + Math.round(acc * 100);
@@ -753,10 +753,11 @@ L.buildCuts = tl => {
   const density = cm.density == null ? 0.5 : cm.density;
   const target = L.lerp(5.2, 1.5, clamp(density));       // 1カットの目安秒数(密度が高いほど短く)
   const bpm = tl.bpm, off = tl.beatOffset || 0;
+  const lock = !!(cm.beatLock && bpm);          // モーショングラフィックス: 全カットを拍に固定
   const snap = t => {
     if (!bpm) return t;
     const p = 60 / bpm, k = Math.round((t - off) / p), bt = off + k * p;
-    return Math.abs(bt - t) < 0.13 ? bt : t;
+    return lock || Math.abs(bt - t) < 0.13 ? bt : t;
   };
   const cuts = [];
   lines.forEach((ln, li) => {
@@ -783,6 +784,13 @@ L.buildCuts = tl => {
       const isLast = gi === groups.length - 1;
       let end = isLast ? Math.min(nextStart - 0.02, ln.end + 1.5) : snap((groups[gi + 1].ws[0].start) - 0.02);
       if (isLast) end = Math.max(end, Math.min(nextStart - 0.02, ln.end + 0.25));
+      const beatLen = bpm ? 60 / bpm : 0.5;
+      if (lock) {
+        // 拍ロック: 次のカットの頭の拍の直前まで表示(曲の終わりは2拍)
+        const nextCut = !isLast ? snap(groups[gi + 1].ws[0].start - 0.06)
+          : (Number.isFinite(nextStart) ? snap(nextStart - 0.06) : snap(ln.end + beatLen * 2));
+        end = Math.max(start + beatLen, nextCut - 0.001);
+      }
       if (end - start < 0.4) end = start + 0.4;
       const dur = end - start;
       cuts.push({
@@ -790,7 +798,9 @@ L.buildCuts = tl => {
         text: parsed.text, lineText: L.parseNotation(raw).text, note: parsed.note, impact: parsed.impact,
         emphMark: parsed.emph, emphIdx: parsed.emphIdx,
         n: L.glyphCount(parsed.text), start, end, dur,
-        inDur: clamp(dur * 0.3, 0.14, 0.55), outDur: clamp(dur * 0.2, 0.12, 0.4),
+        inDur: lock ? Math.min(beatLen, dur * 0.4) : clamp(dur * 0.3, 0.14, 0.55),
+        outDur: lock ? Math.min(beatLen * 0.5, dur * 0.25) : clamp(dur * 0.2, 0.12, 0.4),
+        beat0: bpm ? Math.round((start - off) / beatLen) : null,
         words: g.ws.map(w => ({ text: L.parseNotation(String(w.word || '')).text, start: w.start, end: w.end })),
       });
     });
@@ -1005,6 +1015,8 @@ L.makeEnv = (eng, ctx, t, W, H, cut, energy, boost) => {
     cut, energy: energy == null ? 0.5 : energy, boost: boost || 1, beat: L.beatAt(tl, t),
     scale: 1, allowFilter: eng.quality !== 'draft', pass: 'main', ghostColor: '#ffffff', ghostAlpha: 0.5,
     lt: 0, ltb: 0, pIn: 1, pOut: 0, step: 0, lyricFont: (tl.lyricStyle && tl.lyricStyle.font) || null,
+    bpm: tl.bpm || null, songDur: tl.duration || 0,
+    totalBeats: tl.bpm && tl.duration ? Math.max(1, Math.round(tl.duration * tl.bpm / 60)) : null,
   };
   L.makeHelpers(env);
   return env;
