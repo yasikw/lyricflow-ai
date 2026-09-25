@@ -100,6 +100,26 @@ const FONT_PAIRS = [
   ['和・荘厳', "'Kaisei Tokumin', serif", "'Yuji Mai', serif", "'Zen Old Mincho', serif"],
   ['不安・狂気', "'Reggae One', sans-serif", "'New Tegomin', serif", "'Zen Kurenaido', sans-serif"],
 ];
+// モーションリールの型: 場面の選び方(構図のキー/名前に対する正規表現、または固定の並び)と、BGMの作り
+const REEL_TEMPLATES = {
+  classic: { name: 'クラシック', fixed: [
+    { layout: 'center', enter: 'slideL', exit: 'whipLeft', scene: 'MOVE' },
+    { layout: 'm_morph', enter: 'pop', exit: 'shrinkPoint', scene: 'SHAPE' },
+    { layout: 'center', enter: 'dropBounce', exit: 'dropFall', scene: 'RHYTHM' },
+    { layout: 'm_graph', enter: 'fade', exit: 'wipeL', scene: 'EASING' },
+    { layout: 'm_tunnel', enter: 'zoomFar', exit: 'zoomThrough', scene: 'DEPTH' },
+    { layout: 'm_cube', enter: 'spinIn', exit: 'glitchOut', scene: '3D' },
+  ], music: { kick: 'four', hat: '8th', chords: [[57, 60, 64], [53, 57, 60], [48, 52, 55], [55, 59, 62]] } },
+  data: { name: 'データ', keys: ['n_countup', 'n_countdown', 'n_pctswap', 'n_odometer', 'n_bars', 'n_donut', 'n_linegraph', 'n_hbar', 'n_waffle', 'n_stats', 'n_gridlight', 'n_dotmatrix', 'n_ruler', 'n_tally', 'm_graph'], re: /count|chart|bar|donut|pie|graph|num|percent|progress|odometer|flap|dot|matrix|led|数|グラフ|カウント|チャート|進捗|桁|ドット/,
+    music: { kick: 'four', hat: '16th', chords: [[50, 53, 57], [46, 50, 53], [53, 57, 60], [48, 52, 55]] } },
+  three: { name: '3D', keys: ['g_dotSphere', 'g_torus', 'g_terrain', 'g_isoStack', 'g_prism', 'g_cardRing', 'g_warp', 'g_helix', 'g_gridFloor', 'g_ripple', 'g_orbits', 'g_gyro', 'm_cube', 'm_tunnel'], re: /sphere|torus|terrain|iso|prism|helix|star|warp|orbit|floor|cube|tunnel|3d|球|立体|トンネル|地形|螺旋|星|軌道|床/,
+    music: { kick: 'half', hat: '8th', chords: [[52, 55, 59], [48, 52, 55], [55, 59, 62], [50, 54, 57]] } },
+  typo: { name: 'タイポグラフィ', keys: ['n_wordstack', 'n_outlinecut', 'n_onebeat', 'n_maskbar', 'n_ladder', 'n_columns', 'n_tiles', 'n_notebook', 'n_specimen', 'n_tracking', 'center'], re: /stack|poster|swiss|ladder|word|justify|column|type|typo|scale|index|文字|ワード|ポスター|スイス|段|見出し|組/,
+    music: { kick: 'break', hat: '8th', chords: [[48, 52, 55], [55, 59, 62], [57, 60, 64], [53, 57, 60]] } },
+  geo: { name: 'ジオメトリック', keys: ['g_bauhaus', 'g_kaleido', 'g_counterPoly', 'g_burst', 'g_blob', 'g_lissajous', 'g_tiles', 'g_mark', 'g_pendulum', 'g_shapeGrid', 'm_morph'], re: /bauhaus|kaleido|polygon|burst|blob|lissajous|tile|pendulum|shape|morph|幾何|図形|万華鏡|バウハウス|タイル|多角|振り子/,
+    music: { kick: 'minimal', hat: '8th', soft: true, chords: [[53, 57, 60, 64], [52, 55, 59, 62], [50, 53, 57, 60], [48, 52, 55, 59]] } },
+  random: { name: 'おまかせ（毎回変わる）', re: null, music: null },
+};
 // 画面全体エフェクト (fx.js の _screenFx と対応)
 const SCREEN_FX = [
   ['flash', 'フラッシュ(明滅)'], ['zoomblur', '放射ズームブラー'], ['rgbshift', 'RGBずれ'], ['scanlines', '走査線(CRT)'],
@@ -886,8 +906,9 @@ class Editor {
           <div class="rm-row">
             <label class="fld"><span>テンポ (BPM)</span><input class="input" type="number" id="rm-bpm" min="70" max="180" value="${this.tl.bpm && this.tl.bpm >= 70 ? Math.round(this.tl.bpm) : 128}"></label>
             <label class="fld"><span>1語あたりの拍</span><select class="input" id="rm-per"><option value="2">2拍（速い）</option><option value="4" selected>4拍（標準）</option><option value="8">8拍（ゆったり）</option></select></label>
-            <label class="fld"><span>スタイル</span><select class="input" id="rm-style"><option value="reelPaper">モーションリール(紙)</option><option value="reelNight">モーションリール(夜)</option></select></label>
+            <label class="fld"><span>スタイル</span><select class="input" id="rm-style">${L.STYLE_ORDER.filter(k => /^(reel|mg)/.test(k)).map(k => `<option value="${k}">${esc(L.STYLES[k].name)}</option>`).join('')}</select></label>
           </div>
+          <label class="fld"><span>リールの型（場面の選び方と曲の雰囲気）</span><select class="input" id="rm-tpl">${Object.entries(REEL_TEMPLATES).map(([k, t]) => `<option value="${k}">${t.name}</option>`).join('')}</select></label>
           <label class="chk-row"><input type="checkbox" id="rm-bgm" checked><span>同じ拍でBGMを自動作曲して曲に設定する</span></label>
           <div class="rm-sum" id="rm-sum"></div>
           <p class="p-sub" style="margin-top:8px">書き出し時に「モーションブラー 10サンプル」を選ぶと、速い動きがなめらかにぶれて映像らしくなります。</p>
@@ -901,7 +922,7 @@ class Editor {
       const bpm = Math.max(70, Math.min(180, +$('#rm-bpm').value || 128));
       const per = +$('#rm-per').value || 4;
       const beats = 2 + per * Math.max(0, ws.length - 1) + (per + 2) + 2;
-      return { words: ws, bpm, per, beats, style: $('#rm-style').value, bgm: $('#rm-bgm').checked };
+      return { words: ws, bpm, per, beats, style: $('#rm-style').value, bgm: $('#rm-bgm').checked, template: $('#rm-tpl').value, salt: Date.now() % 100000 };
     };
     const sum = () => { const o = read(); $('#rm-sum').textContent = `${o.words.length}語 ・ 合計 ${o.beats}拍 ＝ ${(o.beats * 60 / o.bpm).toFixed(1)}秒`; };
     $('#rm-words').oninput = sum; $('#rm-bpm').oninput = sum; $('#rm-per').onchange = sum;
@@ -946,32 +967,60 @@ class Editor {
     Object.assign(cm, { enabled: true, beatLock: true, density: 0, motion: 1, decor: 0.8, ghost: 0.6, camera: 0.3, trans: 0, useWa: true, mood: 'graphic' });
     this.composeApplyStyle(o.style);
     cm.seed = L.h('reel', o.words.join('|'), o.bpm) % 2000000000;
-    // 拍ロックのカットに、場面ごとの演出を順番に割り当てる
-    const SEQ = [
-      { layout: 'center', enter: 'slideL', exit: 'whipLeft', scene: 'MOVE' },
-      { layout: 'm_morph', enter: 'pop', exit: 'shrinkPoint', scene: 'SHAPE' },
-      { layout: 'center', enter: 'dropBounce', exit: 'dropFall', scene: 'RHYTHM' },
-      { layout: 'm_graph', enter: 'fade', exit: 'wipeL', scene: 'EASING' },
-      { layout: 'm_tunnel', enter: 'zoomFar', exit: 'zoomThrough', scene: 'DEPTH' },
-      { layout: 'm_cube', enter: 'spinIn', exit: 'glitchOut', scene: '3D' },
-    ];
-    const FINAL = { layout: 'm_particles', enter: 'fade', exit: 'particleOut', scene: 'FINALE' };
+    // 拍ロックのカットに、テンプレートに沿って場面ごとの演出を割り当てる
     const cv = this.engine.canvas;
     const W = cv.width, H = cv.height;
     const cuts = L.buildCuts(tl);
     const st = L.getStyle(cm.style) || {};
+    const tpl = REEL_TEMPLATES[o.template] || REEL_TEMPLATES.classic;
+    const rng = L.rng(L.h(cm.seed, 'tpl', o.template || 'classic', o.salt || 0));
+    const nameOf = (g, k) => (k + ' ' + ((L.get(g, k) || {}).name || '')).toLowerCase();
+    const MG_LAY = L.keys('layout').filter(k => /^(m|n|g)_/.test(k) && k !== 'm_particles');
+    const byRe = (g, keys, re) => (re ? keys.filter(k => re.test(nameOf(g, k))) : keys);
+    // 型の場面候補: 明示リスト(存在するもの) → 名前の正規表現 → MG全体 の順
+    const listed = tpl.keys ? tpl.keys.filter(k => L.get('layout', k)) : [];
+    const layPool = tpl.fixed ? null : listed.length >= 3 ? listed : (byRe('layout', MG_LAY, tpl.re).length >= 3 ? byRe('layout', MG_LAY, tpl.re) : MG_LAY);
+    const MG_IN = L.keys('enter').filter(k => /^mg/.test(k)).concat(['slideL', 'pop', 'dropBounce', 'zoomFar', 'spinIn', 'typeCursor', 'maskRise', 'glyphWipe'].filter(k => L.get('enter', k)));
+    const MG_OUT = L.keys('exit').filter(k => /^mg/.test(k)).concat(['whipLeft', 'shrinkPoint', 'dropFall', 'wipeL', 'zoomThrough', 'glitchOut', 'sliceSlide'].filter(k => L.get('exit', k)));
+    const MG_TR = L.keys('trans').filter(k => /^mg/.test(k));
+    const MG_CAM = L.keys('cam').filter(k => /^mg/.test(k));
+    const MG_DEC = L.keys('decor').filter(k => /^mg/.test(k) && k !== 'mgHud');
+    const used = [];
+    const pickLayout = c => {
+      const ok = k => { const d = L.get('layout', k); return d && (!d.fits || d.fits(c.n)); };
+      const win = Math.min(4, Math.max(1, layPool.length - 1));     // 候補が少なくても隣り合う場面は必ず変える
+      let cand = layPool.filter(k => ok(k) && !used.slice(-win).includes(k));
+      if (!cand.length) cand = layPool.filter(ok);
+      if (!cand.length) cand = MG_LAY.filter(ok);
+      const k = cand.length ? rng.pick(cand) : 'center';
+      used.push(k);
+      return k;
+    };
+    const SCENES = ['MOVE', 'SHAPE', 'RHYTHM', 'FORM', 'DEPTH', 'SPACE', 'SIGNAL', 'PULSE', 'GRID', 'FLOW'];
     cm.cuts = {};
     cuts.forEach((c, i) => {
-      const spec = i === cuts.length - 1 ? FINAL : SEQ[i % SEQ.length];
+      const last = i === cuts.length - 1;
+      let spec;
+      if (last) spec = { layout: 'm_particles', enter: 'fade', exit: 'particleOut', scene: 'FINALE' };
+      else if (tpl.fixed) spec = tpl.fixed[i % tpl.fixed.length];
+      else spec = { layout: pickLayout(c), enter: rng.pick(MG_IN), exit: rng.pick(MG_OUT), scene: SCENES[i % SCENES.length] };
       const pick = (g, k, fb) => (L.get(g, k) ? k : fb);
-      const lay = L.get('layout', spec.layout) || L.get('layout', 'center');
-      const rng = L.rng(L.h(cm.seed, 'reel', i));
+      let lay = L.get('layout', spec.layout) || L.get('layout', 'center');
+      if (lay.fits && !lay.fits(c.n)) lay = L.get('layout', 'center');
+      const lr = L.rng(L.h(cm.seed, 'reel', i));
+      const decor = [{ key: 'mgHud', P: { title: 'LYRICFLOW / MOTION REEL', scene: i === 0 ? 'INTRO' : spec.scene } }];
+      if (!tpl.fixed && !last && MG_DEC.length && rng() < 0.45) decor.push({ key: rng.pick(MG_DEC), P: { seed: L.h(cm.seed, 'd', i), v: i % 6, r: rng(), right: rng() < 0.5, low: rng() < 0.5, accent: true, big: false, n: 2, corner: i % 4 } });
+      const trans = !tpl.fixed && i > 0 && MG_TR.length && rng() < 0.3 ? rng.pick(MG_TR) : null;
+      const cam = !tpl.fixed && !last && MG_CAM.length && rng() < 0.3 ? rng.pick(MG_CAM) : null;
+      const tdef = trans && L.get('trans', trans), cdef = cam && L.get('cam', cam);
       cm.cuts[c.line + ':' + c.part] = {
         layout: lay.key,
-        params: lay.plan ? lay.plan(rng, { text: c.text, n: c.n, W, H, dur: c.dur, portrait: H > W, emph: i === cuts.length - 1, words: c.words }, st) : {},
+        params: lay.plan ? lay.plan(lr, { text: c.text, n: c.n, W, H, dur: c.dur, portrait: H > W, emph: last, words: c.words }, st) : {},
         enter: pick('enter', spec.enter, 'fade'), hold: 'still', exit: pick('exit', spec.exit, 'fade'),
-        decor: [{ key: 'mgHud', P: { title: 'LYRICFLOW / MOTION REEL', scene: i === 0 ? 'INTRO' : spec.scene } }],
-        treat: null, cam: null, trans: null, seed: L.h(cm.seed, 'cut', i),
+        decor, treat: null,
+        cam, camP: cdef && cdef.plan ? cdef.plan(lr, st) : {},
+        trans, transP: tdef && tdef.plan ? tdef.plan(lr, st) : {},
+        seed: L.h(cm.seed, 'cut', i),
       };
     });
     cm.planVersion = (cm.planVersion || 0) + 1;
@@ -983,7 +1032,9 @@ class Editor {
     toast(`モーションリールを作成しました（${o.words.length}語・${totalBeats}拍・${o.bpm}BPM）`, 'ok');
     if (o.bgm) {
       toast('BGMを作曲中…');
-      const wav = await this._synthReelBGM(o.bpm, totalBeats, finaleBeat + 2);
+      const musics = Object.values(REEL_TEMPLATES).map(t => t.music).filter(Boolean);
+      const music = (REEL_TEMPLATES[o.template] || REEL_TEMPLATES.classic).music || musics[L.h(cm.seed, 'music') % musics.length];
+      const wav = await this._synthReelBGM(o.bpm, totalBeats, finaleBeat + 2, music);
       const file = new File([wav], `motion_reel_${o.bpm}bpm.wav`, { type: 'audio/wav' });
       try { await this.uploadAsset(file); }
       catch (e) { toast('BGMのアップロードに失敗: ' + e.message + '（映像はそのまま使えます）', 'err'); }
@@ -993,7 +1044,8 @@ class Editor {
   }
   /* 拍で作曲するBGM(完全に計算で合成・オリジナル): キック/ハット/スネア/ノコギリ7本の和音/ベース/
      キックでのサイドチェイン/決めの前のライザーと0.1秒の無音/決めの一撃。WAV(16bit)を返す */
-  async _synthReelBGM(bpm, totalBeats, hitBeat) {
+  async _synthReelBGM(bpm, totalBeats, hitBeat, mv = null) {
+    mv = mv || REEL_TEMPLATES.classic.music;              // 型ごとの曲の作り(ドラム/和音/音色)
     const sr = 44100, bl = 60 / bpm;
     const dur = totalBeats * bl;                                   // 曲長=拍の合計ちょうど(HUDの拍数と一致)
     const ac = new OfflineAudioContext(2, Math.ceil(sr * dur), sr);
@@ -1030,13 +1082,14 @@ class Editor {
       o.connect(g).connect(drums); o.start(t); o.stop(t + 0.2);
     };
     const hz = n => 440 * Math.pow(2, (n - 69) / 12);
-    const CH = [[57, 60, 64], [53, 57, 60], [48, 52, 55], [55, 59, 62]];     // Am - F - C - G
+    const CH = mv.chords || REEL_TEMPLATES.classic.mv.chords;   // 型ごとの和音進行
     const pad = (t, len, notes, lvl = 0.05) => {
-      const lp = ac.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 1900; lp.Q.value = 0.5;
+      const lp = ac.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = mv.soft ? 1150 : 1900; lp.Q.value = 0.5;
       const g = ac.createGain(); g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(lvl, t + 0.04);
       g.gain.setValueAtTime(lvl, Math.max(t + 0.05, t + len - 0.08)); g.gain.linearRampToValueAtTime(0.0001, t + len);
       lp.connect(g).connect(music);
-      for (const n of notes) for (let k = 0; k < 7; k++) {          // 少しずつ音程をずらしたノコギリ波を7本
+      const voices = mv.soft ? 5 : 7;
+      for (const n of notes) for (let k = 0; k < voices; k++) {     // 少しずつ音程をずらしたノコギリ波を重ねる
         const o = ac.createOscillator(); o.type = 'sawtooth'; o.frequency.value = hz(n); o.detune.value = (k - 3) * 8;
         o.connect(lp); o.start(t); o.stop(t + len + 0.02);
       }
@@ -1056,9 +1109,18 @@ class Editor {
         for (let k = 0; k < 4; k++) hat(t + k * bl / 4);
         continue;
       }
-      if (b >= 2) kick(t);
-      if (b >= 2) hat(t + bl / 2);
-      if (b >= 4 && (inBar === 1 || inBar === 3)) snare(t);
+      const pat = mv.kick || 'four';
+      if (b >= 2) {
+        if (pat === 'four') kick(t);                                   // 4つ打ち
+        else if (pat === 'half') { if (inBar === 0) kick(t); }         // ハーフタイム
+        else if (pat === 'break') { if (inBar === 0) kick(t); if (inBar === 2) kick(t + bl / 2); }   // ブレイクビーツ風
+        else if (inBar === 0 || inBar === 2) kick(t);                  // ミニマル
+        if (mv.hat === '16th') { for (let k = 1; k < 4; k++) hat(t + k * bl / 4); } else hat(t + bl / 2);
+      }
+      if (b >= 4) {
+        if (pat === 'half') { if (inBar === 2) snare(t); }
+        else if (inBar === 1 || inBar === 3) snare(t);
+      }
       const room = t < tHit ? tHit - 2 * bl - t : Infinity;          // 決めの前2拍には和音を伸ばさない
       const afterHit = t > tHit && t < tHit + bl * 4;                // 決めの和音と重ねない
       if (inBar === 0 && !afterHit) pad(t, Math.max(bl, Math.min(bl * 4, room)), chord);

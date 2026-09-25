@@ -479,5 +479,13 @@ L.registerStyle('reelNight', {
 });
 
 /* 他モジュールから使えるように(リール生成・プレビュー) */
-L.mg = { glyphPoints, shapePts, SHAPES, SHAPE_JA, EASES };
+/* 3D: 回転と透視投影(球・トーラス・地形などで共用) */
+const rot3 = ([x, y, z], ax = 0, ay = 0, az = 0) => {
+  let c = Math.cos(ay), s = Math.sin(ay); [x, z] = [x * c + z * s, -x * s + z * c];
+  c = Math.cos(ax); s = Math.sin(ax); [y, z] = [y * c - z * s, y * s + z * c];
+  c = Math.cos(az); s = Math.sin(az); [x, y] = [x * c - y * s, x * s + y * c];
+  return [x, y, z];
+};
+const persp = (cx, cy, R, [x, y, z], dist = 4) => { const k = dist / Math.max(0.05, dist + z); return [cx + x * R * k, cy + y * R * k, z, k]; };
+L.mg = { glyphPoints, shapePts, SHAPES, SHAPE_JA, EASES, MONO, beatLen, beatKick, fitLines, anchored, drawShape, morphAt, projectCube, CUBE_V, CUBE_E, tc60, pad2, rot3, persp };
 })();

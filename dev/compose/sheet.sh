@@ -9,7 +9,7 @@ ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 # chrome-headless-shell は dump 後に正しく終了する(通常Chromeの --headless=new は終了しないため alarm で保険)
 HS=$(ls -d "$HOME"/Library/Caches/ms-playwright/chromium_headless_shell-*/chrome-headless-shell-mac-*/chrome-headless-shell 2>/dev/null | tail -1)
 CHROME=${HS:-"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"}
-URL="file://$ROOT/dev/compose/sheet.html?group=$GROUP&ids=$IDS&mode=$MODE&style=$STYLE"
+URL="file://$ROOT/dev/compose/sheet.html?group=$GROUP&ids=$IDS&mode=$MODE&style=$STYLE&bpm=${BPM:-}"
 mkdir -p "$OUT"
 TMP=$(mktemp -d /tmp/lfc_chrome.XXXXXX)
 perl -e 'alarm 600; exec @ARGV' "$CHROME" --disable-gpu --no-sandbox --allow-file-access-from-files --hide-scrollbars \

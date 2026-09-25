@@ -16,9 +16,12 @@
 - 書き出し: `engine.keyMode = 'green'|'black'` で合成用(背景・後処理なし、透明に描いて背面に地色)。AE用 `.jsx` は `Editor.exportAE()`(中央配置の簡略版)。
 - モーショングラフィックス: パック `p_motion_graphics.js`(m_particles/m_morph/m_tunnel/m_cube/m_graph、particleIn/Out、mgHud 等、
   スタイル reelPaper/reelNight)。`compose.beatLock=true`(要 `timeline.bpm`)で全カットを拍に固定(登場=1拍・退場=半拍)。
+  MG第2弾: `p_mg_layouts_n.js`(n_: データ/タイポ24) / `p_mg_layouts_g.js`(g_: 3D/幾何22) / `p_mg_motion.js`(mg*: 登場14・退場12・つなぎ12・カメラ6) /
+  `p_mg_decor_styles.js`(mg*: 装飾18・配色8)。共通ヘルパーは `L.mg`(p_motion_graphics.js)。
+  リールの型 `REEL_TEMPLATES`(editor.js): classic/data/three/typo/geo/random — 場面の候補(keys)と曲の作り(ドラム型・和音進行・音色)。
   「🎞 モーションリールを作る」= `Editor.buildMotionReel()`(言葉を拍に配置+演出の並び+`_synthReelBGM()`で同じ拍のBGMを合成→WAVを資産アップロード)。
 - 書き出しのモーションブラー: `state.mblur`(5/10)。1コマを180°シャッター内で複数回描いて累積平均(時間は約N倍)。
-- 検証: `dev/compose/sheet.sh <group> <ids|all> <out> [sheet|smoke|plan|bbox|motioncheck] [style]`(chrome-headless-shell で PNG + report.json)、
+- 検証: `[BPM=128] dev/compose/sheet.sh <group> <ids|all> <out> [sheet|smoke|plan|bbox|motioncheck] [style]`(BPM を付けると拍同期の確認ができる)(chrome-headless-shell で PNG + report.json)、
   `dev/compose/editor_test.html`(本物のエディタを API モックで起動。`python3 -m http.server 4299` をリポ直下で)。
 
 ## VRM Atelier連携(3Dダンスレイヤー)の契約 — 破壊的変更禁止
@@ -46,7 +49,7 @@
 
 ## in-flight
 
-- なし(3Dダンスレイヤー Phase1 完了・E2E確認済み / 演出エンジン 454種(モーショングラフィックス含む) 完了・スモーク/連続性テスト済み)
+- なし(3Dダンスレイヤー Phase1 完了・E2E確認済み / 演出エンジン 570種(モーショングラフィックス第2弾・リールの型含む) 完了・スモーク/連続性テスト済み)
 
 ## 次にやること
 

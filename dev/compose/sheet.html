@@ -39,6 +39,7 @@ function engineFor(lines, compose) {
     tracks: { lyrics: [] }, compose: Object.assign({ enabled: true, seed: 7, density: 0, style: STYLE || undefined, cuts: {} }, compose),
   };
   lines.forEach((ln, li) => { ln.words.forEach(w => tl.tracks.lyrics.push(Object.assign({}, w, { line: li }))); if (ln.plan) tl.compose.cuts[li + ':0'] = ln.plan; });
+  if (Q.get('bpm')) { tl.bpm = +Q.get('bpm'); tl.beatOffset = 0; tl.duration = 12; }
   const st = L.getStyle(tl.compose.style);
   if (st && st.colors) tl.colors = Object.assign({}, st.colors);
   return { timeline: tl, quality: 'full', sceneAt: () => null };
