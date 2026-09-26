@@ -1,6 +1,6 @@
 # HANDOFF — LyricFlow AI
 
-最終更新: 2026-09-24 (Claude Code)
+最終更新: 2026-09-26 (Claude Code)
 
 ## 演出エンジン(カット演出)の契約 — 破壊的変更禁止
 
@@ -19,6 +19,11 @@
   MG第2弾: `p_mg_layouts_n.js`(n_: データ/タイポ24) / `p_mg_layouts_g.js`(g_: 3D/幾何22) / `p_mg_motion.js`(mg*: 登場14・退場12・つなぎ12・カメラ6) /
   `p_mg_decor_styles.js`(mg*: 装飾18・配色8)。共通ヘルパーは `L.mg`(p_motion_graphics.js)。
   リールの型 `REEL_TEMPLATES`(editor.js): classic/data/three/typo/geo/random — 場面の候補(keys)と曲の作り(ドラム型・和音進行・音色)。
+  MG第3弾(ショーリール): `p_sr_layouts_s.js`(s_: 弾む玉/選択枠/色面ポスター/コード壁/ハーフトーン/角柱3D/流れる帯) /
+  `p_sr_layouts_r.js`(r_: 粒子銀河/リキャップ格子/交差ワイヤー/エンドカード/クローム立体/3D文字の輪/波形見出し) /
+  `p_sr_motion.js`(sr*: 登場4・退場3・つなぎ5・装飾7・カメラ1・配色3 srOpusReel/srLimePoster/srCreamBlue)。
+  物語型のリールの型 `showreel`/`poster`: `intro`/`seq`/`recap`/`finale` を `reelStorySpecs()` が言葉の数に合わせて並べる(場面ごとに登場/退場/つなぎ/装飾まで指定)。
+  `L.splitLines` は空白なしの欧文1語を折らない(BE/AT 分断の修正)。
   「🎞 モーションリールを作る」= `Editor.buildMotionReel()`(言葉を拍に配置+演出の並び+`_synthReelBGM()`で同じ拍のBGMを合成→WAVを資産アップロード)。
 - 書き出しのモーションブラー: `state.mblur`(5/10)。1コマを180°シャッター内で複数回描いて累積平均(時間は約N倍)。
 - 検証: `[BPM=128] dev/compose/sheet.sh <group> <ids|all> <out> [sheet|smoke|plan|bbox|motioncheck] [style]`(BPM を付けると拍同期の確認ができる)(chrome-headless-shell で PNG + report.json)、
@@ -49,7 +54,7 @@
 
 ## in-flight
 
-- なし(3Dダンスレイヤー Phase1 完了・E2E確認済み / 演出エンジン 570種(モーショングラフィックス第2弾・リールの型含む) 完了・スモーク/連続性テスト済み)
+- なし(3Dダンスレイヤー Phase1 完了・E2E確認済み / 演出エンジン 607種(MG第3弾ショーリール・物語型リールの型含む) 完了・スモーク/連続性テスト済み)
 
 ## 次にやること
 

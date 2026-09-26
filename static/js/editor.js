@@ -118,8 +118,52 @@ const REEL_TEMPLATES = {
     music: { kick: 'break', hat: '8th', chords: [[48, 52, 55], [55, 59, 62], [57, 60, 64], [53, 57, 60]] } },
   geo: { name: 'ジオメトリック', keys: ['g_bauhaus', 'g_kaleido', 'g_counterPoly', 'g_burst', 'g_blob', 'g_lissajous', 'g_tiles', 'g_mark', 'g_pendulum', 'g_shapeGrid', 'm_morph'], re: /bauhaus|kaleido|polygon|burst|blob|lissajous|tile|pendulum|shape|morph|幾何|図形|万華鏡|バウハウス|タイル|多角|振り子/,
     music: { kick: 'minimal', hat: '8th', soft: true, chords: [[53, 57, 60, 64], [52, 55, 59, 62], [50, 53, 57, 60], [48, 52, 55, 59]] } },
+  // ショーリール: 決まった物語の流れ(弾む玉で始まり→色面→選択枠→コード→点→立体→帯→粒子→振り返り格子→エンドカード)。
+  // 言葉の数に合わせて中盤の場面を等間隔に間引く。場面ごとに登場/退場/つなぎ/装飾まで指定
+  showreel: { name: 'ショーリール（墨・オレンジ/青）', style: 'srOpusReel',
+    intro: { layout: 's_bounceBall', enter: 'srBallDrop', exit: 'fade', decor: ['srCallout'], scene: 'INTRO' },
+    seq: [
+      { layout: 's_posterBlock', enter: 'mgBarReveal', exit: 'wipeL', trans: 'srBallFill', scene: 'COLOR' },
+      { layout: 's_selectFrame', enter: 'srBoxSnap', exit: 'srSelectDelete', scene: 'DESIGN' },
+      { layout: 's_codeWall', enter: 'rgbSplit', exit: 'crtOff', trans: 'srDotDive', scene: 'CODE' },
+      { layout: 's_halftone', enter: 'mgDotMatrix', exit: 'mgDotDisperse', trans: 'srCrtLine', scene: 'DOTS' },
+      { layout: 's_columns3d', enter: 'slideUp', exit: 'srBallKnock', scene: 'DEPTH' },
+      { layout: 's_marquee', enter: 'srWidthPulse', exit: 'whipLeft', trans: 'srPanelSlide', scene: 'TYPE' },
+      { layout: 'r_galaxy', enter: 'particleIn', exit: 'particleOut', scene: 'PARTICLE' },
+      { layout: 'r_wireWeave', enter: 'srAnnotate', exit: 'srTileAway', scene: 'LINE' },
+    ],
+    recap: { layout: 'r_montage', enter: 'pop', exit: 'srTileAway', trans: 'srRecapGrid', scene: 'RECAP' },
+    finale: { layout: 'r_endCard', enter: 'maskRise', exit: 'fade', trans: 'srCrtLine', scene: 'END' },
+    decor: ['srGrain'],
+    music: { kick: 'four', hat: '16th', chords: [[57, 60, 64], [53, 57, 60], [55, 59, 62], [52, 55, 59]] } },
+  poster: { name: 'ポスター（ライム・クローム）', style: 'srLimePoster',
+    intro: { layout: 'r_chromeObj', enter: 'srWidthPulse', exit: 'wipeL', decor: ['srChromeBadge'], scene: 'INTRO' },
+    seq: [
+      { layout: 'r_textRing3d', enter: 'maskRise', exit: 'srSelectDelete', trans: 'srPanelSlide', scene: 'TYPE' },
+      { layout: 'r_waveHeadline', enter: 'srBallDrop', exit: 'mgBarWipeOut', decor: ['srWaveStrip'], scene: 'BEAT' },
+      { layout: 's_posterBlock', enter: 'mgBarReveal', exit: 'srBallKnock', trans: 'srBallFill', scene: 'BOLD' },
+      { layout: 'n_wordstack', enter: 'srWidthPulse', exit: 'whipLeft', scene: 'FORM' },
+      { layout: 'r_chromeObj', enter: 'srBoxSnap', exit: 'srTileAway', trans: 'srDotDive', scene: 'SHAPE' },
+      { layout: 'n_outlinecut', enter: 'slideL', exit: 'crtOff', scene: 'ALIVE' },
+    ],
+    finale: { layout: 'r_endCard', enter: 'maskRise', exit: 'fade', trans: 'srCrtLine', scene: 'END' },
+    decor: ['srArrowChip'],
+    music: { kick: 'break', hat: '16th', chords: [[50, 53, 57], [53, 57, 60], [48, 52, 55], [55, 58, 62]] } },
   random: { name: 'おまかせ（毎回変わる）', re: null, music: null },
 };
+/* 物語型の型(intro/seq/recap/finale)で n カット分の場面を並べる: 最初=intro、最後=finale、
+   その手前=recap(4カット以上のとき)、中盤は seq から順番を保って等間隔に選ぶ */
+function reelStorySpecs(tpl, n) {
+  if (n <= 1) return [tpl.finale];
+  const useRecap = !!tpl.recap && n >= 5;
+  const mid = n - 2 - (useRecap ? 1 : 0);
+  const seq = tpl.seq || [];
+  const out = [tpl.intro];
+  for (let i = 0; i < mid; i++) out.push(seq[seq.length <= mid ? i % seq.length : Math.floor(i * seq.length / mid)]);
+  if (useRecap) out.push(tpl.recap);
+  out.push(tpl.finale);
+  return out;
+}
 // 画面全体エフェクト (fx.js の _screenFx と対応)
 const SCREEN_FX = [
   ['flash', 'フラッシュ(明滅)'], ['zoomblur', '放射ズームブラー'], ['rgbshift', 'RGBずれ'], ['scanlines', '走査線(CRT)'],
@@ -901,12 +945,12 @@ class Editor {
       <div class="modal reelmaker">
         <div class="m-head"><h2>🎞 モーションリールを作る</h2><button class="x-btn">×</button></div>
         <div class="m-body">
-          <p class="p-sub">言葉を拍に並べ、拍にぴったり合った演出と、同じ拍で自動作曲したBGMの短いモーショングラフィックスを作ります。最後の言葉は粒子が集まって形になります。</p>
+          <p class="p-sub">言葉を拍に並べ、拍にぴったり合った演出と、同じ拍で自動作曲したBGMの短いモーショングラフィックスを作ります。最後の言葉は粒子が集まって形になります（ショーリール・ポスターの型ではエンドカードで締めます）。</p>
           <label class="fld"><span>言葉（1行に1つ・3〜10個）</span><textarea class="input" id="rm-words" rows="7">${words}</textarea></label>
           <div class="rm-row">
             <label class="fld"><span>テンポ (BPM)</span><input class="input" type="number" id="rm-bpm" min="70" max="180" value="${this.tl.bpm && this.tl.bpm >= 70 ? Math.round(this.tl.bpm) : 128}"></label>
             <label class="fld"><span>1語あたりの拍</span><select class="input" id="rm-per"><option value="2">2拍（速い）</option><option value="4" selected>4拍（標準）</option><option value="8">8拍（ゆったり）</option></select></label>
-            <label class="fld"><span>スタイル</span><select class="input" id="rm-style">${L.STYLE_ORDER.filter(k => /^(reel|mg)/.test(k)).map(k => `<option value="${k}">${esc(L.STYLES[k].name)}</option>`).join('')}</select></label>
+            <label class="fld"><span>スタイル</span><select class="input" id="rm-style">${L.STYLE_ORDER.filter(k => /^(reel|mg|sr)/.test(k)).map(k => `<option value="${k}">${esc(L.STYLES[k].name)}</option>`).join('')}</select></label>
           </div>
           <label class="fld"><span>リールの型（場面の選び方と曲の雰囲気）</span><select class="input" id="rm-tpl">${Object.entries(REEL_TEMPLATES).map(([k, t]) => `<option value="${k}">${t.name}</option>`).join('')}</select></label>
           <label class="chk-row"><input type="checkbox" id="rm-bgm" checked><span>同じ拍でBGMを自動作曲して曲に設定する</span></label>
@@ -926,6 +970,8 @@ class Editor {
     };
     const sum = () => { const o = read(); $('#rm-sum').textContent = `${o.words.length}語 ・ 合計 ${o.beats}拍 ＝ ${(o.beats * 60 / o.bpm).toFixed(1)}秒`; };
     $('#rm-words').oninput = sum; $('#rm-bpm').oninput = sum; $('#rm-per').onchange = sum;
+    // 型に推奨スタイルがあれば合わせる(あとから手で変えてよい)
+    $('#rm-tpl').onchange = () => { const s = (REEL_TEMPLATES[$('#rm-tpl').value] || {}).style; if (s && L.STYLES[s]) $('#rm-style').value = s; };
     sum();
     const close = () => bg.remove();
     bg.querySelector('.x-btn').onclick = close;
@@ -975,16 +1021,17 @@ class Editor {
     const tpl = REEL_TEMPLATES[o.template] || REEL_TEMPLATES.classic;
     const rng = L.rng(L.h(cm.seed, 'tpl', o.template || 'classic', o.salt || 0));
     const nameOf = (g, k) => (k + ' ' + ((L.get(g, k) || {}).name || '')).toLowerCase();
-    const MG_LAY = L.keys('layout').filter(k => /^(m|n|g)_/.test(k) && k !== 'm_particles');
+    const MG_LAY = L.keys('layout').filter(k => /^(m|n|g|s|r)_/.test(k) && k !== 'm_particles');
     const byRe = (g, keys, re) => (re ? keys.filter(k => re.test(nameOf(g, k))) : keys);
     // 型の場面候補: 明示リスト(存在するもの) → 名前の正規表現 → MG全体 の順
     const listed = tpl.keys ? tpl.keys.filter(k => L.get('layout', k)) : [];
-    const layPool = tpl.fixed ? null : listed.length >= 3 ? listed : (byRe('layout', MG_LAY, tpl.re).length >= 3 ? byRe('layout', MG_LAY, tpl.re) : MG_LAY);
-    const MG_IN = L.keys('enter').filter(k => /^mg/.test(k)).concat(['slideL', 'pop', 'dropBounce', 'zoomFar', 'spinIn', 'typeCursor', 'maskRise', 'glyphWipe'].filter(k => L.get('enter', k)));
-    const MG_OUT = L.keys('exit').filter(k => /^mg/.test(k)).concat(['whipLeft', 'shrinkPoint', 'dropFall', 'wipeL', 'zoomThrough', 'glitchOut', 'sliceSlide'].filter(k => L.get('exit', k)));
-    const MG_TR = L.keys('trans').filter(k => /^mg/.test(k));
-    const MG_CAM = L.keys('cam').filter(k => /^mg/.test(k));
-    const MG_DEC = L.keys('decor').filter(k => /^mg/.test(k) && k !== 'mgHud');
+    const story = tpl.seq ? reelStorySpecs(tpl, cuts.length) : null;
+    const layPool = tpl.fixed ? null : story ? MG_LAY : listed.length >= 3 ? listed : (byRe('layout', MG_LAY, tpl.re).length >= 3 ? byRe('layout', MG_LAY, tpl.re) : MG_LAY);
+    const MG_IN = L.keys('enter').filter(k => /^(mg|sr)/.test(k)).concat(['slideL', 'pop', 'dropBounce', 'zoomFar', 'spinIn', 'typeCursor', 'maskRise', 'glyphWipe'].filter(k => L.get('enter', k)));
+    const MG_OUT = L.keys('exit').filter(k => /^(mg|sr)/.test(k)).concat(['whipLeft', 'shrinkPoint', 'dropFall', 'wipeL', 'zoomThrough', 'glitchOut', 'sliceSlide'].filter(k => L.get('exit', k)));
+    const MG_TR = L.keys('trans').filter(k => /^(mg|sr)/.test(k));
+    const MG_CAM = L.keys('cam').filter(k => /^(mg|sr)/.test(k));
+    const MG_DEC = L.keys('decor').filter(k => /^(mg|sr)/.test(k) && k !== 'mgHud' && k !== 'srGrain');
     const used = [];
     const pickLayout = c => {
       const ok = k => { const d = L.get('layout', k); return d && (!d.fits || d.fits(c.n)); };
@@ -1001,16 +1048,21 @@ class Editor {
     cuts.forEach((c, i) => {
       const last = i === cuts.length - 1;
       let spec;
-      if (last) spec = { layout: 'm_particles', enter: 'fade', exit: 'particleOut', scene: 'FINALE' };
+      if (story) spec = story[i];
+      else if (last) spec = { layout: 'm_particles', enter: 'fade', exit: 'particleOut', scene: 'FINALE' };
       else if (tpl.fixed) spec = tpl.fixed[i % tpl.fixed.length];
       else spec = { layout: pickLayout(c), enter: rng.pick(MG_IN), exit: rng.pick(MG_OUT), scene: SCENES[i % SCENES.length] };
       const pick = (g, k, fb) => (L.get(g, k) ? k : fb);
-      let lay = L.get('layout', spec.layout) || L.get('layout', 'center');
-      if (lay.fits && !lay.fits(c.n)) lay = L.get('layout', 'center');
+      let lay = L.get('layout', spec.layout) || null;
+      if (!lay || (lay.fits && !lay.fits(c.n))) lay = story && !last ? L.get('layout', pickLayout(c)) : L.get('layout', last ? 'm_particles' : 'center');
+      if (story) used.push(lay.key);
       const lr = L.rng(L.h(cm.seed, 'reel', i));
+      const dP = k => ({ key: k, P: { seed: L.h(cm.seed, 'd', i, k), v: i % 6, r: rng(), right: rng() < 0.5, low: rng() < 0.5, accent: true, big: false, n: 2, corner: (i + 1) % 4 } });
       const decor = [{ key: 'mgHud', P: { title: 'LYRICFLOW / MOTION REEL', scene: i === 0 ? 'INTRO' : spec.scene } }];
-      if (!tpl.fixed && !last && MG_DEC.length && rng() < 0.45) decor.push({ key: rng.pick(MG_DEC), P: { seed: L.h(cm.seed, 'd', i), v: i % 6, r: rng(), right: rng() < 0.5, low: rng() < 0.5, accent: true, big: false, n: 2, corner: i % 4 } });
-      const trans = !tpl.fixed && i > 0 && MG_TR.length && rng() < 0.3 ? rng.pick(MG_TR) : null;
+      for (const k of (tpl.decor || []).concat(spec.decor || [])) if (L.get('decor', k) && !decor.some(d => d.key === k)) decor.push(dP(k));
+      if (!tpl.fixed && !story && !last && MG_DEC.length && rng() < 0.45) decor.push(dP(rng.pick(MG_DEC)));
+      const trans = story ? (i > 0 && spec.trans && L.get('trans', spec.trans) ? spec.trans : null)
+        : !tpl.fixed && i > 0 && MG_TR.length && rng() < 0.3 ? rng.pick(MG_TR) : null;
       const cam = !tpl.fixed && !last && MG_CAM.length && rng() < 0.3 ? rng.pick(MG_CAM) : null;
       const tdef = trans && L.get('trans', trans), cdef = cam && L.get('cam', cam);
       cm.cuts[c.line + ':' + c.part] = {
@@ -1082,7 +1134,7 @@ class Editor {
       o.connect(g).connect(drums); o.start(t); o.stop(t + 0.2);
     };
     const hz = n => 440 * Math.pow(2, (n - 69) / 12);
-    const CH = mv.chords || REEL_TEMPLATES.classic.mv.chords;   // 型ごとの和音進行
+    const CH = mv.chords || REEL_TEMPLATES.classic.music.chords;   // 型ごとの和音進行
     const pad = (t, len, notes, lvl = 0.05) => {
       const lp = ac.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = mv.soft ? 1150 : 1900; lp.Q.value = 0.5;
       const g = ac.createGain(); g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(lvl, t + 0.04);

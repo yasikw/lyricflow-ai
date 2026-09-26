@@ -241,6 +241,8 @@ L.splitLines = (text, maxPer) => {
   const gs = L.glyphs(src);
   const n = gs.length;
   if (n <= maxPer || maxPer < 1) return [src];
+  // 欧文1語(空白なし)は途中で折らない(BE/AT のような分断を防ぐ)
+  if (/^[A-Za-z0-9'&.\-!?]+$/.test(src)) return [src];
   // 欧文は単語単位で詰める
   if (L.hasLatinWords(src) && /\s/.test(src)) {
     const words = src.split(/\s+/);
