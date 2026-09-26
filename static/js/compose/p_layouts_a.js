@@ -1289,7 +1289,7 @@ L.register('layout', 'a_concentric', {
 }, P);
 
 L.register('layout', 'a_window', {
-  name: '円窓', tags: ['calm', 'pop', 'emotional', 'wa'], w: 1.1, treat: 'safe', fits: n => n >= 1 && n <= 24,
+  name: '円窓', tags: ['calm', 'pop', 'emotional', 'wa'], w: 1.1, wa: true, treat: 'safe', fits: n => n >= 1 && n <= 24,
   plan: rng => ({ kind: rng.pick(['ink', 'paper', 'ring']), role: rng.pick(['display', 'body', 'serif']) }),
   render(env) {
     const { W, H, u, cut, sc } = env, p = cut.params || {}, m = mOf(env);

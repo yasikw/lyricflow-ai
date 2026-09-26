@@ -666,7 +666,7 @@ class Editor {
      歌詞をカットに分け、構図・登場/保持/退場・装飾・加工・カメラ・つなぎを割り当てる(static/js/compose/)。
      データ: tl.compose = {enabled, seed, style, mood, motion, decor, density, ghost, camera, trans, useWa, cuts:{"line:part": 案}} */
   _cm() {
-    if (!this.tl.compose) this.tl.compose = { enabled: false, seed: 1, density: 0.5, motion: 1, decor: 0.6, ghost: 1, camera: 0.5, trans: 0.28, useWa: true };
+    if (!this.tl.compose) this.tl.compose = { enabled: false, seed: 1, density: 0.5, motion: 1, decor: 0.6, ghost: 1, camera: 0.5, trans: 0.28, useWa: false };
     return this.tl.compose;
   }
   _composePanelHTML() {
@@ -700,7 +700,6 @@ class Editor {
         ${sl('cmp-ghost', '色ずれ', cm.ghost, '動く文字に色ずれの残像を重ねる強さ')}
         ${sl('cmp-camera', 'カメラ', cm.camera, 'カメラワークが付く頻度(再計画)')}
         ${sl('cmp-trans', 'つなぎ', cm.trans, 'カット間のトランジションの頻度(再計画)')}
-        <label class="chk-row"><input type="checkbox" id="cmp-wa" ${cm.useWa === false ? '' : 'checked'}><span>和風の演出も使う</span></label>
         <div class="cmp-summary" id="cmp-summary"></div>
         <div class="cmp-cut" id="cmp-cut"></div>
       </div>`;
@@ -727,7 +726,6 @@ class Editor {
       $('#' + id).oninput = e => { cm[k] = e.target.value / 100; this.markDirty(); };
       if (replanKeys.includes(k)) $('#' + id).onchange = () => { this.composePlan(); };
     }
-    $('#cmp-wa').onchange = e => { cm.useWa = e.target.checked; this.composePlan(); };
     this._composeRefresh();
   }
   /* 全カットを計画し直す(固定したカットは保持)。opts.only で一部だけ */
@@ -1010,7 +1008,7 @@ class Editor {
     tl.scenes = [];
     tl.fx = Object.assign({}, tl.fx, { bloom: 0.25, glitch: 0.08, chroma: 0.3 });
     const cm = this._cm();
-    Object.assign(cm, { enabled: true, beatLock: true, density: 0, motion: 1, decor: 0.8, ghost: 0.6, camera: 0.3, trans: 0, useWa: true, mood: 'graphic' });
+    Object.assign(cm, { enabled: true, beatLock: true, density: 0, motion: 1, decor: 0.8, ghost: 0.6, camera: 0.3, trans: 0, useWa: false, mood: 'graphic' });
     this.composeApplyStyle(o.style);
     cm.seed = L.h('reel', o.words.join('|'), o.bpm) % 2000000000;
     // 拍ロックのカットに、テンプレートに沿って場面ごとの演出を割り当てる
@@ -2154,7 +2152,7 @@ alert('LyricFlow: ' + D.cuts.length + ' text layers created.' + (miss.length ? '
       ['cyber', /サイバー|テクノ|未来|デジタル|EDM|エレクトロ/], ['glitch', /グリッチ|ノイズ|バグ|壊れ/],
       ['pop', /かわいい|可愛|ポップ|明る|元気|キュート/], ['calm', /バラード|切な|静か|しっとり|穏やか/],
       ['emotional', /エモ|涙|青春|泣/], ['editorial', /誌面|雑誌|エディトリアル|おしゃれ|ミニマル|洗練/],
-      ['dark', /ロック|激し|ダーク|退廃|赤黒|狂気/], ['wa', /和風|和の|着物|祭|神社|筆/], ['graphic', /図形|グラフィック|幾何|ポスター/],
+      ['dark', /ロック|激し|ダーク|退廃|赤黒|狂気/], ['graphic', /図形|グラフィック|幾何|ポスター/],
     ];
     const hit = MAP.find(([, re]) => re.test(brief));
     const mood = hit ? hit[0] : null;

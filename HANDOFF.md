@@ -12,6 +12,9 @@
 - 描画入口: `FXEngine._drawLyricLayer` → `LFC.render(engine, ctx, t, W, H, energy, boost)`。失敗時は従来描画にフォールバック。
 - カットのキャッシュ `timeline._lfcCuts` は**非列挙**(保存JSONに入らない)。案を変えたら `compose.planVersion` を増やす。
 - レイアウトの key は接頭辞で担当パックを分ける(`a_` `b_` `c_` `d_`)。group 内で key は一意。
+- **和のモチーフは使わない方針**(2026-09-26 ユーザー指示): `wa:true` の演出(暖簾・扇・家紋・青海波・麻の葉・桜吹雪・提灯・障子・市松・円窓・原稿用紙など)と
+  moods に 'wa' を含む配色(墨と和紙・紅)は `L.register`/`L.registerStyle` が登録しない。気分「和風」と「和風の演出も使う」も廃止。
+  保存済みの案にそれらの key が残っていても既定(center/fade)にフォールバックする。コードは各パックに残してある。
 - 歌詞記法: `*強調*` / 行末の半角 `!`=衝撃 / `本文|注釈` / 語末 `/`=カット分割(表示時に記号は消える。従来描画には記号が残る)。
 - 書き出し: `engine.keyMode = 'green'|'black'` で合成用(背景・後処理なし、透明に描いて背面に地色)。AE用 `.jsx` は `Editor.exportAE()`(中央配置の簡略版)。
 - モーショングラフィックス: パック `p_motion_graphics.js`(m_particles/m_morph/m_tunnel/m_cube/m_graph、particleIn/Out、mgHud 等、
@@ -54,7 +57,7 @@
 
 ## in-flight
 
-- なし(3Dダンスレイヤー Phase1 完了・E2E確認済み / 演出エンジン 607種(MG第3弾ショーリール・物語型リールの型含む) 完了・スモーク/連続性テスト済み)
+- なし(3Dダンスレイヤー Phase1 完了・E2E確認済み / 演出エンジン 584種(MG第3弾ショーリール・物語型リールの型含む、和のモチーフ23種は除外) 完了・スモーク/連続性テスト済み)
 
 ## 次にやること
 

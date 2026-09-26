@@ -27,7 +27,7 @@ L.register('layout', 'a_myKey', { name: '日本語名', tags: ['pop', 'graphic']
 並列で作るため、レイアウトの key は**担当パックの接頭辞必須**: `p_layouts_a`→`a_…`、`b_…`、`c_…`、`d_…`。
 他グループは接頭辞不要(1グループ1担当)だが、既存の `fade`(enter/exit)・`still`(hold)・`center`(layout) とは重ねない。
 `name` = UIに出る日本語名(2〜8字、短く具体的に)。`tags` = 合う雰囲気(下記)。`w` = 基本の選ばれやすさ
-(普通1、汎用で強いもの1.2〜1.5、クセが強い/用途が狭いもの0.4〜0.7)。和風モチーフは `wa: true`。
+(普通1、汎用で強いもの1.2〜1.5、クセが強い/用途が狭いもの0.4〜0.7)。和風モチーフは `wa: true`(**現在は方針により登録されない=使われない**。和の装飾は新規に作らない)。
 
 **tags(雰囲気)**: `pop calm emotional glitch graphic editorial cyber dark wa`
 (pop=明るい/かわいい、calm=しっとり/余白、emotional=エモ/切ない、glitch=デジタル破綻、graphic=図形的/強い、

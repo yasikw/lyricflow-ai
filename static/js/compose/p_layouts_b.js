@@ -628,7 +628,7 @@ function cellRows0(text, per) {
 }
 
 reg('masu', {
-  name: '原稿用紙', tags: ['editorial', 'calm', 'wa'], w: 1, fits: n => n >= 1 && n <= 28,
+  name: '原稿用紙', tags: ['editorial', 'calm', 'wa'], w: 1, wa: true, fits: n => n >= 1 && n <= 28,
   plan: (rng, cut) => ({ role: rng.pick(['serif', 'serif', 'body', 'display']), vert: cut.n <= 20 && !isLat(cut.text) && rng.chance(0.45) }),
   render(env) {
     const { W, H, cut, sc } = env, p = par(env);
@@ -807,7 +807,7 @@ reg('wordSearch', {
 });
 
 reg('checker', {
-  name: '市松', tags: ['graphic', 'pop', 'wa'], w: 0.8, fits: n => n >= 2 && n <= 24, treat: false,
+  name: '市松', tags: ['graphic', 'pop', 'wa'], w: 0.8, wa: true, fits: n => n >= 2 && n <= 24, treat: false,
   plan: rng => ({ role: rng.pick(['display', 'body', 'serif']), ph: rng.int(0, 1) }),
   render(env) {
     const { W, H, cut, sc } = env, p = par(env);

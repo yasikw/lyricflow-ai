@@ -12,7 +12,10 @@ const L = window.LFC = window.LFC || {};
 const REG = {}, ORD = {};
 L.GROUPS = ['layout', 'enter', 'hold', 'exit', 'decor', 'treat', 'cam', 'trans'];
 for (const g of L.GROUPS) { REG[g] = {}; ORD[g] = []; }
+// 和のモチーフ(暖簾・扇・家紋・和柄・桜・市松・円窓・原稿用紙…= wa:true)は登録しない。
+// 方針(2026-09-26): 日本的な装飾要素は使わない。コードは残すが一覧・おまかせ・保存済みの案のどこにも出ない(案は既定にフォールバック)
 L.register = (group, key, def, pack = 'core') => {
+  if (def && def.wa) return;
   if (!REG[group]) { REG[group] = {}; ORD[group] = []; }
   if (REG[group][key]) { console.warn('[LFC] duplicate key', group, key); return; }
   REG[group][key] = Object.assign({ key, pack, w: 1, tags: [] }, def);
@@ -674,12 +677,13 @@ L.STYLES = L.STYLES || {};
 L.STYLE_ORDER = L.STYLE_ORDER || [];
 L.registerStyle = (key, def) => {
   if (L.STYLES[key]) return;
+  if ((def.moods || []).includes('wa')) return;             // 和風配色(墨と和紙・紅)も使わない
   L.STYLES[key] = Object.assign({ key, moods: [], ghost: 0.5 }, def);
   L.STYLE_ORDER.push(key);
 };
 L.MOODS = [
   ['pop', 'ポップ'], ['calm', 'しっとり'], ['emotional', 'エモ'], ['glitch', 'グリッチ'],
-  ['graphic', 'グラフィック'], ['editorial', 'エディトリアル'], ['cyber', 'サイバー'], ['dark', 'ダーク'], ['wa', '和風'],
+  ['graphic', 'グラフィック'], ['editorial', 'エディトリアル'], ['cyber', 'サイバー'], ['dark', 'ダーク'],
 ];
 L.getStyle = key => L.STYLES[key] || null;
 
