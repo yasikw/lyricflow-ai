@@ -694,6 +694,11 @@ class Editor {
         </div>
         <div class="prop-row"><span>スタイル</span><select class="input" id="cmp-style"><option value="">(プロジェクトの配色)</option>${styleOpts}</select></div>
         <div class="prop-row"><span>雰囲気</span><select class="input" id="cmp-mood"><option value="">指定なし</option>${moodOpts}</select></div>
+        <div class="prop-row" title="Hallmark(アンチAIスロップ・デザイン)の文字組みの原則を適用: 約物詰め・かな詰め・サイズ別の字間と行送り・孤立行の回避・斜体見出しと強い光彩の禁止。「組版＋品格」は書体を役割フォントに固定し、跳ねる動き・光彩文字・装飾の重なりを控えめにします"><span>文字組み</span><select class="input" id="cmp-typo">
+          <option value="off" ${cm.typo === 'off' ? 'selected' : ''}>そのまま（従来）</option>
+          <option value="set" ${!cm.typo || cm.typo === 'set' ? 'selected' : ''}>組版を整える（Hallmark）</option>
+          <option value="full" ${cm.typo === 'full' ? 'selected' : ''}>組版＋品格（書体3種・動きを抑制）</option></select></div>
+        <button class="btn sm cmp-audit" id="cmp-audit" title="各カットを Hallmark の関門(はみ出し・小さすぎ・長文の特大・孤立行・書体数・コントラスト・光彩・動きの詰め込み・跳ねる動き)で採点">✓ 文字の品格チェック</button>
         ${sl('cmp-motion', '動きの強さ', cm.motion, '登場/退場/保持/カメラの動きの大きさ')}
         ${sl('cmp-decor', '装飾の量', cm.decor, '1カットに付く装飾の頻度(再計画)')}
         ${sl('cmp-density', 'カット密度', cm.density, '長い行を何カットに分けるか(再計画)')}
@@ -715,6 +720,12 @@ class Editor {
       this.markDirty(); this._composeRefresh(); this.renderTimeline();
     };
     $('#cmp-omakase').onclick = () => this.composeOmakase();
+    $('#cmp-typo').onchange = e => {
+      cm.typo = e.target.value;
+      if (cm.enabled && cm.typo === 'full') this.composePlan();     // 抑制は計画に効くので作り直す
+      this.markDirty(); this._composePushHist(); this._composeRefresh();
+    };
+    $('#cmp-audit').onclick = () => this.openTypoAudit();
     $('#cmp-reel').onclick = () => this.openReelMaker();
     $('#cmp-prev').onclick = () => this.composeHist(-1);
     $('#cmp-next').onclick = () => this.composeHist(1);
@@ -832,6 +843,54 @@ class Editor {
     this.markDirty();
     this.renderRight();
     this.renderTimeline();
+  }
+  /* 文字の品格チェック(Hallmark の slop test を歌詞動画へ): 各カットを関門で採点し、引っかかったカットを振り直せる */
+  openTypoAudit() {
+    const L = window.LFC;
+    if (!L || !L.audit) return toast('品格チェックが読み込まれていません', 'err');
+    const cm = this._cm();
+    if (!cm.enabled) return toast('先に「カット演出で歌詞を描く」をオンにしてください', 'err');
+    const cv = this.engine.canvas;
+    const bg = document.createElement('div');
+    bg.className = 'modal-bg';
+    bg.innerHTML = `<div class="modal typo-audit"><div class="m-head"><h2>✓ 文字の品格チェック <small>Hallmark</small></h2><button class="x-btn">×</button></div>
+      <div class="m-body" id="ta-body"></div>
+      <div class="m-foot"><button class="btn" id="ta-close">閉じる</button><button class="btn primary" id="ta-fix">引っかかったカットを直す</button></div></div>`;
+    document.body.appendChild(bg);
+    const $ = s => bg.querySelector(s);
+    const close = () => bg.remove();
+    bg.querySelector('.x-btn').onclick = close; $('#ta-close').onclick = close;
+    const draw = () => {
+      const r = L.audit(this.tl, cv.width, cv.height);
+      this.engine.render && this.engine.render(this.t);
+      const bad = r.cuts.filter(c => c.issues.length);
+      const pct = r.total ? Math.round(r.pass / r.total * 100) : 100;
+      const byGate = {};
+      bad.forEach(c => c.issues.forEach(x => { byGate[x.id] = (byGate[x.id] || 0) + 1; }));
+      const gates = Object.entries(L.AUDIT_GATES).map(([id, g]) => `<li class="${byGate[id] ? 'ng' : 'ok'}">${byGate[id] ? '✗ ' + esc(g.label) : '✓ ' + esc(g.ok || g.label)}${byGate[id] ? ` <b>${byGate[id]}カット</b>` : ''}</li>`).join('');
+      const cuts = r.cuts.map(c => {
+        const cut = L.buildCuts(this.tl)[c.idx];
+        return `<div class="ta-cut ${c.issues.length ? 'ng' : 'ok'}" data-t="${cut ? cut.start + 0.01 : 0}"><span class="ta-no">${c.idx + 1}</span><span class="ta-txt">${esc(c.text)}</span>${c.locked ? '<span class="ta-lock">🔒</span>' : ''}
+          <span class="ta-iss">${c.issues.length ? c.issues.map(x => esc(x.label)).join(' / ') : '問題なし'}</span></div>`;
+      }).join('');
+      $('#ta-body').innerHTML = `
+        <div class="ta-score"><b>${pct}</b><span>点</span><em>${r.pass} / ${r.total} 関門を通過 ・ ${r.cuts.length - bad.length} / ${r.cuts.length} カットが合格</em></div>
+        <p class="p-sub">各カットを止まった状態で描き、Hallmark(アンチAIスロップ・デザイン)の原則で判定します。行をクリックするとそのカットへ移動します。</p>
+        <ul class="ta-gates">${gates}</ul>
+        <div class="ta-fonts">使っている書体: ${r.fonts.map(f => `<code>${esc(f)}</code>`).join(' ')}${r.fontWarn ? ' <b class="ng">多め — 文字組みを「組版＋品格」にすると役割フォントに揃います</b>' : ''}</div>
+        <div class="ta-list">${cuts}</div>`;
+      bg.querySelectorAll('.ta-cut').forEach(el => { el.onclick = () => { this.seek(+el.dataset.t); }; });
+      $('#ta-fix').disabled = !bad.length;
+    };
+    $('#ta-fix').onclick = () => {
+      $('#ta-fix').disabled = true;
+      this._composePushHist();
+      const res = L.auditFix(this.tl, cv.width, cv.height);
+      this.markDirty(); this._composePushHist(); this.renderTimeline(); this._composeRefresh();
+      toast(`${res.tried}カット中 ${res.fixed}カットを直しました（元に戻すは「◀ 前の案」）`, 'ok');
+      draw();
+    };
+    draw();
   }
   _composeRefresh() {
     const L = window.LFC;

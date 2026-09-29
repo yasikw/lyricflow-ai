@@ -104,6 +104,15 @@ layout の `render` と decor の `draw` は **1フレームに3回**(B, A, main
   i=字の添字、n=字数(空白含む)、g=`{x,y,w,h,ch}`。clipX は字幅に対する割合(中心0、字全体≈[-0.55,0.55])、clipY は字サイズに対する割合(中心0、全体≈[-0.62,0.62])。変化なしは null を返す。
 - `L.stagger(p, i, n, spread=0.5, order='lr'|'rl'|'center'|'edges'|'random'|配列, seed)` → 字ごとの進行度。**全字が p=1 で必ず揃う**スライド窓式。
 
+### Hallmark 組版レイヤー(core が自動で掛ける)
+`timeline.compose.typo`: `'off'`(従来) / `'set'`(既定) / `'full'`。L.render と L.planAll が `L.setTypo()` で毎回設定する。
+- `'set'`: 約物詰め(括弧・句読点・中黒を半角送り、字面は `g.ox/g.oy` で送りの中へ)、見出しサイズのかな詰め、
+  サイズ区分(`L.typoClass(size)` = display/text/label、基準は min(W,H))ごとの自動字間・行送り、欧文のバランス改行、禁則(開き括弧で行を終えない等)、
+  歌詞本体の斜体の無効化と強い光彩の上限。**`track`/`lead` を明示した項目はそのまま**(自動は未指定のときだけ)。項目ごとに外すなら `noTypo: true`。
+- `'full'`: 上に加えて書体を 2+1(display / body / mono)に固定(`L.lockFont`)、計画で跳ねる動き・光彩系の加工・忙しい保持を下げ、装飾は1つまで。
+- `L.fitSize` は組版後の寸法で測る(サイズ区分が変われば測り直す)。**字幅を自前で足し合わせず `L.measure` を使う**こと。
+- 品格チェック `L.audit(tl,W,H)` / 自動修正 `L.auditFix(tl,W,H)` は `hm_audit.js`。各カットを静止状態で描いて関門(はみ出し・小さすぎ・長文の特大・孤立行・大文字の行送り・書体数・コントラスト・光彩・動きの詰め込み・跳ねる動き)で判定する。
+
 ## 4. 乱数・イージング・色
 - **決定論のみ**: 描画/適用中に `Math.random()`・`Date` 禁止。`plan(rng, …)` では `rng()` `rng.range(a,b)` `rng.int(a,b)` `rng.pick(arr)` `rng.chance(p)` `rng.sign()`。
   描画時は `L.r(a,b,…)` 0..1 / `L.rs(…)` -1..1 / `L.rr(lo,hi,…)` / `L.h(…)` uint を `env.cut.seed`・添字・`env.step` をキーに。`L.noise1(x, seed)` なめらかノイズ。
@@ -134,7 +143,7 @@ front は歌詞の bbox を覆わない(周囲・外側に置く)。back は歌�
 
 **treat** `{ name, tags, w, safe?, plan?(rng, st)→params, apply(env, it, P) }` — カットの全歌詞項目に(登場より前に)掛かる文字加工
 (縁取り、影、立体、グラデ/柄、マーカー、下線、字ごとの色替え…)。`it.color` を文字色として尊重し、補色は `env.sc` から `L.lum` で選ぶ。
-`it.fill===false` や alpha が低い項目は触らない。`safe:true` は色プレート上でも成立するものだけ。
+`it.fill===false` や alpha が低い項目は触らない。`safe:true` は色プレート上でも成立するものだけ。`needsEmph:true` は `*強調*` のあるカットでだけ選ばれる。style の `bias.treat` も効く。
 
 **cam** `{ name, tags, w, strong?, plan?(rng, st)→params, get(env, P) → {x, y, s, rot(度), sx, sy, skx(度)} }` — カット内容の画面中心まわりの変形。
 歌詞を画面内に保つ(|x|,|y| ≤ 5%、s 0.92〜1.15、rot ≤ 5°)。大きい動きは短く、必ず収束。`strong:true` は激しいもの(強調カット向け)。

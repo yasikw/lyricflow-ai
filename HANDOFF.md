@@ -1,6 +1,6 @@
 # HANDOFF — LyricFlow AI
 
-最終更新: 2026-09-26 (Claude Code)
+最終更新: 2026-09-29 (Claude Code)
 
 ## 演出エンジン(カット演出)の契約 — 破壊的変更禁止
 
@@ -15,6 +15,11 @@
 - **和のモチーフは使わない方針**(2026-09-26 ユーザー指示): `wa:true` の演出(暖簾・扇・家紋・青海波・麻の葉・桜吹雪・提灯・障子・市松・円窓・原稿用紙など)と
   moods に 'wa' を含む配色(墨と和紙・紅)は `L.register`/`L.registerStyle` が登録しない。気分「和風」と「和風の演出も使う」も廃止。
   保存済みの案にそれらの key が残っていても既定(center/fade)にフォールバックする。コードは各パックに残してある。
+- **Hallmark 組版レイヤー**(2026-09-29): `compose.typo = 'off'|'set'(既定)|'full'`。約物詰め・かな詰め・サイズ別字間/行送り・欧文バランス改行・禁則・斜体見出し禁止。
+  'full' は書体 2+1 固定と動きの抑制。品格チェック/自動修正 `static/js/compose/hm_audit.js`(`L.audit`/`L.auditFix`)、UI は演出パネル「✓ 文字の品格チェック」。
+  Hallmark タイポ・パック `p_hm_type.js`(h_ 構図10・hm 登場4/退場3/加工2・配色6 hmSpecimen/hmNewsprint/hmManifesto/hmTerminal/hmRiso/hmGrid)。
+  加工の `needsEmph:true` と style の `bias.treat` を計画が読むようにした。'full' は歌詞に数字が無いときデータ系構図(n_stats 等)を下げる(偽の数値を作らない)。
+  既存の見た目を完全に戻すなら typo='off'。詳細は docs/COMPOSE_PACKS.md「Hallmark 組版レイヤー」。
 - 歌詞記法: `*強調*` / 行末の半角 `!`=衝撃 / `本文|注釈` / 語末 `/`=カット分割(表示時に記号は消える。従来描画には記号が残る)。
 - 書き出し: `engine.keyMode = 'green'|'black'` で合成用(背景・後処理なし、透明に描いて背面に地色)。AE用 `.jsx` は `Editor.exportAE()`(中央配置の簡略版)。
 - モーショングラフィックス: パック `p_motion_graphics.js`(m_particles/m_morph/m_tunnel/m_cube/m_graph、particleIn/Out、mgHud 等、
@@ -57,7 +62,7 @@
 
 ## in-flight
 
-- なし(3Dダンスレイヤー Phase1 完了・E2E確認済み / 演出エンジン 584種(MG第3弾ショーリール・物語型リールの型含む、和のモチーフ23種は除外) 完了・スモーク/連続性テスト済み)
+- なし(3Dダンスレイヤー Phase1 完了・E2E確認済み / 演出エンジン 609種(MG第3弾・Hallmark タイポ・パック含む、和のモチーフ23種は除外) 完了・スモーク/連続性テスト済み)
 
 ## 次にやること
 

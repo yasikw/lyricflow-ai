@@ -596,3 +596,25 @@ pre.code {
 .modal.reelmaker { max-width: 620px; width: 94vw; }
 .rm-row { display: grid; grid-template-columns: 1fr 1fr 1.3fr; gap: 10px; }
 .rm-sum { margin-top: 8px; font: 600 12.5px 'Inter', monospace; color: var(--cyan); }
+
+/* 文字の品格チェック (Hallmark) */
+.cmp-audit { width: 100%; margin: 4px 0 8px; }
+.modal.typo-audit { max-width: 720px; width: 94vw; }
+.typo-audit h2 small { font-size: 12px; color: var(--muted, #8b96a8); font-weight: 500; margin-left: 6px; }
+.ta-score { display: flex; align-items: baseline; gap: 6px; margin-bottom: 6px; }
+.ta-score b { font-size: 40px; line-height: 1; letter-spacing: -0.02em; }
+.ta-score em { font-style: normal; color: var(--muted, #8b96a8); font-size: 12px; margin-left: 8px; }
+.ta-gates { list-style: none; padding: 0; margin: 8px 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 2px 14px; font-size: 12px; }
+.ta-gates li.ok { color: var(--muted, #8b96a8); }
+.ta-gates li.ng { color: #ff8a7a; }
+.ta-fonts { font-size: 12px; margin: 6px 0 10px; }
+.ta-fonts code { background: rgba(127, 127, 127, 0.15); padding: 1px 5px; border-radius: 4px; }
+.ta-fonts .ng { color: #ff8a7a; font-weight: 600; }
+.ta-list { max-height: 42vh; overflow: auto; border-top: 1px solid rgba(127, 127, 127, 0.2); }
+.ta-cut { display: grid; grid-template-columns: 28px minmax(0, 1.1fr) auto minmax(0, 1.6fr); gap: 8px; align-items: center; padding: 5px 4px; font-size: 12px; border-bottom: 1px solid rgba(127, 127, 127, 0.12); cursor: pointer; }
+.ta-cut:hover { background: rgba(127, 127, 127, 0.1); }
+.ta-cut .ta-no { color: var(--muted, #8b96a8); font-variant-numeric: tabular-nums; }
+.ta-cut .ta-txt { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
+.ta-cut.ok .ta-iss { color: var(--muted, #8b96a8); }
+.ta-cut.ng .ta-iss { color: #ff8a7a; }
+@media (max-width: 560px) { .ta-gates { grid-template-columns: minmax(0, 1fr); } .ta-cut { grid-template-columns: 24px minmax(0, 1fr); } .ta-cut .ta-iss { grid-column: 2; } }

@@ -158,7 +158,52 @@ L.fontFam = f => {
   }
   return v;
 };
-L.fontStr = it => `${it.italic ? 'italic ' : ''}${it.weight == null ? 900 : it.weight} ${Math.max(1, it.size || 10).toFixed(2)}px ${L.fontFam(it.font)}`;
+/* ---------------------------------------------------------------- Hallmark 組版レイヤー
+   Hallmark(アンチAIスロップ・デザインスキル)の文字組みの原則を歌詞の描画に適用する。L.render が毎フレーム設定する。
+   mode: 'off' | 'set'(既定: 組版だけ) | 'full'(組版 + 書体を役割フォントに固定 + 動きの抑制)
+   - 約物詰め: 全角の括弧・句読点・中黒を半角送りに(字面は送りの中へ寄せる)
+   - かな詰め: 見出しサイズのかなを少し詰める(プロポーショナル組みの近似)。小書きかなはさらに
+   - サイズ別の字間/行送り: 見出しは字間を詰め行送り 1.1(欧文大文字は 1.04)、小さな欧文ラベルは字間を開ける
+   明示した track / lead はそのまま尊重する(自動になるのは未指定のときだけ) */
+L.TYPO = { mode: 'set', ref: 1080, lock: null, lockKey: '' };
+L.typoOn = () => L.TYPO.mode !== 'off';
+L.typoClass = size => { const r = size / (L.TYPO.ref || 1080); return r >= 0.06 ? 'display' : r < 0.032 ? 'label' : 'text'; };
+L.setTypo = (cm, st, W, H) => {
+  const T = L.TYPO;
+  T.mode = (cm && cm.typo) || 'set';
+  T.ref = Math.max(1, Math.min(W || 1920, H || 1080));
+  const lock = T.mode === 'full' ? Object.assign({}, L.DEFAULT_FONTS, (st && st.fonts) || {}) : null;
+  const key = lock ? JSON.stringify(lock) : '';
+  if (key !== T.lockKey) { T.lock = lock; T.lockKey = key; lockCache.clear(); }
+};
+const OPEN_P = new Set(['「', '『', '（', '【', '〈', '《', '〔', '［', '｛']);
+const CLOSE_P = new Set(['」', '』', '）', '】', '〉', '》', '〕', '］', '｝', '、', '。', '，', '．']);
+const MID_P = new Set(['・', '：', '；']);
+/* 書体の固定(Hallmark 2+1 / 固定トークン): 役割フォント以外の直書き書体を、系統の近い役割フォントへ置き換える */
+const lockCache = new Map();
+L.lockFont = f => {
+  const T = L.TYPO;
+  if (!T.lock || !f) return f;
+  let v = lockCache.get(f);
+  if (v === undefined) {
+    // 2+1: display(見出し) + body(本文) + mono(1つだけの外れ値)。serif と hand の役割はこの3つへ畳む
+    const first = r => [].concat(r)[0];
+    const R = T.lock, disp = first(R.display), body = first(R.body) || disp, mono = first(R.mono) || body;
+    const isSerif = x => /Mincho|Serif|Antique|Tegomin|Tokumin|Decol|Hina|Garamond|Playfair|serif\s*$/i.test(String(x || '')) && !/sans-serif\s*$/i.test(String(x || ''));
+    const serifTo = isSerif(disp) ? disp : isSerif(body) ? body : disp;
+    if (f === disp || f === body || f === mono) v = f;
+    else if ([].concat(R.serif).includes(f)) v = serifTo;
+    else if ([].concat(R.hand).includes(f)) v = body;
+    else if ([].concat(R.display).includes(f)) v = disp;
+    else if (/DotGothic|Mono|Courier|monospace/i.test(f)) v = mono;
+    else if (isSerif(f)) v = serifTo;
+    else if (/Yomogi|Klee|Kurenaido|Hachi Maru|Yusei|Syuku|Yuji|cursive/i.test(f)) v = body;
+    else v = disp;
+    lockCache.set(f, v);
+  }
+  return v;
+};
+L.fontStr = it => `${it.italic && !L.typoOn() ? 'italic ' : ''}${it.weight == null ? 900 : it.weight} ${Math.max(1, it.size || 10).toFixed(2)}px ${L.fontFam(L.lockFont(it.font))}`;
 
 const mcanvas = document.createElement('canvas');
 const mctx = mcanvas.getContext('2d');
@@ -180,19 +225,43 @@ L.adv = (font, weight, ch) => {                         // 1em あたりの送�
 /* テキスト項目のレイアウト(項目中心が原点)。{w,h,lay:[{ch,x,y,w,h,i,line,space,vrot,vshift}]} */
 L.measure = it => {
   const size = Math.max(1, it.size || 10);
-  const font = it.font || L.DEFAULT_FONTS.display;
+  const font = L.lockFont(it.font || L.DEFAULT_FONTS.display);
   const weight = it.weight == null ? 900 : it.weight;
-  const lines = String(it.text == null ? '' : it.text).split('\n');
+  const text = String(it.text == null ? '' : it.text);
+  const lines = text.split('\n');
   const lay = [];
+  const typo = L.typoOn() && !it.noTypo;
+  const cls = typo ? (it._cls || L.typoClass(size)) : 'text';
+  const latin = typo && !/[぀-ヿ一-鿿]/.test(text) && /[A-Za-z]/.test(text);
+  const caps = latin && text === text.toUpperCase();
+  // 1字あたりの送り係数(約物詰め・かな詰め)と字面の寄せ(ox: em 比)
+  const kern = ch => {
+    if (!typo) return null;
+    if (OPEN_P.has(ch)) return { k: 0.5, ox: -0.25 };
+    if (CLOSE_P.has(ch)) return { k: 0.5, ox: 0.25 };
+    if (MID_P.has(ch)) return { k: 0.5, ox: 0 };
+    if (cls === 'display' && L.isSmallKana(ch)) return { k: 0.84, ox: 0 };
+    if (cls === 'display' && (L.isHira(ch) || L.isKata(ch)) && ch !== 'ー') return { k: 0.93, ox: 0 };
+    return null;
+  };
   let W = 0, H = 0;
   if (!it.vertical) {
-    const lh = size * (it.lead || 1.18);
-    const track = (it.track || 0) * size;
+    const lead = it.lead != null ? it.lead : !typo ? 1.18 : cls === 'display' ? (caps ? 1.04 : 1.1) : cls === 'label' ? 1.3 : 1.18;
+    const lh = size * lead;
+    const trk = it.track != null ? it.track : !typo ? 0 : cls === 'display' && latin ? -0.025 : cls === 'label' && caps ? 0.1 : 0;
+    const track = trk * size;
     const rows = lines.map(line => {
       const gs = L.glyphs(line);
-      const ws = gs.map(ch => (L.isSpace(ch) ? size * 0.32 : L.adv(font, weight, ch) * size));
+      const oxs = [];
+      const ws = gs.map((ch, gi) => {
+        if (L.isSpace(ch)) { oxs.push(0); return size * 0.32; }
+        const a = L.adv(font, weight, ch);
+        const kk = a >= 0.9 ? kern(ch) : null;           // 全角送りの字だけ詰める(プロポーショナル書体は触らない)
+        oxs.push(kk && kk.ox ? kk.ox * a * size : 0);
+        return a * size * (kk ? kk.k : 1);
+      });
       const w = ws.reduce((a, b) => a + b, 0) + track * Math.max(0, gs.length - 1);
-      return { gs, ws, w };
+      return { gs, ws, oxs, w };
     });
     W = rows.reduce((m, r) => Math.max(m, r.w), 0);
     H = lh * rows.length;
@@ -201,27 +270,35 @@ L.measure = it => {
       const y = -H / 2 + lh * (li + 0.5);
       r.gs.forEach((ch, gi) => {
         const w = r.ws[gi];
-        lay.push({ ch, x: x + w / 2, y, w, h: size, line: li, i: lay.length, space: L.isSpace(ch) });
+        const g = { ch, x: x + w / 2, y, w, h: size, line: li, i: lay.length, space: L.isSpace(ch) };
+        if (r.oxs[gi]) g.ox = r.oxs[gi];
+        lay.push(g);
         x += w + track;
       });
     });
   } else {
     const cw = size * (it.lead || 1.25);
     const step = size * (1 + (it.track || 0));
+    // 縦書きの約物詰め: 括弧と句読点は半分の送り(字面は送りの中へ)
+    const vk = ch => (!typo ? 1 : OPEN_P.has(ch) || CLOSE_P.has(ch) || MID_P.has(ch) ? 0.5 : 1);
     const cols = lines.map(line => L.glyphs(line));
-    const maxN = cols.reduce((m, c) => Math.max(m, c.length), 0);
+    const colLen = cols.map(gs => gs.reduce((s, ch) => s + step * vk(ch), 0));
+    const maxL = colLen.reduce((m, c) => Math.max(m, c), 0);
     W = cw * cols.length;
-    H = step * maxN;
+    H = maxL;
     cols.forEach((gs, ci) => {
       const x = W / 2 - cw * (ci + 0.5);                 // 縦書きは右の列から
-      const colH = step * gs.length;
-      const y0 = (it.valign === 'top' ? -H / 2 : -colH / 2) + step * 0.5;
-      gs.forEach((ch, gi) => {
-        lay.push({
-          ch, x, y: y0 + step * gi, w: size, h: size, line: ci, i: lay.length, space: L.isSpace(ch),
+      let y = it.valign === 'top' ? -H / 2 : -colLen[ci] / 2;
+      gs.forEach(ch => {
+        const k = vk(ch), h = step * k;
+        const g = {
+          ch, x, y: y + h / 2, w: size, h: size, line: ci, i: lay.length, space: L.isSpace(ch),
           vrot: V_ROT.has(ch) || (L.isLatin(ch) && it.vlatin === 'rot'),
           vshift: V_SHIFT.has(ch) ? 1 : L.isSmallKana(ch) ? 0.45 : 0,
-        });
+        };
+        if (k < 1) { if (OPEN_P.has(ch)) g.oy = -step * 0.25; else if (CLOSE_P.has(ch) && !V_SHIFT.has(ch)) g.oy = step * 0.25; }
+        lay.push(g);
+        y += h;
       });
     });
   }
@@ -231,11 +308,18 @@ L.measure = it => {
 /* maxW × maxH に収まる最大サイズ(線形なので1回の計測で決まる) */
 L.fitSize = (text, font, maxW, maxH, o = {}) => {
   const base = 100;
-  const m = L.measure({ text, font, weight: o.weight, size: base, track: o.track || 0, lead: o.lead, vertical: o.vertical });
   const sx = o.sx || 1, sy = o.sy || 1;
-  const kw = m.w > 0 ? maxW / (m.w * sx) : 1e9;
-  const kh = m.h > 0 ? maxH / (m.h * sy) : 1e9;
-  return Math.max(4, Math.min(Math.min(kw, kh) * base, o.max || 1e9));   // max はピクセル上限
+  // 組版レイヤーは字の大きさで字間/行送りが変わるので、結果のサイズ区分で測り直す(最大2回)
+  const fit = cls => {
+    const m = L.measure({ text, font, weight: o.weight, size: base, track: o.track, lead: o.lead, vertical: o.vertical, _cls: cls });
+    const kw = m.w > 0 ? maxW / (m.w * sx) : 1e9;
+    const kh = m.h > 0 ? maxH / (m.h * sy) : 1e9;
+    return Math.max(4, Math.min(Math.min(kw, kh) * base, o.max || 1e9));   // max はピクセル上限
+  };
+  if (!L.typoOn()) return fit('text');
+  const s1 = fit('display');
+  const c = L.typoClass(s1);
+  return c === 'display' ? s1 : fit(c);
 };
 
 /* 日本語向けのバランス改行: 理想位置±3字の中から切りやすい所を選ぶ */
@@ -247,6 +331,23 @@ L.splitLines = (text, maxPer) => {
   // 欧文1語(空白なし)は途中で折らない(BE/AT のような分断を防ぐ)
   if (/^[A-Za-z0-9'&.\-!?]+$/.test(src)) return [src];
   // 欧文は単語単位で詰める
+  if (L.hasLatinWords(src) && /\s/.test(src) && L.typoOn()) {
+    // 欧文のバランス改行: k 行ちょうどに分け、最長行が最短になる区切りを動的計画で選ぶ(孤立語・凸凹を避ける)
+    const words = src.split(/\s+/).filter(Boolean);
+    const k = Math.min(words.length, Math.ceil(n / maxPer));
+    const len = (i, j) => { let t = j - i - 1; for (let x = i; x < j; x++) t += L.glyphs(words[x]).length; return t; };
+    const N = words.length, INF = 1e9;
+    const best = Array.from({ length: k + 1 }, () => new Array(N + 1).fill(INF)), prev = Array.from({ length: k + 1 }, () => new Array(N + 1).fill(-1));
+    best[0][0] = 0;
+    for (let l = 1; l <= k; l++) for (let j = l; j <= N; j++) for (let i = l - 1; i < j; i++) {
+      if (best[l - 1][i] >= INF) continue;
+      const L0 = len(i, j), v = Math.max(best[l - 1][i], L0 * 1000) + L0 * L0 * 0.01;
+      if (v < best[l][j]) { best[l][j] = v; prev[l][j] = i; }
+    }
+    const out = []; let j = N;
+    for (let l = k; l >= 1; l--) { const i = prev[l][j]; if (i < 0) return [src]; out.unshift(words.slice(i, j).join(' ')); j = i; }
+    return out;
+  }
   if (L.hasLatinWords(src) && /\s/.test(src)) {
     const words = src.split(/\s+/);
     const k = Math.ceil(n / maxPer);
@@ -256,6 +357,11 @@ L.splitLines = (text, maxPer) => {
       if (cur && L.glyphs(cur + ' ' + w).length > target * 1.15) { out.push(cur); cur = w; } else cur = cur ? cur + ' ' + w : w;
     }
     if (cur) out.push(cur);
+    // 孤立語(最終行が1語だけ)を避ける: 前の行から1語おろす
+    if (L.typoOn() && out.length >= 2) {
+      const last = out[out.length - 1].split(' '), prev = out[out.length - 2].split(' ');
+      if (last.length === 1 && prev.length >= 3) { last.unshift(prev.pop()); out[out.length - 2] = prev.join(' '); out[out.length - 1] = last.join(' '); }
+    }
     return out;
   }
   const k = Math.ceil(n / maxPer);
@@ -264,6 +370,7 @@ L.splitLines = (text, maxPer) => {
     const a = gs[i - 1], b = gs[i];
     if (!a || !b) return -99;
     if (L.isSmallKana(b) || 'ー、。，．！？!?）」』】…'.includes(b)) return -8;
+    if ('「『（【〈《(['.includes(a)) return -8;                 // 開き括弧で行を終えない
     if (L.isSpace(a) || L.isSpace(b)) return 4;
     if ('、。，,!！?？…」』）'.includes(a)) return 4;
     if (/[はがをにでともへやの]/.test(a) && !L.isHira(b)) return 3;
@@ -298,6 +405,22 @@ L.chunks = text => {
     if (window.Intl && Intl.Segmenter) segs = Array.from(new Intl.Segmenter('ja', { granularity: 'word' }).segment(src)).map(s => s.segment);
   } catch (e) { segs = null; }
   if (!segs) segs = L.splitLines(src, 4);
+  // 禁則: 開き括弧は次の塊の頭へ、閉じ括弧・句読点・小書きかなは前の塊の末尾へ寄せる
+  const OPEN = /^[「『（【〈《〔［(\[]+$/, OPEN_T = /[「『（【〈《〔［(\[]+$/, CLOSE_H = /^[」』）】〉》〕］)\]、。，．,.！？!?…‥ーぁぃぅぇぉっゃゅょゎァィゥェォッャュョ]+/;
+  const fixed = [];
+  let carry = '';
+  for (let s0 of segs) {
+    if (!s0.trim()) { continue; }
+    s0 = carry + s0; carry = '';
+    const h = fixed.length ? s0.match(CLOSE_H) : null;
+    if (h && h[0].length < s0.length + 1) { fixed[fixed.length - 1] += h[0]; s0 = s0.slice(h[0].length); if (!s0) continue; }
+    if (OPEN.test(s0)) { carry = s0; continue; }
+    const t = s0.match(OPEN_T);
+    if (t && t[0].length < s0.length) { carry = t[0]; s0 = s0.slice(0, -t[0].length); }
+    fixed.push(s0);
+  }
+  if (carry) { if (fixed.length) fixed[fixed.length - 1] += carry; else fixed.push(carry); }
+  segs = fixed;
   const out = [];
   for (const s of segs) {
     if (!s.trim()) continue;
@@ -426,6 +549,7 @@ L.drawItem = (env, it) => {
   const alpha = (it.alpha == null ? 1 : it.alpha) * (pass === 'main' ? 1 : env.ghostAlpha);
   if (alpha <= 0.002) return bb;
   const m = it._m || L.measure(it);
+  if (L._collect && pass === 'main') L._collect.push({ it, bb, m, main: !!it._main, alpha });
   if (it.echo && it.echo.n > 0) {
     const e = it.echo;
     for (let k = Math.min(12, e.n); k >= 1; k--) {
@@ -511,6 +635,7 @@ L._drawCore = (env, it, m, alpha, band) => {
     if (rot) ctx.rotate(rot);
     if (gskew) ctx.transform(1, 0, Math.tan(gskew), 1, 0, 0);
     if (s !== 1 || gsx !== 1 || gsy !== 1) ctx.scale((s * gsx) || 1e-4, (s * gsy) || 1e-4);
+    if (g.ox || g.oy) ctx.translate(g.ox || 0, g.oy || 0);   // 約物詰めの字面の寄せ
     if (g.vrot) ctx.rotate(Math.PI / 2);
     const ox = g.vshift ? it.size * 0.3 * g.vshift : 0, oy = g.vshift ? -it.size * 0.3 * g.vshift : 0;
     if (cX || cY) {
@@ -668,7 +793,12 @@ L.mainDraw = (env, it0) => {
     if (!L._warned) { L._warned = true; console.warn('[LFC] motion error', e); }
   }
   if (it.hide || (it.alpha == null ? 1 : it.alpha) <= 0.002) return null;
-  // 強調カットはサイズ由来の要素に脈動を少し
+  if (L.typoOn()) {
+    // Hallmark: 見出しに斜体を使わない / 光彩は控えめに(強い glow は AI 臭)
+    it.italic = false;
+    if (it.shadow && it.shadow.blur > it.size * 0.22) it.shadow = Object.assign({}, it.shadow, { blur: it.size * 0.22 });
+  }
+  it._main = true;
   return L.drawItem(env, it);
 };
 
@@ -711,7 +841,7 @@ function joinWords(ws) {
   let s = '';
   ws.forEach((w, i) => {
     const t = String(w.word || '');
-    if (i && /[A-Za-z0-9]$/.test(s) && /^[A-Za-z0-9]/.test(t)) s += ' ';
+    if (i && /[A-Za-z0-9][*\/]*$/.test(s) && /^\**[A-Za-z0-9]/.test(t)) s += ' ';   // 記法の * / を挟んでも欧文の語間を保つ
     s += t;
   });
   return s;
@@ -849,10 +979,26 @@ function pickW(rng, group, weightFn) {
 L.pickW = pickW;
 
 /* 1カット分の案。keep = 維持するフィールド(ここだけ変える用) */
+/* Hallmark 'full' の抑制: 跳ねる/弾む動き・光彩/グラデ/クロームの文字・常時揺れる保持は控えめに
+   (禁止ではなく重みを下げる。強調カットでは戻す) */
+const HM_BOUNCY = /spring|elastic|jelly|[bB]ounce|squash|[rR]ubber|hop|pendulum|tumble|balloon/;
+const HM_GLOWY = new Set(['glowShadow', 'gradAccent', 'chrome', 'longShadow', 'extrude3d', 'patternFill', 'jitter', 'baseWave']);
+// 数値を作り出すデータ系の構図(歌詞に数字が無いのに統計・割合・グラフを見せる = Hallmark「偽の数値」)
+const HM_FAKENUM = /^n_(stats|pctswap|waffle|donut|bars|linegraph|hbar|odometer|countup|countdown|tally)$/;
+const HM_BUSYHOLD = /shake|tremble|jelly|flicker|glowPulse|kickFlash|charSwap|glitchSlip|skewWobble|wobble|bassSquash|handheld/i;
+L.hmMult = (g, key, emph) => {
+  if (g === 'treat' && HM_GLOWY.has(key)) return emph ? 0.5 : 0.15;
+  if ((g === 'enter' || g === 'exit') && HM_BOUNCY.test(key)) return emph ? 0.6 : 0.25;
+  if (g === 'hold' && HM_BUSYHOLD.test(key)) return emph ? 0.5 : 0.2;
+  if (g === 'hold' && key === 'still') return 1.8;
+  return 1;
+};
 L.planCut = (cut, ctx) => {
   const { rng, st, moods, cm, portrait, recent, W, H, keep, prevCut } = ctx;
   const emph = !!(cut.emph || cut.emphMark || cut.impact);
   const out = Object.assign({}, keep || {});
+  const hm = cm.typo === 'full';
+  const hmM = (g, k) => (hm ? L.hmMult(g, k, emph) : 1);
   const moodMult = tags => (moods.length ? (hasTag(tags, moods) ? 1.6 : 0.75) : 1);
   const recentMult = (g, k) => { const r = recent[g] || []; const i = r.lastIndexOf(k); return i < 0 ? 1 : i >= r.length - 2 ? 0.04 : 0.35; };
   const bias = (g, k) => (st && st.bias && st.bias[g] && st.bias[g][k] != null ? st.bias[g][k] : 1);
@@ -862,6 +1008,7 @@ L.planCut = (cut, ctx) => {
       if (def.fits && !def.fits(cut.n)) return 0;
       if (def.minDur && cut.dur < def.minDur) return 0;
       let w = def.w * moodMult(def.tags) * bias('layout', def.key) * recentMult('layout', def.key);
+      if (hm && HM_FAKENUM.test(def.key) && !/[0-9０-９]/.test(cut.text)) w *= 0.1;
       if (portrait && def.portrait != null) w *= def.portrait;
       if (emph && def.emph != null) w *= def.emph;
       return w;
@@ -876,7 +1023,7 @@ L.planCut = (cut, ctx) => {
       if (!L.allowed(def, cm)) return 0;
       if (def.minDur && cut.dur < def.minDur) return 0;
       if (def.maxChars && cut.n > def.maxChars) return 0;
-      let w = def.w * moodMult(def.tags) * bias(g, def.key) * recentMult(g, def.key);
+      let w = def.w * moodMult(def.tags) * bias(g, def.key) * recentMult(g, def.key) * hmM(g, def.key);
       if (g === 'enter' && lay.enterBias && lay.enterBias[def.key] != null) w *= lay.enterBias[def.key];
       if (emph && def.emph != null) w *= def.emph;
       return w;
@@ -886,7 +1033,8 @@ L.planCut = (cut, ctx) => {
   if (!out.decor) {
     out.decor = [];
     const dens = cm.decor == null ? 0.6 : cm.decor;
-    const n = rng() < dens * 0.8 ? (rng() < dens * 0.5 ? 2 : 1) : 0;
+    let n = rng() < dens * 0.8 ? (rng() < dens * 0.5 ? 2 : 1) : 0;
+    if (hm && !emph) n = Math.min(n, 1);                // 「10の小さな動きより1つの振付」
     for (let i = 0; i < n; i++) {
       const d = pickW(rng, 'decor', def => {
         if (!L.allowed(def, cm)) return 0;
@@ -901,14 +1049,14 @@ L.planCut = (cut, ctx) => {
   if (out.treat === undefined) {
     out.treat = null;
     if (lay.treat !== false && rng() < (emph ? 0.55 : 0.32)) {
-      const d = pickW(rng, 'treat', def => (L.allowed(def, cm) && (lay.treat !== 'safe' || def.safe) ? def.w * moodMult(def.tags) * recentMult('treat', def.key) : 0));
+      const d = pickW(rng, 'treat', def => (L.allowed(def, cm) && (lay.treat !== 'safe' || def.safe) && !(def.needsEmph && !cut.emphMark) ? def.w * moodMult(def.tags) * recentMult('treat', def.key) * hmM('treat', def.key) * bias('treat', def.key) : 0));
       if (d) { out.treat = d.key; out.treatP = d.plan ? d.plan(rng, st || {}) : {}; }
     }
   }
   if (out.cam === undefined) {
     out.cam = null;
-    if (rng() < (cm.camera == null ? 0.5 : cm.camera)) {
-      const d = pickW(rng, 'cam', def => (L.allowed(def, cm) ? def.w * moodMult(def.tags) * (def.strong && !emph ? 0.4 : 1) : 0));
+    if (rng() < (cm.camera == null ? 0.5 : cm.camera) * (hm && !emph ? 0.6 : 1)) {
+      const d = pickW(rng, 'cam', def => (L.allowed(def, cm) ? def.w * moodMult(def.tags) * (def.strong && !emph ? (hm ? 0.12 : 0.4) : 1) : 0));
       if (d) { out.cam = d.key; out.camP = d.plan ? d.plan(rng, st || {}) : {}; }
     }
   }
@@ -934,6 +1082,7 @@ L.planAll = (tl, opts = {}) => {
   const moods = [].concat(cm.mood ? [cm.mood] : [], (st && st.moods) || []);
   const cuts = L.buildCuts(tl);
   const W = opts.W || 1920, H = opts.H || 1080;
+  L.setTypo(cm, st, W, H);
   const portrait = H > W;
   const recent = {};
   const prevPlans = cm.cuts || {};
@@ -1090,6 +1239,7 @@ L.render = (eng, ctx, t, W, H, energy, boost) => {
   const tl = eng.timeline;
   if (!tl) return null;
   const cm = tl.compose || {};
+  L.setTypo(cm, cm.fonts ? { fonts: Object.assign({}, (L.getStyle(cm.style) || {}).fonts || {}, cm.fonts) } : L.getStyle(cm.style), W, H);
   const cuts = L.buildCuts(tl);
   if (!cuts.length) return null;
   const ci = L.cutAt(cuts, t);
