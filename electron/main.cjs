@@ -8,8 +8,15 @@ const path = require('path')
 const { spawn } = require('child_process')
 const http = require('http')
 
+const fs = require('fs')
 const ROOT = path.join(__dirname, '..')
-const PORT = process.env.LF_PORT || 4189
+// インストール版(/Applications/LyricFlow AI.app): データは ~/Library/Application Support/LyricFlow AI/data に置き、
+// 開発用サーバー(4189/4289)と取り違えないよう専用ポートを使う。開発版(npm run app)は従来どおりリポの data/ と 4189
+// app.isPackaged は実行ファイル名が Electron だと false になるので、.app の Resources/app に居るかで判定する
+const PACKAGED = app.isPackaged || /\.app[\\/]Contents[\\/]Resources[\\/]app/.test(__dirname)
+if (PACKAGED) app.setPath('userData', path.join(app.getPath('appData'), 'LyricFlow AI'))
+const PORT = process.env.LF_PORT || (PACKAGED ? 4389 : 4189)
+const DATA_DIR = process.env.LF_DATA_DIR || (PACKAGED ? path.join(app.getPath('userData'), 'data') : '')
 const APP_URL = `http://localhost:${PORT}/`
 let serverProc = null
 let win = null
@@ -34,13 +41,13 @@ function ping() {
 
 async function ensureServer() {
   if (await ping()) { console.log('[lf] server already running on', PORT); return }
-  const py = pythonCandidates()[0]
+  const py = pythonCandidates().find((p) => !p.startsWith('/') || fs.existsSync(p)) || 'python3'
   console.log('[lf] launching server:', py, 'server.py (cwd', ROOT + ')')
-  serverProc = spawn(py, ['server.py'], {
-    cwd: ROOT,
-    env: { ...process.env, PORT: String(PORT) },
-    stdio: 'inherit',
-  })
+  const env = { ...process.env, PORT: String(PORT), PYTHONDONTWRITEBYTECODE: '1' }
+  // Finder から起動すると PATH が最小限なので、ffmpeg / codex / whisper の場所を足す
+  env.PATH = ['/opt/homebrew/bin', '/usr/local/bin', env.PATH || '/usr/bin:/bin'].join(':')
+  if (DATA_DIR) { fs.mkdirSync(DATA_DIR, { recursive: true }); env.LF_DATA_DIR = DATA_DIR }
+  serverProc = spawn(py, ['server.py'], { cwd: ROOT, env, stdio: 'inherit' })
   serverProc.on('exit', (code) => console.log('[lf] server exited', code))
   serverProc.on('error', (e) => console.error('[lf] server spawn error', e.message))
   for (let i = 0; i < 80; i++) {            // 最大~40秒待つ(初回シードでデモ曲合成に時間がかかる)

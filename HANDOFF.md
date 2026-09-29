@@ -1,6 +1,12 @@
 # HANDOFF — LyricFlow AI
 
-最終更新: 2026-09-29 (Claude Code)
+最終更新: 2026-09-30 (Claude Code)
+
+## インストール版(/Applications/LyricFlow AI.app)
+- 作成・更新: `./scripts/install_app.sh`(Electron.app を複製 → Contents/Resources/app に package.json/server.py/electron/static/scripts、アイコンは dev/icon/)。
+- データ: `~/Library/Application Support/LyricFlow AI/data`(`LF_DATA_DIR`。.env もここ)。初回インストール時だけリポの data/ と .env をコピー。以降は別管理(開発版はリポの data/)。
+- ポート: インストール版 4389 / 開発版 4189(`npm run app` は LF_PORT で上書き可)。インストール版の判定は `.app/Contents/Resources/app` に居るか(実行ファイル名が Electron のため app.isPackaged は使えない)。
+- server.py: `LF_DATA_DIR` 未指定なら従来どおり ROOT/data(後方互換)。Python は Mac の python3(/opt/homebrew)を使う。
 
 ## 演出エンジン(カット演出)の契約 — 破壊的変更禁止
 

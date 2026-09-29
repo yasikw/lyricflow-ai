@@ -1,0 +1,32 @@
+<!doctype html><meta charset="utf-8">
+<link href="https://fonts.googleapis.com/css2?family=Zen+Kaku+Gothic+New:wght@900&display=block" rel="stylesheet">
+<body style="margin:0;background:#000"><pre id="png"></pre>
+<script>
+/* LyricFlow AI のアプリアイコン(1024px)。dev/icon/make_icon.sh が PNG → icns にする */
+(async () => {
+  await document.fonts.load("900 400px 'Zen Kaku Gothic New'", 'LF');
+  const S = 1024, c = document.createElement('canvas'); c.width = c.height = S; const g = c.getContext('2d');
+  // macOS の角丸(内側に余白 ~10%)
+  const m = 100, r = 186, x0 = m, y0 = m, w = S - m * 2;
+  g.save(); g.beginPath(); g.roundRect(x0, y0, w, w, r); g.clip();
+  const bg = g.createLinearGradient(x0, y0, x0 + w, y0 + w); bg.addColorStop(0, '#15122b'); bg.addColorStop(1, '#2a1650');
+  g.fillStyle = bg; g.fillRect(x0, y0, w, w);
+  // 波形(歌の拍)
+  const n = 23, bw = w / (n * 1.6), base = y0 + w * 0.86;
+  for (let i = 0; i < n; i++) {
+    const t = i / (n - 1), h = w * (0.04 + 0.16 * Math.pow(Math.sin(t * Math.PI), 1.4) * (0.55 + 0.45 * Math.abs(Math.sin(i * 1.7))));
+    const gx = x0 + w * 0.1 + i * (w * 0.8) / (n - 1) - bw / 2;
+    const gr = g.createLinearGradient(0, base - h, 0, base); gr.addColorStop(0, '#ff5fa2'); gr.addColorStop(1, '#29d3ff');
+    g.fillStyle = gr; g.globalAlpha = 0.9; g.beginPath(); g.roundRect(gx, base - h, bw, h, bw / 2); g.fill();
+  }
+  g.globalAlpha = 1;
+  // LF の文字(歌詞)
+  g.font = "900 380px 'Zen Kaku Gothic New'"; g.textAlign = 'center'; g.textBaseline = 'alphabetic';
+  g.fillStyle = '#f4f0e8'; g.fillText('LF', S / 2 - 6, y0 + w * 0.52);
+  // 流れる線
+  g.strokeStyle = '#ff5fa2'; g.lineWidth = 16; g.lineCap = 'round';
+  g.beginPath(); g.moveTo(x0 + w * 0.22, y0 + w * 0.6); g.bezierCurveTo(x0 + w * 0.4, y0 + w * 0.65, x0 + w * 0.6, y0 + w * 0.55, x0 + w * 0.78, y0 + w * 0.6); g.stroke();
+  g.restore();
+  document.getElementById('png').textContent = c.toDataURL('image/png');
+})();
+</script>

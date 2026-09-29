@@ -13,9 +13,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 ROOT = os.path.dirname(os.path.abspath(__file__))
 
 
-def _load_dotenv():
+def _load_dotenv(fp):
     """`.env` (KEY=VALUE) を読み込む。既存の実環境変数は上書きしない。"""
-    fp = os.path.join(ROOT, ".env")
     if not os.path.isfile(fp):
         return
     for line in open(fp, encoding="utf-8"):
@@ -28,9 +27,13 @@ def _load_dotenv():
             os.environ[k] = v
 
 
-_load_dotenv()
+# データの置き場所: 既定はリポ直下の data/。インストール版(/Applications)は LF_DATA_DIR に
+# ~/Library/Application Support/LyricFlow AI/data を渡す(アプリ本体を入れ替えてもデータが残る)。
+# .env はデータ側を先に読み、無ければリポ直下(既存の実環境変数は上書きしない)
+DATA = os.path.abspath(os.environ.get("LF_DATA_DIR") or os.path.join(ROOT, "data"))
+_load_dotenv(os.path.join(DATA, ".env"))
+_load_dotenv(os.path.join(ROOT, ".env"))
 
-DATA = os.path.join(ROOT, "data")
 UPLOADS = os.path.join(DATA, "uploads")
 RENDERS = os.path.join(DATA, "renders")
 BGLIB = os.path.join(DATA, "bglib")     # 曲をまたいで再利用する背景画像ライブラリ
