@@ -105,13 +105,14 @@ layout の `render` と decor の `draw` は **1フレームに3回**(B, A, main
 - `L.stagger(p, i, n, spread=0.5, order='lr'|'rl'|'center'|'edges'|'random'|配列, seed)` → 字ごとの進行度。**全字が p=1 で必ず揃う**スライド窓式。
 
 ### Hallmark 組版レイヤー(core が自動で掛ける)
+**サイズは MV の基準**(ユーザー方針 2026-09-29: 歌詞は大きい方が MV らしい)。Hallmark のウェブ用の見出し上限(5.5rem 等)は採らない。16字までの行は画面幅の58%か高さの30%以上を歌詞が占めるのを目安にする。
 `timeline.compose.typo`: `'off'`(従来) / `'set'`(既定) / `'full'`。L.render と L.planAll が `L.setTypo()` で毎回設定する。
 - `'set'`: 約物詰め(括弧・句読点・中黒を半角送り、字面は `g.ox/g.oy` で送りの中へ)、見出しサイズのかな詰め、
   サイズ区分(`L.typoClass(size)` = display/text/label、基準は min(W,H))ごとの自動字間・行送り、欧文のバランス改行、禁則(開き括弧で行を終えない等)、
   歌詞本体の斜体の無効化と強い光彩の上限。**`track`/`lead` を明示した項目はそのまま**(自動は未指定のときだけ)。項目ごとに外すなら `noTypo: true`。
 - `'full'`: 上に加えて書体を 2+1(display / body / mono)に固定(`L.lockFont`)、計画で跳ねる動き・光彩系の加工・忙しい保持を下げ、装飾は1つまで。
 - `L.fitSize` は組版後の寸法で測る(サイズ区分が変われば測り直す)。**字幅を自前で足し合わせず `L.measure` を使う**こと。
-- 品格チェック `L.audit(tl,W,H)` / 自動修正 `L.auditFix(tl,W,H)` は `hm_audit.js`。各カットを静止状態で描いて関門(はみ出し・小さすぎ・長文の特大・孤立行・大文字の行送り・書体数・コントラスト・光彩・動きの詰め込み・跳ねる動き)で判定する。
+- 品格チェック `L.audit(tl,W,H)` / 自動修正 `L.auditFix(tl,W,H)` は `hm_audit.js`。各カットを静止状態で描いて関門(はみ出し・小さすぎ・MVとして小さい・孤立行・大文字の行送り・書体数・コントラスト・光彩・動きの詰め込み・跳ねる動き)で判定する。
 
 ## 4. 乱数・イージング・色
 - **決定論のみ**: 描画/適用中に `Math.random()`・`Date` 禁止。`plan(rng, …)` では `rng()` `rng.range(a,b)` `rng.int(a,b)` `rng.pick(arr)` `rng.chance(p)` `rng.sign()`。

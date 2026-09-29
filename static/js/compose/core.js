@@ -993,6 +993,12 @@ L.hmMult = (g, key, emph) => {
   if (g === 'hold' && key === 'still') return 1.8;
   return 1;
 };
+/* 文字の大きさ(MV): 構図ごとの実測占有率(size_table.js の L.SIZE)で重みを変える。小物/UI系の小さな組みは控えめに */
+L.sizeMult = key => {
+  const c = L.SIZE && L.SIZE[key];
+  if (c == null) return 1;
+  return c < 0.4 ? 0.15 : c < 0.5 ? 0.4 : c < 0.6 ? 0.75 : c >= 0.85 ? 1.4 : c >= 0.72 ? 1.15 : 1;
+};
 L.planCut = (cut, ctx) => {
   const { rng, st, moods, cm, portrait, recent, W, H, keep, prevCut } = ctx;
   const emph = !!(cut.emph || cut.emphMark || cut.impact);
@@ -1009,6 +1015,7 @@ L.planCut = (cut, ctx) => {
       if (def.minDur && cut.dur < def.minDur) return 0;
       let w = def.w * moodMult(def.tags) * bias('layout', def.key) * recentMult('layout', def.key);
       if (hm && HM_FAKENUM.test(def.key) && !/[0-9０-９]/.test(cut.text)) w *= 0.1;
+      if (cm.textSize !== 'normal') w *= L.sizeMult(def.key);          // 文字の大きさ=大きめ(MV): 歌詞を大きく組む構図を優先
       if (portrait && def.portrait != null) w *= def.portrait;
       if (emph && def.emph != null) w *= def.emph;
       return w;

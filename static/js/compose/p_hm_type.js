@@ -28,10 +28,10 @@ const joinerOf = t => (L.hasLatinWords(t) && /\s/.test(t) ? ' ' : '');
 const typoKey = () => (L.TYPO ? L.TYPO.mode : '');
 const famName = f => String(f || '').split(',')[0].replace(/['"]/g, '').trim();
 const accentOn = env => L.fitContrast(env.sc.accent, env.sc.bg, 3);
-/* 文字数でサイズ上限を決める(長い行を特大にしない) */
-const capFor = (env, n) => mOf(env) * (n <= 2 ? 0.42 : n <= 5 ? 0.3 : n <= 10 ? 0.21 : n <= 20 ? 0.155 : 0.115);
-/* 安全余白 */
-const margins = env => ({ mx: env.W * 0.08, my: env.H * (env.portrait ? 0.07 : 0.1) });
+/* 文字数でサイズ上限を決める(MV サイズ。長い行ほど段階的に下げる=長い行を特大にしない) */
+const capFor = (env, n) => mOf(env) * (n <= 2 ? 0.55 : n <= 5 ? 0.42 : n <= 8 ? 0.34 : n <= 16 ? 0.27 : n <= 24 ? 0.17 : 0.13);
+/* 安全余白(4% 以上) */
+const margins = env => ({ mx: env.W * 0.06, my: env.H * (env.portrait ? 0.06 : 0.08) });
 
 /* 計測キャッシュ */
 const twCache = new Map(), memo = new Map(), colCache = new Map(), mapCache = new Map();
@@ -62,8 +62,19 @@ const fitRows = (rows, font, weight, track, lead, maxW, maxH, cap) => {
   if (w2 > maxW) s *= maxW / w2;
   return Math.max(4, s);
 };
+/* 約物だけの行(「」」だけ等)は前の行に戻す */
+const noPunctRows = rows => {
+  const out = [];
+  for (const r of rows) {
+    if (out.length && L.glyphs(r).every(c => L.isPunct(c) || L.isSpace(c))) out[out.length - 1] += r;
+    else if (out.length === 1 && L.glyphs(out[0]).every(c => L.isPunct(c) || L.isSpace(c))) out[0] += r;
+    else out.push(r);
+  }
+  return out;
+};
 /* 句を k 行以内に(語順維持・字数バランス) */
-const rowsOf = (text, k) => {
+const rowsOf = (text, k) => noPunctRows(rowsOf0(text, k));
+const rowsOf0 = (text, k) => {
   const src = String(text || '').trim();
   if (!src) return [];
   if (k <= 1) return [src];
@@ -80,6 +91,21 @@ const rowsOf = (text, k) => {
   });
   if (cur) out.push(cur);
   return out;
+};
+/* 1〜maxRows 行の組み方から一番大きく組めるものを選ぶ(行を増やすのは 12% 以上大きくなる時だけ) */
+const fitBest = (text, font, weight, track, lead, maxW, maxH, cap, maxRows = 3) => {
+  const n = L.glyphCount(text);
+  let best = null;
+  const seen = new Set();
+  for (let k = 1; k <= Math.min(maxRows, Math.max(1, n)); k++) {
+    const rows = rowsOf(text, k);
+    const key = rows.join('\n');
+    if (!rows.length || seen.has(key)) continue;
+    seen.add(key);
+    const size = fitRows(rows, font, weight, track, lead, maxW, maxH, cap);
+    if (!best || size > best.size * 1.12) best = { rows, size };
+  }
+  return best || { rows: [String(text || '')], size: 4 };
 };
 /* 幅に収まるまで行を増やす */
 const wrapTo = (text, font, weight, size, track, maxW, maxRows = 4) => {
@@ -157,111 +183,132 @@ const ENTER_BIAS = { hmRise: 1.7, hmMaskLine: 1.7, hmTrackIn: 1.4, hmHairline: 1
 const regLayout = (key, def) => L.register('layout', key, Object.assign({ enterBias: ENTER_BIAS }, def), P);
 
 /* ================================================================ layouts */
+/* MV サイズ: 歌詞は幅を使い切る(短い行は幅の6〜8割、1〜2字は高さの4〜5割)。字の高さは min(W,H) の 11%(16字以下)/7% 以上を目安。
+   副テキスト(ラベル・注・キャプション・細字の段)は小さくてよいが、歌詞の面積を削らない。 */
 
-/* 1. 比率の段: 行ごとに比率スケールで大→小(小→大)。最小の行は body の細字 */
+/* 1. 比率の段: 行ごとに比率スケールで大→小(小→大)。最小の行は body の細字(それでも 7% 以上) */
 regLayout('h_scaleSteps', {
   name: '比率の段', tags: ['editorial', 'graphic', 'calm'], w: 1.1, fits: n => n >= 3,
-  plan: rng => ({ r: rng.int(0, 3), dir: rng.pick(['down', 'down', 'up']), yb: rng.pick([0.5, 0.54, 0.46]) }),
-  render(env) {
-    const { W, H, cut } = env, p = cut.params || {};
-    const { mx, my } = margins(env);
-    const disp = L.roleFont(env, 'display'), body = L.roleFont(env, 'body');
-    const G = cache(['ss', cut.text, W, H, disp, body, p.r, p.dir, p.yb, typoKey()].join('|'), () => {
-      const n = cut.n;
-      let rows = rowsOf(cut.text, n <= 6 ? 2 : n <= 12 ? 3 : 4);
-      if (rows.length < 2 && n >= 2) rows = L.splitLines(cut.text, Math.ceil(n / 2));
-      const K = rows.length;
-      const ri = Math.min(clamp(p.r | 0, 0, 3), K >= 4 ? 1 : K === 3 ? 2 : 3), r = RATIOS[ri];   // 段が多いほど比率を控える
-      const f = rows.map((_, i) => Math.pow(r, -(p.dir === 'up' ? K - 1 - i : i)));
-      const fmin = Math.min(...f), fmax = Math.max(...f);
-      const spec = rows.map((t, i) => {
-        const small = K > 1 && f[i] === fmin;
-        return { t, small, font: small ? body : disp, weight: small ? thinW(body) : 900, track: small ? (isLatinText(t) ? 0.06 : 0.04) : dTrack(t), lead: small ? 1.5 : 1.08 };
-      });
-      const maxW = W - mx * 2 - (env.portrait ? 0 : W * 0.12);   // 横長は右に空気(ラグ右)
-      const maxH = H - my * 2 - lsz(env) * 3;
-      let s0 = capFor(env, L.glyphCount(rows[f.indexOf(fmax)]));
-      spec.forEach((s, i) => { const w = tw(s.t, s.font, s.weight, 100, s.track); if (w > 0) s0 = Math.min(s0, maxW * 100 / (w * f[i])); });
-      s0 = Math.min(s0, maxH / f.reduce((a, fi, i) => a + fi * spec[i].lead, 0));
-      spec.forEach((s, i) => { const w = tw(s.t, s.font, s.weight, s0 * f[i], s.track); if (w > maxW) s0 *= maxW / w; });
-      const hs = spec.map((s, i) => s0 * f[i] * s.lead);
-      const total = hs.reduce((a, b) => a + b, 0);
-      const top = clamp(H * (p.yb || 0.5) - total / 2, my, Math.max(my, H - my - total - lsz(env) * 2.4));
-      let y = top;
-      const items = spec.map((s, i) => {
-        const size = s0 * f[i];
-        const it = itemL(s.t, s.font, s.weight, size, s.track, mx, y + hs[i] / 2, { lead: s.lead, mi: i });
-        y += hs[i];
-        return it;
-      });
-      return { items, bottom: top + total, rs: RSTR[ri] };
-    });
-    const bb = drawAll(env, G.items);
-    lab(env, `1 : ${G.rs}`, mx, G.bottom + lsz(env) * 1.1, { align: 'left', a: env.inOut(0.5, 0.35) });
-    return bb;
-  },
-});
-
-/* 2. 極端な太さ: 核の語を 900 で特大、残りを細字で小さく対置 */
-regLayout('h_extremes', {
-  name: '極端な太さ', tags: ['editorial', 'graphic', 'emotional'], w: 1.1, emph: 1.4,
-  plan: rng => ({ v: rng.pick(['stack', 'stack', 'side']), after: rng.pick(['left', 'right']) }),
+  plan: rng => ({ r: rng.int(0, 3), dir: rng.pick(['down', 'down', 'up']), yb: rng.pick([0.5, 0.52, 0.48]) }),
   render(env) {
     const { W, H, cut } = env, p = cut.params || {}, m = mOf(env);
     const { mx, my } = margins(env);
     const disp = L.roleFont(env, 'display'), body = L.roleFont(env, 'body');
-    const G = cache(['ex', cut.text, (cut.emphIdx || []).join(','), W, H, disp, body, p.v, p.after, typoKey()].join('|'), () => {
+    const ls = lsz(env);
+    const G = cache(['ss2', cut.text, W, H, disp, body, p.r, p.dir, p.yb, typoKey()].join('|'), () => {
+      const n = cut.n;
+      const maxW = W - mx * 2, maxH = H - my * 2 - ls * 2.6;
+      const build = (rows, ri) => {
+        const K = rows.length, r = RATIOS[ri];
+        const f = rows.map((_, i) => Math.pow(r, -(p.dir === 'up' ? K - 1 - i : i)));
+        const fmin = Math.min(...f), fmax = Math.max(...f);
+        const spec = rows.map((t, i) => {
+          const small = K > 1 && f[i] === fmin;
+          return { t, small, font: small ? body : disp, weight: small ? thinW(body) : 900, track: small ? (isLatinText(t) ? 0.04 : 0.02) : dTrack(t), lead: small ? 1.3 : 1.08 };
+        });
+        let s0 = capFor(env, L.glyphCount(rows[f.indexOf(fmax)]));
+        spec.forEach((s, i) => { const w = tw(s.t, s.font, s.weight, 100, s.track); if (w > 0) s0 = Math.min(s0, maxW * 100 / (w * f[i])); });
+        s0 = Math.min(s0, maxH / f.reduce((a, fi, i) => a + fi * spec[i].lead, 0));
+        spec.forEach((s, i) => { const w = tw(s.t, s.font, s.weight, s0 * f[i], s.track); if (w > maxW) s0 *= maxW / w; });
+        return { f, spec, s0, ri, small: s0 * fmin };
+      };
+      // 最小の段が 7% を割るなら比率を下げ、それでも足りなければ段を減らす
+      let best = null;
+      const want = m * 0.07;
+      for (let k = n <= 8 ? 2 : n <= 14 ? 3 : 4; k >= 1 && !(best && best.small >= want); k--) {
+        let rows = rowsOf(cut.text, k);
+        if (k >= 2 && rows.length < 2) rows = noPunctRows(L.splitLines(cut.text, Math.ceil(n / 2)));
+        for (let ri = clamp(p.r | 0, 0, 3); ri >= 0; ri--) {
+          const b = build(rows, ri);
+          if (!best || b.small > best.small * 1.02) best = b;
+          if (b.small >= want) { best = b; break; }
+        }
+      }
+      const { f, spec, s0, ri } = best;
+      const hs = spec.map((s, i) => s0 * f[i] * s.lead);
+      const total = hs.reduce((a, b) => a + b, 0);
+      const top = clamp(H * (p.yb || 0.5) - total / 2, my, Math.max(my, H - my - total - ls * 2.4));
+      let y = top;
+      const items = spec.map((s, i) => {
+        const it = itemL(s.t, s.font, s.weight, s0 * f[i], s.track, mx, y + hs[i] / 2, { lead: s.lead, mi: i });
+        y += hs[i];
+        return it;
+      });
+      return { items, bottom: top + total, rs: spec.length > 1 ? RSTR[ri] : null };
+    });
+    const bb = drawAll(env, G.items);
+    if (G.rs) lab(env, `1 : ${G.rs}`, mx, G.bottom + ls * 0.9, { align: 'left', a: env.inOut(0.5, 0.35) });
+    return bb;
+  },
+});
+
+/* 2. 極端な太さ: 核の語を 900 で特大、残りを細字で(核の 1/2)対置 */
+regLayout('h_extremes', {
+  name: '極端な太さ', tags: ['editorial', 'graphic', 'emotional'], w: 1.1, emph: 1.4,
+  plan: rng => ({ v: rng.pick(['stack', 'stack', 'side']), after: rng.pick(['left', 'right']) }),
+  render(env) {
+    const { W, H, cut } = env, p = cut.params || {};
+    const { mx, my } = margins(env);
+    const disp = L.roleFont(env, 'display'), body = L.roleFont(env, 'body');
+    const ls = lsz(env);
+    const G = cache(['ex2', cut.text, (cut.emphIdx || []).join(','), W, H, disp, body, p.v, p.after, typoKey()].join('|'), () => {
       const g = L.glyphs(cut.text), cs = coreSpan(cut);
       const before = g.slice(0, cs.s).join('').trim(), after = g.slice(cs.e).join('').trim();
       const word = g.slice(cs.s, cs.e).join('').trim() || cut.text;
       const wn = L.glyphCount(word);
       const bigRows = wn > 7 ? rowsOf(word, 2) : [word];
       const maxW = W - mx * 2;
-      const side = p.v === 'side' && !env.portrait && W / H > 1.3 && !before && after;   // 語順を崩さない: 核が先頭のときだけ横に
       const bt = dTrack(word), thin = thinW(body);
-      let S = fitRows(bigRows, disp, 900, bt, 1.04, side ? maxW * 0.62 : maxW, H * (env.portrait ? 0.34 : 0.5), capFor(env, wn) * 1.25);
-      let bigW = Math.max(...bigRows.map(r => tw(r, disp, 900, S, bt)));
-      let s = clamp(S / Math.pow(1.618, 2), Math.max(lsz(env) * 1.5, m * 0.034), S / 2);
-      const colW = side ? maxW - bigW - S * 0.2 : maxW;
-      const st = t => (isLatinText(t) ? 0.04 : 0.03);
-      let bRows = wrapTo(before, body, thin, s, st(before), colW, 3), aRows = wrapTo(after, body, thin, s, st(after), colW, 3);
-      const widest = Math.max(0, ...bRows.map(r => tw(r, body, thin, s, st(before))), ...aRows.map(r => tw(r, body, thin, s, st(after))));
-      if (widest > colW) {
-        s *= colW / widest;
+      const st = t => (isLatinText(t) ? 0.03 : 0.02);
+      const K = 0.5;                                              // 残り = 核の 1/2(√2 の2段)
+      const solo = !before && !after;
+      const avail = H - my * 2 - (solo ? ls * 2.4 : 0);
+      let side = p.v === 'side' && !env.portrait && W / H > 1.3 && !before && !!after;
+      let S = fitRows(bigRows, disp, 900, bt, 1.04, side ? maxW * 0.6 : maxW, H * (env.portrait ? 0.42 : 0.62), capFor(env, wn) * 1.2);
+      let bigW = 0, bRows = [], aRows = [];
+      for (let pass = 0; pass < 3; pass++) {
+        bigW = Math.max(...bigRows.map(r => tw(r, disp, 900, S, bt)));
+        const s = S * K;
+        const colW = side ? maxW - bigW - S * 0.18 : maxW;
+        bRows = wrapTo(before, body, thin, s, st(before), colW, 3);
+        aRows = wrapTo(after, body, thin, s, st(after), colW, 3);
+        if (side && aRows.length > 2) { side = false; S = fitRows(bigRows, disp, 900, bt, 1.04, maxW, H * (env.portrait ? 0.42 : 0.62), capFor(env, wn) * 1.2); continue; }
+        const widest = Math.max(0, ...bRows.map(r => tw(r, body, thin, s, st(before))), ...aRows.map(r => tw(r, body, thin, s, st(after))));
+        let k = widest > colW ? colW / widest : 1;
+        const tot = side ? S * 1.04 * bigRows.length
+          : S * 1.04 * bigRows.length + s * 1.3 * (bRows.length + aRows.length) + (bRows.length ? s * 0.3 : 0) + (aRows.length ? s * 0.35 : 0);
+        if (tot > avail) k = Math.min(k, avail / tot);
+        if (k >= 0.999) break;
+        S *= k;
       }
-      if (!side) {                                                // 全体を縦に収める(大小とも同じ比で縮める)
-        const tot = s * 1.5 * (bRows.length + aRows.length) + (bRows.length ? s * 0.8 : 0) + (aRows.length ? s * 0.9 : 0) + S * 1.04 * bigRows.length;
-        const avail = H - my * 2 - lsz(env) * 2.4;
-        if (tot > avail) { const k = avail / tot; S *= k; s *= k; bigW *= k; }
-      }
-      const sl = s * 1.5, bl = S * 1.04;
+      bigW = Math.max(...bigRows.map(r => tw(r, disp, 900, S, bt)));
+      const s = S * K, sl = s * 1.3, bl = S * 1.04;
       const items = [];
       let mi = 0;
       if (side) {
         const bigH = bl * bigRows.length;
         const top = H / 2 - bigH / 2;
-        const cx = mx + bigW + S * 0.2;
-        bRows.forEach((r, i) => items.push(itemL(r, body, thin, s, st(before), cx, top + S * 0.08 + sl * (i + 0.5), { lead: 1.5, mi: mi++ })));
+        const cx = mx + bigW + S * 0.18;
         bigRows.forEach((r, i) => items.push(itemL(r, disp, 900, S, bt, mx, top + bl * (i + 0.5), { lead: 1.04, mi: mi++ })));
-        const bot = top + bigH - S * 0.08;
-        aRows.forEach((r, i) => items.push(itemL(r, body, thin, s, st(after), cx, bot - sl * (aRows.length - i - 0.5), { lead: 1.5, mi: mi++ })));
-        return { items, labY: top + bigH + lsz(env) * 1.4, solo: !before && !after };
+        const bot = top + bigH - S * 0.1;
+        aRows.forEach((r, i) => items.push(itemL(r, body, thin, s, st(after), cx, bot - sl * (aRows.length - i - 0.5), { lead: 1.3, mi: mi++ })));
+        return { items, labY: top + bigH + ls * 1.2, solo };
       }
-      const gapA = bRows.length ? s * 0.8 : 0, gapB = aRows.length ? s * 0.9 : 0;
+      const gapA = bRows.length ? s * 0.3 : 0, gapB = aRows.length ? s * 0.35 : 0;
       const total = sl * bRows.length + gapA + bl * bigRows.length + gapB + sl * aRows.length;
-      const top = clamp(H / 2 - total / 2, my, Math.max(my, H - my - total - lsz(env) * 2.4));
+      const top = clamp(H / 2 - total / 2, my, Math.max(my, H - my - total - (solo ? ls * 2.4 : 0)));
       let y = top;
-      bRows.forEach(r => { items.push(itemL(r, body, thin, s, st(before), mx, y + sl / 2, { lead: 1.5, mi: mi++ })); y += sl; });
+      bRows.forEach(r => { items.push(itemL(r, body, thin, s, st(before), mx, y + sl / 2, { lead: 1.3, mi: mi++ })); y += sl; });
       y += gapA;
       bigRows.forEach(r => { items.push(itemL(r, disp, 900, S, bt, mx, y + bl / 2, { lead: 1.04, mi: mi++ })); y += bl; });
       y += gapB;
       aRows.forEach(r => {
         const w = tw(r, body, thin, s, st(after));
         const x1 = mx + bigW;
-        items.push(p.after === 'right' && w <= bigW ? itemR(r, body, thin, s, st(after), x1, y + sl / 2, { lead: 1.5, mi: mi++ }) : itemL(r, body, thin, s, st(after), mx, y + sl / 2, { lead: 1.5, mi: mi++ }));
+        items.push(p.after === 'right' && w <= bigW ? itemR(r, body, thin, s, st(after), x1, y + sl / 2, { lead: 1.3, mi: mi++ }) : itemL(r, body, thin, s, st(after), mx, y + sl / 2, { lead: 1.3, mi: mi++ }));
         y += sl;
       });
-      return { items, labY: y + lsz(env) * 1.2, solo: !before && !after };
+      return { items, labY: y + ls * 1.1, solo };
     });
     const bb = drawAll(env, G.items);
     if (G.solo) {
@@ -277,48 +324,61 @@ const OPEN_H = new Set(['「', '『', '（', '(', '【', '〈', '《', '“', '�
 const CLOSE_H = new Set(['、', '。', '，', '．', ',', '.']);
 regLayout('h_hanging', {
   name: 'ぶら下がり組み', tags: ['editorial', 'calm'], w: 0.9, fits: n => n >= 2,
-  plan: rng => ({ guide: rng.pick(['both', 'left', 'both']), k: rng.pick([2, 3]) }),
+  plan: rng => ({ guide: rng.pick(['both', 'left', 'both']) }),
   render(env) {
     const { W, H, cut, sc } = env, p = cut.params || {};
     const { mx, my } = margins(env);
     const disp = L.roleFont(env, 'display');
-    const G = cache(['hg', cut.text, W, H, disp, p.k, typoKey()].join('|'), () => {
+    const ls = lsz(env);
+    const G = cache(['hg2', cut.text, W, H, disp, typoKey()].join('|'), () => {
       const n = cut.n;
-      const rows = rowsOf(cut.text, n <= 5 ? 1 : n <= 10 ? 2 : Math.max(2, p.k | 0 || 3));
       const tr = dTrack(cut.text);
       const lead = isLatinText(cut.text) ? 1.06 : 1.12;
-      const hang = rows.map(r => {
+      const maxW = W - mx * 2, maxH = H - my * 2 - ls * 2.4;
+      const hangOf = rows => rows.map(r => {
         const m = L.measure({ text: r, font: disp, weight: 900, size: 100, track: tr, lead: 1 });
         const a = m.lay[0], b = m.lay[m.lay.length - 1];
         const hl = a && OPEN_H.has(a.ch) ? a.w + tr * 100 : 0;
         const hr = b && CLOSE_H.has(b.ch) && m.lay.length > 1 ? b.w : 0;
         return { w: m.w, hl, hr };
       });
-      const maxW = W - mx * 2 - (env.portrait ? 0 : W * 0.1);
-      const maxH = H - my * 2 - lsz(env) * 3;
-      let s = capFor(env, n);
-      hang.forEach(h => { const eff = h.w - h.hl - h.hr; if (eff > 0) s = Math.min(s, maxW * 100 / eff); });
-      s = Math.min(s, maxH / (1 + lead * (rows.length - 1)));
+      const sizeOf = (hang, K) => {
+        const hlMax = Math.max(0, ...hang.map(h => h.hl)), hrMax = Math.max(0, ...hang.map(h => h.hr));
+        let s = capFor(env, n);
+        // ぶら下がり分も安全余白(4%)の内側に
+        const room = W - Math.max(mx, W * 0.04) * 2;
+        hang.forEach(h => { const eff = h.w - h.hl - h.hr; if (eff > 0) s = Math.min(s, maxW * 100 / eff, room * 100 / (eff + hlMax + hrMax)); });
+        return Math.min(s, maxH / (1 + lead * (K - 1)));
+      };
+      let best = null;
+      for (let k = 1; k <= 3; k++) {
+        const rows = rowsOf(cut.text, k);
+        if (best && rows.join('\n') === best.rows.join('\n')) continue;
+        const hang = hangOf(rows), s = sizeOf(hang, rows.length);
+        if (!best || s > best.s * 1.12) best = { rows, hang, s };
+      }
+      const { rows, hang } = best;
+      let s = best.s;
       const hl = Math.max(0, ...hang.map(h => h.hl)) * s / 100;
-      const x0 = Math.max(mx, W * 0.05 + hl);
+      const x0 = Math.max(mx, W * 0.04 + hl);
       const measure = Math.max(...hang.map(h => h.w - h.hl - h.hr)) * s / 100;
       if (x0 + measure > W - mx) s *= (W - mx - x0) / measure;
       const hs = s * lead, total = s + hs * (rows.length - 1);
-      const top = clamp(H / 2 - total / 2, my + lsz(env) * 2, Math.max(my, H - my - total));
+      const top = clamp(H / 2 - total / 2 + ls, my + ls * 2, Math.max(my, H - my - total));
       const items = rows.map((r, i) => itemL(r, disp, 900, s, tr, x0 - hang[i].hl * s / 100, top + s / 2 + hs * i, { lead, mi: i }));
-      const off = Math.max(hair(env) * 3, s * 0.09);               // 罫は字面に触れない
-      return { items, x0: x0 - off, x1: x0 + Math.max(...hang.map(h => h.w - h.hl - h.hr)) * s / 100 + off, y0: top - s * 0.3, y1: top + total + s * 0.3 };
+      const off = Math.max(hair(env) * 3, s * 0.06);               // 罫は字面に触れない
+      return { items, x0: x0 - off, x1: Math.min(W - W * 0.04, x0 + Math.max(...hang.map(h => h.w - h.hl - h.hr)) * s / 100 + off), y0: top - s * 0.2, y1: top + total + s * 0.2 };
     });
     const io = env.inOut(0.5);
     const e = E.inOutSine(clamp(env.lt / 1.6));
-    const lw = hair(env), c = sc.sub, a = 0.5 * io, tk = lsz(env) * 0.7;
+    const lw = hair(env), c = sc.sub, a = 0.5 * io, tk = ls * 0.7;
     rule(env, G.x0, G.y0, G.x0, G.y1, e, c, lw, a);
     rule(env, G.x0 - tk, G.y0, G.x0 + tk, G.y0, clamp(e * 3), c, lw, a);
     if (p.guide !== 'left') {
       rule(env, G.x1, G.y0, G.x1, G.y1, e, c, lw, a * 0.8);
       rule(env, G.x1 - tk, G.y0, G.x1 + tk, G.y0, clamp(e * 3), c, lw, a * 0.8);
     }
-    lab(env, `L.${pad2(cut.line + 1)}`, G.x0, G.y0 - lsz(env) * 1.1, { align: 'left', a: io });
+    lab(env, `L.${pad2(cut.line + 1)}`, G.x0, G.y0 - ls * 1.1, { align: 'left', a: io });
     return drawAll(env, G.items);
   },
 });
@@ -326,18 +386,15 @@ regLayout('h_hanging', {
 /* 4. 描いた下線: 強調語(無ければ最後の句)の下に端正な太い下線が伸びる */
 regLayout('h_underline', {
   name: '描いた下線', tags: ['editorial', 'graphic', 'emotional'], w: 1.1, emph: 1.3,
-  plan: rng => ({ y: rng.pick([0.46, 0.5, 0.55]), x: rng.pick([0.08, 0.1]) }),
+  plan: rng => ({ y: rng.pick([0.46, 0.5, 0.54]) }),
   render(env) {
     const { W, H, cut } = env, p = cut.params || {};
-    const { my } = margins(env);
-    const mx = W * (p.x || 0.08);
+    const { mx, my } = margins(env);
     const disp = L.roleFont(env, 'display');
-    const G = cache(['ul', cut.text, (cut.emphIdx || []).join(','), W, H, disp, p.y, p.x, typoKey()].join('|'), () => {
-      const n = cut.n;
-      const rows = rowsOf(cut.text, n <= 7 ? 1 : n <= 14 ? 2 : 3);
+    const G = cache(['ul2', cut.text, (cut.emphIdx || []).join(','), W, H, disp, p.y, typoKey()].join('|'), () => {
       const tr = dTrack(cut.text), lead = 1.14;
-      const maxW = W - mx * 2 - (env.portrait ? 0 : W * 0.08);
-      const s = fitRows(rows, disp, 900, tr, lead, maxW, H * 0.56, capFor(env, n));
+      const fb = fitBest(cut.text, disp, 900, tr, lead, W - mx * 2, H - my * 2 - H * 0.04, capFor(env, cut.n), 3);
+      const rows = fb.rows, s = fb.size;
       const starts = rowStarts(cut.text, rows);
       const cs = coreSpan(cut, true);
       const hs = s * lead, total = s + hs * (rows.length - 1);
@@ -358,7 +415,7 @@ regLayout('h_underline', {
           if (!A || !B) return;
           const e = E.outExpo(clamp((env2.lt - env2.cut.inDur * 0.85 - delay) / 0.7));
           if (e <= 0.002) return;
-          const th = Math.max(2, it2.size * 0.075);
+          const th = Math.max(2, it2.size * 0.07);
           const x0 = A.x - A.w / 2, x1 = B.x + B.w / 2, y = A.y + it2.size * 0.6;
           env2.rect(x0, y - th / 2, (x1 - x0) * e, th, accentOn(env2), it2.alpha == null ? 1 : it2.alpha, false);
         };
@@ -370,7 +427,7 @@ regLayout('h_underline', {
   },
 });
 
-/* 5. ポスター組み: 1行1語(句)で積む、行送り 1.02〜1.08、下端に細い罫と小さなラベル */
+/* 5. ポスター組み: 1行1語(句)で積む、行送り 1.02〜1.06、下端に細い罫と小さなラベル */
 regLayout('h_poster', {
   name: 'ポスター組み', tags: ['graphic', 'editorial', 'dark'], w: 1.1, portrait: 1.3, fits: n => n >= 2,
   plan: rng => ({ lab: rng.pick(['time', 'rom']), acc: rng.chance(0.5) }),
@@ -380,21 +437,27 @@ regLayout('h_poster', {
     const disp = L.roleFont(env, 'display');
     const ls = lsz(env);
     const ruleY = H - my - ls * 1.6;
-    const G = cache(['po', cut.text, W, H, disp, typoKey()].join('|'), () => {
+    const G = cache(['po2', cut.text, W, H, disp, typoKey()].join('|'), () => {
       const n = cut.n;
-      let rows = L.chunks(cut.text);
-      if (rows.length > 5) rows = rowsOf(cut.text, 5);
-      if (rows.length <= 1 && n > 5) rows = L.splitLines(cut.text, Math.ceil(n / 2));
-      if (!rows.length) rows = [cut.text];
       const latin = isLatinText(cut.text);
       const lead = latin ? 1.02 : 1.06, tr = dTrack(cut.text);
-      const maxRow = Math.max(...rows.map(r => L.glyphCount(r)));
-      const cap = Math.min(capFor(env, maxRow) * 1.15, n > 20 ? m * 0.16 : 1e9);
-      const maxW = env.portrait ? W - mx * 2 : W * 0.62;
-      const s = fitRows(rows, disp, 900, tr, lead, maxW, ruleY - H * 0.02 - my, cap);
-      const hs = s * lead;
-      const bottom = ruleY - s * 0.32;
-      const items = rows.map((r, i) => itemL(r, disp, 900, s, tr, mx, bottom - s / 2 - hs * (rows.length - 1 - i), { lead, mi: i }));
+      const maxW = W - mx * 2, maxH = ruleY - ls * 0.6 - my;
+      const cands = [];
+      let rows = L.chunks(cut.text);
+      if (rows.length > 5) rows = rowsOf(cut.text, 5);
+      if (rows.length <= 1 && n > 5) rows = noPunctRows(L.splitLines(cut.text, Math.ceil(n / 2)));
+      if (!rows.length) rows = [cut.text];
+      cands.push(rows);
+      if (rows.length > 3) cands.push(rowsOf(cut.text, 3));
+      if (rows.length > 2) cands.push(rowsOf(cut.text, 2));
+      const sized = cands.map(r => ({ rows: r, s: fitRows(r, disp, 900, tr, lead, maxW, maxH, capFor(env, Math.max(...r.map(x => L.glyphCount(x)))) * 1.15) }));
+      const top = Math.max(...sized.map(c => c.s));
+      const want = Math.max(m * (n <= 16 ? 0.11 : 0.07), top * 0.8);
+      const pick = sized.find(c => c.s >= want) || sized.reduce((a, b) => (b.s > a.s ? b : a));   // 1行1語を優先、小さすぎるなら行をまとめる
+      const k = pick.rows.length;
+      const s = Math.min(pick.s, (ruleY - my) / (1.3 + lead * (k - 1))), hs = s * lead;   // 罫の上の余白ぶんも含めて上端を守る
+      const bottom = ruleY - s * 0.3;
+      const items = pick.rows.map((r, i) => itemL(r, disp, 900, s, tr, mx, bottom - s / 2 - hs * (pick.rows.length - 1 - i), { lead, mi: i }));
       return { items };
     });
     const io = env.inOut(0.45);
@@ -409,22 +472,22 @@ regLayout('h_poster', {
 /* 6. 図版キャプション: 大きな歌詞を上左、細い罫と等幅の小さなキャプション列(行番号・時刻・ローマ字) */
 regLayout('h_caption', {
   name: '図版キャプション', tags: ['editorial', 'graphic', 'calm', 'cyber'], w: 1,
-  plan: rng => ({ y: rng.pick([0.44, 0.48, 0.52]), dot: rng.chance(0.6) }),
+  plan: rng => ({ y: rng.pick([0.46, 0.5]), dot: rng.chance(0.6) }),
   render(env) {
     const { W, H, cut, sc } = env, p = cut.params || {};
     const { mx, my } = margins(env);
     const disp = L.roleFont(env, 'display'), mono = L.roleFont(env, 'mono');
     const ls = lsz(env), Gu = ls * 1.5;
-    const G = cache(['cp', cut.text, W, H, disp, p.y, typoKey()].join('|'), () => {
-      const n = cut.n;
-      const rows = rowsOf(cut.text, n <= 8 ? 1 : n <= 16 ? 2 : 3);
+    const G = cache(['cp2', cut.text, W, H, disp, p.y, typoKey()].join('|'), () => {
       const tr = dTrack(cut.text), lead = 1.1;
-      const s = fitRows(rows, disp, 900, tr, lead, W - mx * 2, H * (env.portrait ? 0.42 : 0.5), capFor(env, n));
+      const capH = Gu * 3.4;                                       // キャプション帯(罫〜値)
+      const fb = fitBest(cut.text, disp, 900, tr, lead, W - mx * 2, H - my * 2 - capH, capFor(env, cut.n), 3);
+      const rows = fb.rows, s = fb.size;
       const hB = s + s * lead * (rows.length - 1);
-      const total = hB + Gu * 1.2 + Gu * 2.6;
+      const total = hB + capH;
       let top = clamp(H * (p.y || 0.48) - total / 2, my, Math.max(my, H - my - total));
-      top = my + Math.round((top - my) / Gu) * Gu;                  // ベースライングリッド
-      const ruleY = my + Math.ceil((top + hB + Gu * 0.8 - my) / Gu) * Gu;
+      top = my + Math.floor((top - my) / Gu) * Gu;                  // ベースライングリッド
+      const ruleY = my + Math.ceil((top + hB + Gu * 0.5 - my) / Gu) * Gu;
       const items = rows.map((r, i) => itemL(r, disp, 900, s, tr, mx, top + s / 2 + s * lead * i, { lead, mi: i }));
       return { items, ruleY };
     });
@@ -450,25 +513,25 @@ regLayout('h_caption', {
   },
 });
 
-/* 7. 余白の注: 太い縦罫の右に歌詞、左の余白に小さな注(時刻・字数・ローマ字) */
+/* 7. 余白の注: 太い縦罫の右に歌詞、左の余白に小さな注(時刻・字数・ローマ字)。縦長は注を罫の上に */
 regLayout('h_margin', {
   name: '余白の注', tags: ['editorial', 'calm', 'graphic'], w: 1,
-  plan: rng => ({ acc: rng.chance(0.4), rx: rng.pick([0.28, 0.32]) }),
+  plan: rng => ({ acc: rng.chance(0.4), rx: rng.pick([0.18, 0.2]) }),
   render(env) {
     const { W, H, cut, sc } = env, p = cut.params || {}, m = mOf(env);
-    const { mx } = margins(env);
+    const { mx, my } = margins(env);
     const disp = L.roleFont(env, 'display'), mono = L.roleFont(env, 'mono');
     const ls = lsz(env);
-    const rx = W * (env.portrait ? 0.28 : (p.rx || 0.3)), gap = m * 0.04;
-    const G = cache(['mg', cut.text, W, H, disp, rx, typoKey()].join('|'), () => {
-      const n = cut.n;
-      const rows = rowsOf(cut.text, n <= 6 ? 1 : n <= 13 ? 2 : 3);
+    const narrow = env.portrait || W / H < 1.2;
+    const rx = narrow ? mx + W * 0.01 : W * (p.rx || 0.2), gap = m * 0.035;
+    const G = cache(['mg2', cut.text, W, H, disp, rx, typoKey()].join('|'), () => {
       const tr = dTrack(cut.text), lead = 1.1;
-      const s = fitRows(rows, disp, 900, tr, lead, W - mx - rx - gap, H * 0.6, capFor(env, n));
+      const fb = fitBest(cut.text, disp, 900, tr, lead, W - mx - rx - gap, H - my * 2 - (narrow ? ls * 3 : 0), capFor(env, cut.n), 3);
+      const rows = fb.rows, s = fb.size;
       const hs = s * lead, total = s + hs * (rows.length - 1);
-      const top = H / 2 - total / 2;
+      const top = clamp(H / 2 - total / 2 + (narrow ? ls * 1.5 : 0), my + (narrow ? ls * 3 : 0), Math.max(my, H - my - total));
       const items = rows.map((r, i) => itemL(r, disp, 900, s, tr, rx + gap, top + s / 2 + hs * i, { lead, mi: i }));
-      return { items, y0: top - s * 0.12, y1: top + total + s * 0.12 };
+      return { items, y0: top - s * 0.08, y1: top + total + s * 0.08 };
     });
     const io = env.inOut(0.45);
     const e = E.outExpo(clamp(env.lt / 0.8));
@@ -477,52 +540,64 @@ regLayout('h_margin', {
     const rom = romOf(cut.text);
     const notes = [L.fmtTime(cut.start), `${pad2(cut.n)} 字`];
     if (rom) notes.push(rom);
-    const room = rx - gap - mx;
-    let k = 0;
-    notes.forEach(t => {
-      let s = ls;
-      const w = tw(t, mono, 400, s, 0.1);
-      if (w > room) s *= room / w;
-      if (s < ls * 0.62) return;
-      lab(env, t, rx - gap, G.y0 + ls * 0.6 + k * ls * 1.7, { align: 'right', a: env.inOut(0.4, 0.2 + k * 0.1), size: s, track: 0.1 });
-      k++;
-    });
+    if (narrow) {
+      // 縦長・正方形: 注は罫の上の余白に横並び
+      let x = rx - lw / 2;
+      notes.forEach((t, k) => {
+        const w = tw(t, mono, 400, ls, 0.1);
+        if (x + w > W - mx) return;
+        lab(env, t, x, G.y0 - ls * 1.3, { align: 'left', a: env.inOut(0.4, 0.2 + k * 0.1), track: 0.1 });
+        x += w + ls * 1.6;
+      });
+    } else {
+      const room = rx - gap - mx;
+      let k = 0;
+      notes.forEach(t => {
+        let s = ls;
+        const w = tw(t, mono, 400, s, 0.1);
+        if (w > room) s *= room / w;
+        if (s < ls * 0.62) return;
+        lab(env, t, rx - gap, G.y0 + ls * 0.6 + k * ls * 1.7, { align: 'right', a: env.inOut(0.4, 0.2 + k * 0.1), size: s, track: 0.1 });
+        k++;
+      });
+    }
     return drawAll(env, G.items);
   },
 });
 
-/* 8. 手紙: 大きな余白、本文サイズの明朝を左寄せの一段、上に時刻、下に小さな署名的ラベル */
+/* 8. 手紙: たっぷりの余白に大きな明朝を左寄せの一段、上に時刻、下に小さな署名的ラベル */
 regLayout('h_letter', {
   name: '手紙', tags: ['calm', 'emotional', 'editorial'], w: 0.9,
-  plan: rng => ({ x: rng.pick([0.14, 0.18, 0.22]), y: rng.pick([0.4, 0.46]), sig: rng.pick(['no', 'rom']) }),
+  plan: rng => ({ x: rng.pick([0.1, 0.12, 0.14]), y: rng.pick([0.46, 0.5]), sig: rng.pick(['no', 'rom']) }),
   render(env) {
-    const { W, H, cut, sc } = env, p = cut.params || {}, m = mOf(env);
+    const { W, H, cut, sc } = env, p = cut.params || {};
     const font = L.roleFont(env, 'serif'), body = L.roleFont(env, 'body');
-    const weight = isMincho(font) ? 500 : thinW(font);
-    const x0 = env.portrait ? W * 0.12 : W * (p.x || 0.18);
-    const G = cache(['lt', cut.text, W, H, font, p.x, p.y, typoKey()].join('|'), () => {
-      const tr = isLatinText(cut.text) ? 0.02 : 0.06, lead = 1.75;
-      const maxW = env.portrait ? W * 0.76 : Math.min(W * 0.56, W - x0 - W * 0.08);
-      let s = m * (cut.n <= 4 ? 0.08 : 0.07);
-      let rows = wrapTo(cut.text, font, weight, s, tr, maxW, 4);
-      const wmax = Math.max(...rows.map(r => tw(r, font, weight, s, tr)));
-      if (wmax > maxW) s *= maxW / wmax;
+    const weight = isMincho(font) ? 700 : thinW(font);
+    const narrow = env.portrait || W / H < 1.2;
+    const x0 = narrow ? W * 0.09 : W * (p.x || 0.12);
+    const ls = lsz(env);
+    const G = cache(['lt2', cut.text, W, H, font, weight, p.x, p.y, typoKey()].join('|'), () => {
+      const tr = isLatinText(cut.text) ? 0 : 0.02, lead = 1.4;
+      const maxW = W - x0 - (narrow ? W * 0.09 : W * 0.12);
+      const maxH = H * (narrow ? 0.62 : 0.6);
+      const fb = fitBest(cut.text, font, weight, tr, lead, maxW, maxH, capFor(env, cut.n) * 0.92, 3);
+      const rows = fb.rows, s = fb.size;
       const hs = s * lead, total = s + hs * (rows.length - 1);
-      const top = clamp(H * (p.y || 0.44) - total / 2, H * 0.16, H * 0.84 - total);
+      const top = clamp(H * (p.y || 0.48) - total / 2, H * 0.14, H * 0.86 - total);
       const items = rows.map((r, i) => itemL(r, font, weight, s, tr, x0, top + s / 2 + hs * i, { lead, mi: i }));
-      return { items, s, top, bottom: top + total, x1: x0 + Math.min(maxW, Math.max(...rows.map(r => tw(r, font, weight, s, tr)))) };
+      return { items, top, bottom: top + total, x1: x0 + Math.max(...rows.map(r => tw(r, font, weight, s, tr))) };
     });
-    const ls = lsz(env), bw = thinW(body);
-    lab(env, L.fmtTime(cut.start), x0, G.top - G.s * 1.5, { align: 'left', a: env.inOut(0.6, 0.1), font: body, weight: bw, size: ls * 1.1, track: 0.08 });
+    const bw = thinW(body);
+    lab(env, L.fmtTime(cut.start), x0, G.top - ls * 2.2, { align: 'left', a: env.inOut(0.6, 0.1), font: body, weight: bw, size: ls * 1.1, track: 0.08 });
     const rom = romOf(cut.text);
     const sig = `— ${p.sig === 'rom' && rom ? rom : 'No. ' + pad2(cut.line + 1)}`;
-    const sx1 = Math.max(G.x1, x0 + tw(sig, body, bw, ls * 1.05, 0.06));
-    lab(env, sig, Math.min(sx1, W * 0.92), G.bottom + G.s * 1.4, { align: 'right', a: env.inOut(0.6, 0.35), font: body, weight: bw, size: ls * 1.05, track: 0.06, color: sc.sub });
+    const sw = tw(sig, body, bw, ls * 1.05, 0.06);
+    lab(env, sig, clamp(G.x1, x0 + sw, W * 0.94), G.bottom + ls * 2.2, { align: 'right', a: env.inOut(0.6, 0.35), font: body, weight: bw, size: ls * 1.05, track: 0.06, color: sc.sub });
     return drawAll(env, G.items);
   },
 });
 
-/* 9. 数字の主役: 歌詞の数字を等幅で特大に。数字が無ければ字数を数える(偽の統計は作らない) */
+/* 9. 数字の主役: 歌詞の数字を等幅で特大に。数字が無ければ字数を数える(偽の統計は作らない)。残りの歌詞も 8% 以上 */
 const toHalf = s => String(s).replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0));
 regLayout('h_counter', {
   name: '数字の主役', tags: ['graphic', 'editorial', 'cyber'], w: 0.8, emph: 1.2,
@@ -532,7 +607,7 @@ regLayout('h_counter', {
     const { mx, my } = margins(env);
     const disp = L.roleFont(env, 'display'), mono = L.roleFont(env, 'mono'), body = L.roleFont(env, 'body');
     const wide = !env.portrait && W / H > 1.25;
-    const G = cache(['ct', cut.text, W, H, disp, mono, typoKey()].join('|'), () => {
+    const G = cache(['ct2', cut.text, W, H, disp, mono, typoKey()].join('|'), () => {
       const mm = /[0-9０-９]+/.exec(cut.text);
       let num, rest;
       if (mm) {
@@ -542,32 +617,36 @@ regLayout('h_counter', {
       } else { num = pad2(cut.n); rest = cut.text; }
       const cell = L.adv(mono, 700, '0');
       const numW100 = L.glyphs(num).reduce((acc, ch) => acc + (/\d/.test(ch) ? cell : L.adv(mono, 700, ch)) * 100, 0);
-      const nbW = wide ? W * 0.4 : (W - mx * 2) * 0.8, nbH = wide ? H * 0.62 : H * 0.36;
-      const N = Math.max(8, Math.min(nbW * 100 / numW100, nbH / 0.92, m * 0.6));
-      const numW = numW100 * N / 100;
-      const tr = dTrack(rest);
-      let items = [], nx, ny;
-      if (wide) {
-        nx = mx; ny = H / 2;
-        const rx = mx + numW + N * 0.3;                         // 単位「字」の分をあける
-        if (rest) {
-          const rows = rowsOf(rest, L.glyphCount(rest) <= 7 ? 1 : L.glyphCount(rest) <= 16 ? 2 : 3);
-          const s = fitRows(rows, disp, 900, tr, 1.12, W - mx - rx, H * 0.5, Math.min(m * 0.12, N / 2.618));
-          const hs = s * 1.12, total = s + hs * (rows.length - 1);
-          const top = ny + N * 0.36 - total;                           // 数字の下端に揃える
-          items = rows.map((r, i) => itemL(r, disp, 900, s, tr, rx, Math.max(my + s / 2, top + s / 2 + hs * i), { lead: 1.12, mi: i + 1 }));
+      const tr = dTrack(rest), rn = L.glyphCount(rest);
+      const want = m * 0.08;
+      let out = null;
+      for (let fr = 1; fr >= 0.55 && !out; fr -= 0.15) {
+        const nbW = (wide ? W * 0.4 : (W - mx * 2) * 0.8) * fr, nbH = (wide ? H * 0.66 : H * 0.36) * fr;
+        const N = Math.max(8, Math.min(nbW * 100 / numW100, nbH / 0.92, m * 0.62));
+        const numW = numW100 * N / 100;
+        let items = [], nx, ny, rs = 1e9;
+        if (wide) {
+          nx = mx; ny = H / 2;
+          const rx = mx + numW + N * 0.3;                         // 単位「字」の分をあける
+          if (rest) {
+            const fb = fitBest(rest, disp, 900, tr, 1.1, W - mx - rx, H * 0.7, capFor(env, rn), 3);
+            rs = fb.size;
+            const hs = rs * 1.1, total = rs + hs * (fb.rows.length - 1);
+            const top = clamp(ny + N * 0.4 - total, my, H - my - total);    // 数字の下端に揃える
+            items = fb.rows.map((r, i) => itemL(r, disp, 900, rs, tr, rx, top + rs / 2 + hs * i, { lead: 1.1, mi: i + 1 }));
+          }
+        } else {
+          nx = mx; ny = my + N * 0.5;
+          if (rest) {
+            const y0 = ny + N * 0.5 + m * 0.05;
+            const fb = fitBest(rest, disp, 900, tr, 1.1, W - mx * 2, H - my - y0, capFor(env, rn), 3);
+            rs = fb.size;
+            items = fb.rows.map((r, i) => itemL(r, disp, 900, rs, tr, nx, y0 + rs / 2 + rs * 1.1 * i, { lead: 1.1, mi: i + 1 }));
+          }
         }
-      } else {
-        nx = mx; ny = my + H * 0.04 + N * 0.5;
-        if (rest) {
-          const y0 = ny + N * 0.5 + m * 0.06;
-          const rows = rowsOf(rest, L.glyphCount(rest) <= 7 ? 1 : L.glyphCount(rest) <= 16 ? 2 : 3);
-          const s = fitRows(rows, disp, 900, tr, 1.12, W - mx * 2, H - my - y0, Math.min(m * 0.12, N / 2.618));
-          const hs = s * 1.12;
-          items = rows.map((r, i) => itemL(r, disp, 900, s, tr, nx, y0 + s / 2 + hs * i, { lead: 1.12, mi: i + 1 }));
-        }
+        if (rs >= want || fr < 0.6) out = { num, lyricNum: !!mm, N, numW, cell, nx, ny, items };
       }
-      return { num, lyricNum: !!mm, N, numW, cell, nx, ny, items };
+      return out;
     });
     const io = env.inOut(0.45);
     let bb = null;
@@ -588,7 +667,7 @@ regLayout('h_counter', {
   },
 });
 
-/* 10. 見出しと本文: 同じ歌詞を display 特大と body の小さな一段で。書体の対比を見せる */
+/* 10. 見出しと本文: 同じ歌詞を display の特大(幅いっぱい)と body の小さな一段で。書体の対比を見せる */
 regLayout('h_specimen2', {
   name: '見出しと本文', tags: ['editorial', 'calm', 'graphic'], w: 0.9, fits: n => n >= 2,
   plan: rng => ({ order: rng.pick(['dt', 'dt', 'bt']), acc: rng.chance(0.35) }),
@@ -597,26 +676,29 @@ regLayout('h_specimen2', {
     const { mx, my } = margins(env);
     const disp = L.roleFont(env, 'display'), body = L.roleFont(env, 'body');
     const thin = thinW(body), ls = lsz(env);
-    const wide = !env.portrait && W / H > 1.25;
-    const G = cache(['sp', cut.text, W, H, disp, body, p.order, typoKey()].join('|'), () => {
-      const n = cut.n;
-      const x0 = wide ? mx + W * 0.16 : mx;
-      const maxW = W - mx - x0;
+    const G = cache(['sp2', cut.text, W, H, disp, body, p.order, typoKey()].join('|'), () => {
+      const x0 = mx, maxW = W - mx * 2;
       const tr = dTrack(cut.text);
-      const dRows = rowsOf(cut.text, n <= 8 ? 1 : n <= 16 ? 2 : 3);
-      const D = fitRows(dRows, disp, 900, tr, 1.06, maxW, H * (env.portrait ? 0.3 : 0.36), capFor(env, n));
-      let b = clamp(D / Math.pow(1.333, 4), ls * 1.25, D / 2.2);
+      const labH = ls * 1.9;
       const btr = isLatinText(cut.text) ? 0.04 : 0.03;
-      const bRows = wrapTo(cut.text, body, thin, b, btr, maxW * 0.8, 4);
-      const bw = Math.max(...bRows.map(r => tw(r, body, thin, b, btr)));
-      if (bw > maxW) b *= maxW / bw;
-      const hA = D + D * 1.06 * (dRows.length - 1), hB = b + b * 1.6 * (bRows.length - 1);
-      const labH = wide ? 0 : ls * 2;
-      const gap = Math.max(D * 0.4, ls * 3.2);
+      // 本文の段の高さを先に見積もって、残りを見出しに
+      const b0 = Math.max(ls * 1.3, Math.min(W, H) * 0.035);
+      const bRows0 = wrapTo(cut.text, body, thin, b0, btr, maxW, 4);
+      const hB0 = b0 + b0 * 1.6 * (bRows0.length - 1);
+      const gap = ls * 2.4;
+      const fb = fitBest(cut.text, disp, 900, tr, 1.06, maxW, H - my * 2 - labH * 2 - gap - hB0, capFor(env, cut.n) * 1.1, 3);
+      const dRows = fb.rows;
+      let D = fb.size;
+      const b = clamp(D / Math.pow(1.333, 4), b0, D / 2.2);
+      const bRows = wrapTo(cut.text, body, thin, b, btr, maxW, 4);
+      const hB = b + b * 1.6 * (bRows.length - 1);
+      const roomA = H - my * 2 - labH * 2 - gap - hB;              // 本文が見積もりより増えた分は見出しを縮めて収める
+      if (D * (1 + 1.06 * (dRows.length - 1)) > roomA) D = Math.max(4, roomA / (1 + 1.06 * (dRows.length - 1)));
+      const hA = D + D * 1.06 * (dRows.length - 1);
       const total = labH + hA + gap + labH + hB;
       let y = clamp(H / 2 - total / 2, my, Math.max(my, H - my - total));
       const tiers = [];
-      const mk = (kind) => {
+      const mk = kind => {
         y += labH;
         const t0 = y;
         const its = kind === 'd'
@@ -636,17 +718,10 @@ regLayout('h_specimen2', {
       return { items, tiers, ruleY, x0 };
     });
     const io = env.inOut(0.45);
-    rule(env, wide ? mx : G.x0, G.ruleY, W - mx, G.ruleY, E.outExpo(clamp((env.lt - 0.1) / 0.9)), p.acc ? accentOn(env) : sc.sub, hair(env), io * 0.85);
-    const mono = L.roleFont(env, 'mono');
+    rule(env, mx, G.ruleY, W - mx, G.ruleY, E.outExpo(clamp((env.lt - 0.1) / 0.9)), p.acc ? accentOn(env) : sc.sub, hair(env), io * 0.85);
     G.tiers.forEach((t, i) => {
       const fam = famName(t.kind === 'd' ? disp : body).toUpperCase(), wt = t.kind === 'd' ? '900' : String(thin);
-      const a = env.inOut(0.4, 0.2 + i * 0.1);
-      if (wide) {
-        const room = G.x0 - mx - ls * 1.2;
-        const fs = Math.min(ls * 0.85, room / Math.max(1, tw(fam, mono, 400, 1, 0.12)));
-        lab(env, fam, mx, t.top + ls * 0.5, { align: 'left', a, size: fs, track: 0.12 });
-        lab(env, wt, mx, t.top + ls * 0.5 + Math.max(fs, ls * 0.7) * 1.6, { align: 'left', a, size: ls * 0.85, track: 0.12, color: env.sc.fg });
-      } else lab(env, `${fam}  ${wt}`, G.x0, t.top - ls * 1.0, { align: 'left', a, size: ls * 0.85, track: 0.12 });
+      lab(env, `${fam}  ${wt}`, G.x0, t.top - ls * 0.95, { align: 'left', a: env.inOut(0.4, 0.2 + i * 0.1), size: ls * 0.85, track: 0.12 });
     });
     return drawAll(env, G.items);
   },

@@ -698,6 +698,9 @@ class Editor {
           <option value="off" ${cm.typo === 'off' ? 'selected' : ''}>そのまま（従来）</option>
           <option value="set" ${!cm.typo || cm.typo === 'set' ? 'selected' : ''}>組版を整える（Hallmark）</option>
           <option value="full" ${cm.typo === 'full' ? 'selected' : ''}>組版＋品格（書体3種・動きを抑制）</option></select></div>
+        <div class="prop-row" title="大きめ(MV): 歌詞を大きく組む構図を優先して選ぶ(小物・UI風の小さな組みは控えめに)。変えると構図を選び直します"><span>文字の大きさ</span><select class="input" id="cmp-size">
+          <option value="large" ${cm.textSize !== 'normal' ? 'selected' : ''}>大きめ（MV）</option>
+          <option value="normal" ${cm.textSize === 'normal' ? 'selected' : ''}>標準（いろいろな組み）</option></select></div>
         <button class="btn sm cmp-audit" id="cmp-audit" title="各カットを Hallmark の関門(はみ出し・小さすぎ・長文の特大・孤立行・書体数・コントラスト・光彩・動きの詰め込み・跳ねる動き)で採点">✓ 文字の品格チェック</button>
         ${sl('cmp-motion', '動きの強さ', cm.motion, '登場/退場/保持/カメラの動きの大きさ')}
         ${sl('cmp-decor', '装飾の量', cm.decor, '1カットに付く装飾の頻度(再計画)')}
@@ -726,6 +729,12 @@ class Editor {
       this.markDirty(); this._composePushHist(); this._composeRefresh();
     };
     $('#cmp-audit').onclick = () => this.openTypoAudit();
+    $('#cmp-size').onchange = e => {
+      cm.textSize = e.target.value;
+      if (cm.enabled) { if (cm.cuts) this.composePlan({ only: 'layout' }); else this.composePlan(); }
+      this.markDirty(); this._composePushHist(); this._composeRefresh();
+      toast(cm.textSize === 'normal' ? '文字の大きさ: 標準（構図を選び直しました）' : '文字の大きさ: 大きめ（MV）で構図を選び直しました', 'ok');
+    };
     $('#cmp-reel').onclick = () => this.openReelMaker();
     $('#cmp-prev').onclick = () => this.composeHist(-1);
     $('#cmp-next').onclick = () => this.composeHist(1);
@@ -745,6 +754,7 @@ class Editor {
     if (!L) return;
     const cv = this.engine.canvas;
     L.planAll(this.tl, { W: cv.width, H: cv.height, seed: opts.seed, only: opts.only });
+    if (!opts.only || opts.only === 'layout') this._mvFix();
     this.markDirty();
     this._composeRefresh();
     this.renderTimeline();
@@ -789,6 +799,7 @@ class Editor {
     cm.seed = rng.int(1, 2e9);
     const cv = this.engine.canvas;
     L.planAll(this.tl, { W: cv.width, H: cv.height, seed: cm.seed });
+    this._mvFix();
     this.markDirty();
     this._composePushHist();
     this.renderRight();
@@ -813,6 +824,7 @@ class Editor {
       const cv = this.engine.canvas;
       if (!cm.cuts) L.planAll(this.tl, { W: cv.width, H: cv.height, seed: cm.seed });
       else L.planAll(this.tl, { W: cv.width, H: cv.height, seed: cm.seed, only: part });
+      if (!cm.cuts || part === 'layout') this._mvFix();
     }
     this.markDirty();
     this._composePushHist();
@@ -843,6 +855,13 @@ class Editor {
     this.markDirty();
     this.renderRight();
     this.renderTimeline();
+  }
+  /* 文字の大きさ=大きめ(MV): 計画のあと、歌詞が小さく組まれたカットだけ構図を選び直す(固定したカットは触らない) */
+  _mvFix() {
+    const L = window.LFC, cm = this._cm();
+    if (!L || !L.auditFix || cm.textSize === 'normal' || !cm.cuts) return;
+    const cv = this.engine.canvas;
+    try { L.auditFix(this.tl, cv.width, cv.height, { only: ['mvSmall', 'small', 'safe'], tries: 5 }); } catch (e) { console.warn('[LFC] mvFix', e); }
   }
   /* 文字の品格チェック(Hallmark の slop test を歌詞動画へ): 各カットを関門で採点し、引っかかったカットを振り直せる */
   openTypoAudit() {
@@ -2229,6 +2248,7 @@ alert('LyricFlow: ' + D.cuts.length + ' text layers created.' + (miss.length ? '
     const cv = this.engine.canvas;
     cm.seed = L.h(brief, Date.now()) % 2000000000;
     L.planAll(this.tl, { W: cv.width, H: cv.height, seed: cm.seed });
+    this._mvFix();
     this._composePushHist();
   }
 

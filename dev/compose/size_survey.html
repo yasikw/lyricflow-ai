@@ -1,0 +1,28 @@
+<!doctype html><html><head><meta charset="utf-8"><link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@200;300;400;700;900&family=Noto+Serif+JP:wght@500;700;900&family=Zen+Kaku+Gothic+New:wght@300;400;500;700;900&family=Zen+Maru+Gothic:wght@500;700;900&family=M+PLUS+Rounded+1c:wght@500;700;800&family=Shippori+Mincho:wght@500;700;800&family=Zen+Old+Mincho:wght@400;700;900&family=Klee+One:wght@400;600&family=Yuji+Syuku&family=Dela+Gothic+One&family=RocknRoll+One&family=Reggae+One&family=Rampart+One&family=Train+One&family=Mochiy+Pop+One&family=Hachi+Maru+Pop&family=DotGothic16&family=Kaisei+Decol:wght@500;700&family=Oswald:wght@500;700&family=Bebas+Neue&family=Anton&family=Kaisei+Tokumin:wght@500;700;800&family=New+Tegomin&family=Zen+Antique&family=Hina+Mincho&family=Yuji+Mai&family=Yomogi&family=Zen+Dots&family=BIZ+UDPGothic:wght@400;700&family=Space+Mono:wght@400;700&display=block" rel="stylesheet"></head><body>
+<script src="../../static/js/compose/core.js"></script>
+<script src="../../static/js/compose/loader.js"></script>
+<pre id="report">pending</pre>
+<script>
+(async()=>{
+const L=window.LFC; await document.fonts.ready; try{await Promise.all(["'Zen Kaku Gothic New'","'Shippori Mincho'","'Noto Sans JP'","'Dela Gothic One'"].map(f=>document.fonts.load('900 40px '+f,'夜明けあA')));}catch(e){}
+const TEXTS=['ひかりの粒','夜明けまで走り出せ','STAY AWAKE'];
+const AS=[[640,360],[360,640]];
+const out=[];
+for(const key of L.keys('layout')){
+  const def=L.get('layout',key); let cov=[];
+  for(const [W,H] of AS) for(const text of TEXTS){
+    const n=L.glyphCount(text); if(def.fits&&!def.fits(n)) continue;
+    const c=document.createElement('canvas'); c.width=W;c.height=H; const ctx=c.getContext('2d');
+    const words=L.chunks(text).map((w,i,a)=>({id:'w'+i,word:w,line:0,start:2.4*i/a.length,end:2.4*(i+1)/a.length}));
+    let params={}; try{params=def.plan?def.plan(L.rng(7),{text,n,W,H,dur:3.9,portrait:H>W,emph:false,words:[]},{}):{};}catch(e){}
+    const tl={colors:{bg1:'#10131c',bg2:'#1d1a33',accent:'#ff5a1f',accent2:'#3547ff',text:'#f4f0e8'},tracks:{lyrics:words},compose:{enabled:true,seed:7,cuts:{'0:0':{layout:key,params,enter:null,hold:'still',exit:null,decor:[],treat:null,cam:null,trans:null,seed:3}}}};
+    L._collect=[]; try{L.render({timeline:tl,quality:'full',sceneAt:()=>null},ctx,1.8,W,H,0.5,1);}catch(e){}
+    const items=(L._collect||[]).filter(x=>x.main&&x.alpha>0.3); L._collect=null;
+    let ub=null; for(const x of items) ub=L.unionBB(ub,x.bb);
+    if(ub) cov.push(Math.max(ub.w/W, ub.h/H*1.6));   // 幅 or 高さの占有(高さは重み)
+  }
+  if(cov.length) out.push([key, +(cov.reduce((a,b)=>a+b,0)/cov.length).toFixed(3), +Math.min(...cov).toFixed(3)]);
+}
+document.getElementById('report').textContent=JSON.stringify(out);
+})();
+</script></body></html>

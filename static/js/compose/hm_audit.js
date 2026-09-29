@@ -11,7 +11,7 @@ const clamp = L.clamp;
 const GATES = {
   safe: { ok: 'セーフゾーンに収まっている', label: '文字が画面の端(セーフゾーン)からはみ出す', fix: 'layout' },
   small: { ok: '歌詞が読める大きさ', label: '歌詞が小さすぎて読みにくい', fix: 'layout' },
-  longBig: { ok: '長い行は字数に合わせたサイズ', label: '長い行を特大で組んでいる(字数でサイズを下げる)', fix: 'layout' },
+  mvSmall: { ok: '歌詞が画面を主役として占めている(MVの大きさ)', label: 'MVとしては歌詞が小さい(幅58%・高さ30%未満)', fix: 'layout' },
   orphan: { ok: '1字だけの行がない', label: '1字だけの行ができている', fix: 'layout' },
   capsLead: { ok: '欧文大文字の行送りが適切', label: '欧文大文字の行送りが詰まりすぎ(行がぶつかる)', fix: 'layout' },
   fonts: { ok: '1画面の書体は3種まで(2+1)', label: '1画面に書体が4種以上(2+1 まで)', fix: 'layout' },
@@ -68,8 +68,9 @@ function auditCut(tl, cut, cuts, W, H) {
   }
   if (mains.length) {
     const maxS = Math.max(...mains.map(x => x.it.size * Math.max(Math.abs(x.it.sx == null ? 1 : x.it.sx), Math.abs(x.it.sy == null ? 1 : x.it.sy))));
-    if (maxS < ref * 0.03) add('small');
-    if (cut.n > 20 && maxS > ref * 0.115) add('longBig');
+    if (maxS < ref * 0.045) add('small');
+    // MV の基準: 16字までの行は、歌詞が画面の幅の半分か高さの1/4以上を占める(Hallmark のウェブ用上限より大きく)
+    if (ub && cut.n <= 16 && ub.w < w * 0.58 && ub.h < h * 0.3) add('mvSmall');
   }
   for (const x of mains) {
     const lay0 = x.m.lay;
@@ -111,7 +112,9 @@ L.audit = (tl, W, H) => {
 };
 
 /* 引っかかったカットを振り直す: 原因の部分だけ最大6案試し、関門に最も多く通る案を採用 */
-L.auditFix = (tl, W, H) => {
+L.auditFix = (tl, W, H, opts = {}) => {
+  const only = opts.only ? new Set(opts.only) : null;             // 例 {only:['mvSmall','small']} = 大きさだけ直す
+  const cnt = r => (only ? r.issues.filter(x => only.has(x.id)).length : r.issues.length);
   const cm = tl.compose = tl.compose || {};
   const st = L.getStyle(cm.style);
   const moods = [].concat(cm.mood ? [cm.mood] : [], (st && st.moods) || []);
@@ -123,12 +126,12 @@ L.auditFix = (tl, W, H) => {
     const cur = cm.cuts[key];
     if (cur && cur.locked) return;
     let best = auditCut(tl, cut, cuts, W, H);
-    if (!best.issues.length) return;
+    if (!cnt(best)) return;
     tried++;
     const bestPlan0 = cm.cuts[key] || cut.plan;
-    let bestPlan = bestPlan0, bestN = best.issues.length;
-    const drops = new Set(best.issues.map(x => x.fix));
-    for (let k = 1; k <= 6 && bestN > 0; k++) {
+    let bestPlan = bestPlan0, bestN = cnt(best), bestAll = best.issues.length;
+    const drops = new Set(best.issues.filter(x => !only || only.has(x.id)).map(x => x.fix));
+    for (let k = 1; k <= (opts.tries || 6) && bestN > 0; k++) {
       const keep = Object.assign({}, bestPlan0);
       if (drops.has('layout')) { delete keep.layout; delete keep.params; }
       if (drops.has('treat')) { delete keep.treat; delete keep.treatP; }
@@ -136,12 +139,13 @@ L.auditFix = (tl, W, H) => {
       if (drops.has('motion')) { delete keep.enter; delete keep.exit; delete keep.hold; }
       const reroll = ((bestPlan0 && bestPlan0.reroll) || 0) + k * 17;
       const rng = L.rng(L.h(cm.seed || 1, 'plan', cut.line, cut.part, reroll));
-      const cand = L.planCut(cut, { rng, st, moods, cm: Object.assign({}, cm, { typo: 'full' }), portrait: H > W, recent: {}, W, H, keep, prevCut: cuts[i - 1], seed: cm.seed || 1 });
+      const cand = L.planCut(cut, { rng, st, moods, cm: only ? cm : Object.assign({}, cm, { typo: 'full' }), portrait: H > W, recent: {}, W, H, keep, prevCut: cuts[i - 1], seed: cm.seed || 1 });
       cand.reroll = reroll;
       cm.cuts[key] = cand;
       cm.planVersion = (cm.planVersion || 0) + 1;
       const r = auditCut(tl, cut, cuts, W, H);
-      if (r.issues.length < bestN) { bestN = r.issues.length; bestPlan = cand; }
+      const n = cnt(r);
+      if (n < bestN || (n === bestN && r.issues.length < bestAll && bestPlan !== bestPlan0)) { bestN = n; bestAll = r.issues.length; bestPlan = cand; }
     }
     cm.cuts[key] = bestPlan;
     if (bestPlan !== bestPlan0) fixed++;

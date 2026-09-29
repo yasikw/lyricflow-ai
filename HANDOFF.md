@@ -20,6 +20,9 @@
   Hallmark タイポ・パック `p_hm_type.js`(h_ 構図10・hm 登場4/退場3/加工2・配色6 hmSpecimen/hmNewsprint/hmManifesto/hmTerminal/hmRiso/hmGrid)。
   加工の `needsEmph:true` と style の `bias.treat` を計画が読むようにした。'full' は歌詞に数字が無いときデータ系構図(n_stats 等)を下げる(偽の数値を作らない)。
   既存の見た目を完全に戻すなら typo='off'。詳細は docs/COMPOSE_PACKS.md「Hallmark 組版レイヤー」。
+- **文字の大きさ(MV)**(2026-09-29 ユーザー方針「歌詞は大きい方がMVらしい」): `compose.textSize = 'large'(既定)|'normal'`。
+  large は構図ごとの実測占有率 `static/js/compose/size_table.js`(L.SIZE)で小さな組みの構図を下げ、計画のあと `Editor._mvFix()` が
+  小さく組まれたカットだけ構図を選び直す(`L.auditFix(tl,W,H,{only:['mvSmall','small','safe']})`)。**構図を追加・変更したら `dev/compose/size_table.sh` で表を作り直す**。
 - 歌詞記法: `*強調*` / 行末の半角 `!`=衝撃 / `本文|注釈` / 語末 `/`=カット分割(表示時に記号は消える。従来描画には記号が残る)。
 - 書き出し: `engine.keyMode = 'green'|'black'` で合成用(背景・後処理なし、透明に描いて背面に地色)。AE用 `.jsx` は `Editor.exportAE()`(中央配置の簡略版)。
 - モーショングラフィックス: パック `p_motion_graphics.js`(m_particles/m_morph/m_tunnel/m_cube/m_graph、particleIn/Out、mgHud 等、
