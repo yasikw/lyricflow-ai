@@ -494,10 +494,37 @@ class Editor {
       const pad = Math.min(c.width, c.height) * 0.03;
       return p.x >= b.x - pad && p.x <= b.x + b.w + pad && p.y >= b.y - pad && p.y <= b.y + b.h + pad;
     };
-    let drag = null;
+    // キャラ(前景画像・3Dダンス・Live2D)の当たり判定: 上に描かれたもの(Live2D → 3D → 画像)を優先
+    const CHAR = { subject: { sc: 0.72, x: 0.5, y: 0.98 }, dance: { sc: 0.92, x: 0.5, y: 1.0 }, live2d: { sc: 0.9, x: 0.5, y: 1.04 } };
+    const charAt = p => {
+      const bs = (this.engine && this.engine._charBoxes) || [];
+      for (let i = bs.length - 1; i >= 0; i--) {
+        const b = bs[i];
+        if (!b.fixed && p.x >= b.x0 && p.x <= b.x1 && p.y >= b.y0 && p.y <= b.y1 && this.tl[b.key]) return b;
+      }
+      return null;
+    };
+    const charObj = key => { const o = this.tl[key], d = CHAR[key]; return { o, d }; };
+    const syncCharPanel = () => { if (this._charPanelTimer) clearTimeout(this._charPanelTimer); this._charPanelTimer = setTimeout(() => this.renderRight(), 250); };
+    let drag = null, cdrag = null;
     c.addEventListener('pointermove', e => {
-      if (!drag) { c.style.cursor = inBox(toCanvas(e)) ? 'move' : 'default'; return; }
       const p = toCanvas(e);
+      if (cdrag) {
+        const { o } = charObj(cdrag.key);
+        o.x = Math.round(Math.min(1.5, Math.max(-0.5, cdrag.x0 + (p.x - cdrag.px) / c.width)) * 1000) / 1000;
+        o.y = Math.round(Math.min(2.5, Math.max(0.05, cdrag.y0 + (p.y - cdrag.py) / c.height)) * 1000) / 1000;
+        this.engine.render(this.t); this._drawGuides();
+        return;
+      }
+      if (!drag) {
+        const lyr = !e.altKey && inBox(p);
+        const ch = !lyr && charAt(p);
+        this._hoverChar = ch ? ch.key : null;
+        c.style.cursor = lyr || ch ? 'move' : 'default';
+        c.title = ch ? 'ドラッグで移動・ホイールで大きさ(文字と重なる時は ⌥ を押しながら)' : '';
+        if (!this.playing) { this.engine.render(this.t); this._drawGuides(); }
+        return;
+      }
       const st = this.tl.lyricStyle;
       st.posX = Math.min(0.96, Math.max(0.04, (p.x + drag.ox) / c.width));
       st.posY = Math.min(0.96, Math.max(0.04, (p.y + drag.oy) / c.height));
@@ -508,7 +535,17 @@ class Editor {
     });
     c.addEventListener('pointerdown', e => {
       const p = toCanvas(e);
-      if (!inBox(p)) return;
+      if (e.altKey || !inBox(p)) {
+        const ch = charAt(p);
+        if (!ch) return;
+        const { o, d } = charObj(ch.key);
+        cdrag = { key: ch.key, px: p.x, py: p.y, x0: o.x ?? d.x, y0: o.y ?? d.y };
+        this._hoverChar = ch.key;
+        c.setPointerCapture(e.pointerId);
+        c.style.cursor = 'grabbing';
+        e.preventDefault();
+        return;
+      }
       const st = this.tl.lyricStyle;
       const cx = c.width * (st.posX ?? 0.5), cy = c.height * (st.posY ?? (c.height > c.width ? 0.5 : 0.58));
       drag = { ox: cx - p.x, oy: cy - p.y };   // 掴んだ点と中心のズレを保持
@@ -516,7 +553,23 @@ class Editor {
       c.style.cursor = 'grabbing';
       e.preventDefault();
     });
-    const end = e => { if (!drag) return; drag = null; c.style.cursor = 'move'; this.markDirty(); try { c.releasePointerCapture(e.pointerId); } catch (_) {} };
+    const end = e => {
+      if (cdrag) { cdrag = null; c.style.cursor = 'move'; this.markDirty(); syncCharPanel(); try { c.releasePointerCapture(e.pointerId); } catch (_) {} return; }
+      if (!drag) return; drag = null; c.style.cursor = 'move'; this.markDirty(); try { c.releasePointerCapture(e.pointerId); } catch (_) {}
+    };
+    // ホイールでキャラの大きさ(キャラの上にカーソルがある時だけ。それ以外は通常のスクロール)
+    c.addEventListener('wheel', e => {
+      const ch = charAt(toCanvas(e));
+      if (!ch) return;
+      e.preventDefault();
+      const { o, d } = charObj(ch.key);
+      const sc = (o.scale ?? d.sc) * Math.exp(-e.deltaY * 0.0015);
+      o.scale = Math.round(Math.min(4, Math.max(0.1, sc)) * 1000) / 1000;
+      this._hoverChar = ch.key;
+      this.engine.render(this.t); this._drawGuides();
+      this.markDirty(); syncCharPanel();
+    }, { passive: false });
+    c.addEventListener('pointerleave', () => { if (!cdrag && this._hoverChar) { this._hoverChar = null; if (!this.playing) this.engine.render(this.t); } });
     c.addEventListener('pointerup', end);
     c.addEventListener('pointercancel', end);
   }
@@ -631,6 +684,19 @@ class Editor {
      エディタのframe()からのみ呼ぶため、書き出し(offscreenレンダ)には一切含まれない。 */
   _drawGuides() {
     const g = this.guides;
+    // 掴めるキャラの枠(プレビュー専用)
+    const hk = this._hoverChar, cvh = this.engine?.canvas;
+    if (hk && cvh && !this._exporting) {
+      const b = (this.engine._charBoxes || []).find(x => x.key === hk);
+      if (b) {
+        const cx = cvh.getContext('2d');
+        cx.save(); cx.setLineDash([8, 6]); cx.lineWidth = Math.max(1.5, cvh.width / 700); cx.strokeStyle = 'rgba(0,212,255,0.9)';
+        cx.strokeRect(b.x0, b.y0, b.x1 - b.x0, b.y1 - b.y0); cx.setLineDash([]);
+        cx.fillStyle = 'rgba(0,212,255,0.9)'; cx.font = `${Math.max(11, cvh.width / 90)}px sans-serif`;
+        cx.fillText({ live2d: 'Live2D', dance: '3Dダンス', subject: 'キャラ画像' }[hk] + '  ドラッグで移動・ホイールで大きさ', b.x0 + 6, Math.max(14, b.y0 + 16));
+        cx.restore();
+      }
+    }
     if (!g || (!g.safe && !g.center && !g.grid)) return;
     const cv = this.engine?.canvas; if (!cv) return;
     const ctx = cv.getContext('2d'); const W = cv.width, H = cv.height;
@@ -965,6 +1031,10 @@ class Editor {
       ${row('装飾2', 'decor1', dk(1), true)}
       ${row('カメラ', 'cam', p.cam, true)}
       ${row('つなぎ', 'trans', p.trans, true)}
+      <div class="prop-row" title="このカットだけ文字をキャラの前/後ろにする(既定=右の「キャラと文字」の設定)"><span>文字とキャラ</span><select class="input sm" data-cl="1">
+        <option value="" ${!p.textLayer ? 'selected' : ''}>既定に合わせる</option>
+        <option value="front" ${p.textLayer === 'front' ? 'selected' : ''}>キャラの前</option>
+        <option value="behind" ${p.textLayer === 'behind' ? 'selected' : ''}>キャラの後ろ</option></select></div>
       <div class="cmp-cut-btns">
         <button class="btn sm" id="cmp-cut-dice">🎲 このカットだけ振り直す</button>
         <label class="chk-row"><input type="checkbox" id="cmp-cut-lock" ${p.locked ? 'checked' : ''}><span>🔒 固定</span></label>
@@ -1002,11 +1072,13 @@ class Editor {
       const rng = L.rng(L.h(cm.seed, 'plan', cut.line, cut.part, reroll));
       const np = L.planCut(cut, { rng, st: L.getStyle(cm.style), moods, cm, portrait: H > W, recent: {}, W, H, keep: null, prevCut: cuts[ci - 1], seed: cm.seed });
       np.reroll = reroll;
+      if (q.textLayer) np.textLayer = q.textLayer;
       cm.cuts[key] = np;
       bump();
       this._composeCutPanel(true);
     };
     box.querySelector('#cmp-cut-lock').onchange = e => { materialize().locked = e.target.checked; this.markDirty(); };
+    box.querySelector('[data-cl]').onchange = e => { const q = materialize(); q.textLayer = e.target.value || undefined; if (!q.textLayer) delete q.textLayer; bump(); };
   }
 
   /* ---------------- モーションリール(拍同期モーショングラフィックス) ----------------
@@ -1687,6 +1759,22 @@ alert('LyricFlow: ' + D.cuts.length + ' text layers created.' + (miss.length ? '
     } catch (e) { toast(e.message, 'err'); }
   }
 
+  /* ---- キャラと文字の重なり(全体の既定。カットごとは演出エンジンの各カットで上書き)とキャラへのグロー ---- */
+  _charTextPanelHTML() {
+    const any = this.tl.subject || this.tl.dance?.enabled || this.tl.live2d?.enabled;
+    if (!any) return '';
+    const behind = this.tl.textLayer === 'behind';
+    return `
+      <div class="prop-group">
+        <h4>キャラと文字</h4>
+        <div class="prop-row" title="カットごとに変えるときは、演出エンジンの「いまのカット」の『文字とキャラ』で"><span>文字の位置</span><select class="input sm" id="ct-layer">
+          <option value="front" ${behind ? '' : 'selected'}>キャラの前</option>
+          <option value="behind" ${behind ? 'selected' : ''}>キャラの後ろ</option></select></div>
+        <div class="prop-row" title="0 = キャラにはグロー(光のにじみ)を掛けない / 100 = 画面全体と同じだけ掛ける"><span>キャラへのグロー</span><input type="range" id="ct-glow" min="0" max="100" value="${Math.round((this.tl.charGlow ?? 0.25) * 100)}"></div>
+        <div style="font-size:10.5px;color:var(--muted)">カットごとの前後は、演出エンジンの「いまのカット」で選べます。</div>
+      </div>`;
+  }
+
   /* ---- Live2D キャラ: 歌に合わせて口パク・拍に合わせて踊る (static/js/live2d_stage.js) ---- */
   _live2dPanelHTML() {
     const d = this.tl.live2d;
@@ -1708,10 +1796,12 @@ alert('LyricFlow: ' + D.cuts.length + ' text layers created.' + (miss.length ? '
           <div class="prop-row" title="踊りの大きさ(曲の盛り上がりでも自動で大きくなります)"><span>踊りの強さ</span><input type="range" id="l2-int" min="0" max="100" value="${pct(d.intensity, 0.7)}"></div>
           <div class="prop-row" title="口の開きの大きさ"><span>口パクの強さ</span><input type="range" id="l2-lip" min="0" max="100" value="${pct(d.lipsync, 0.8)}"></div>
           <div class="prop-row" title="オン: 歌詞のタイミング(語)に合わせて口を動かし、間奏では閉じる。オフ: 声の帯域の音量だけで動かす"><span>歌詞に合わせる</span><input type="checkbox" id="l2-gate" ${d.lipGate === false ? '' : 'checked'}></div>
-          <div class="prop-row"><span>大きさ</span><input type="range" id="l2-scale" min="20" max="200" value="${pct(d.scale, 0.9)}"></div>
-          <div class="prop-row"><span>横位置</span><input type="range" id="l2-x" min="0" max="100" value="${pct(d.x, 0.5)}"></div>
-          <div class="prop-row"><span>縦位置</span><input type="range" id="l2-y" min="40" max="160" value="${pct(d.y, 1.04)}"></div>
+          <div class="prop-row"><span>大きさ</span><input type="range" id="l2-scale" min="10" max="400" value="${pct(d.scale, 0.9)}"></div>
+          <div class="prop-row"><span>横位置</span><input type="range" id="l2-x" min="-50" max="150" value="${pct(d.x, 0.5)}"></div>
+          <div class="prop-row"><span>縦位置</span><input type="range" id="l2-y" min="5" max="250" value="${pct(d.y, 1.04)}"></div>
           <div class="prop-row"><span>左右反転</span><input type="checkbox" id="l2-mirror" ${d.mirror ? 'checked' : ''}></div>
+          <div style="font-size:10.5px;color:var(--muted);margin:2px 0">プレビューのキャラをドラッグで移動・ホイールで大きさ(文字と重なる時は ⌥ を押しながら)
+            <button class="btn sm" id="l2-reset" style="margin-left:4px">位置を戻す</button></div>
           <div id="l2-note" style="font-size:10.5px;color:var(--muted);margin:2px 0 4px">${this.tl.bpm ? `拍: ${Math.round(this.tl.bpm)} BPM に合わせて踊ります` : 'BPM が未設定なので、音量に合わせてゆっくり揺れます(タイムラインの「検知」で拍に合わせられます)'}</div>
           <button class="btn danger sm" id="l2-del" style="width:100%;justify-content:center;margin-top:5px">Live2D キャラを外す</button>
         ` : `
@@ -1742,6 +1832,7 @@ alert('LyricFlow: ' + D.cuts.length + ' text layers created.' + (miss.length ? '
     $('#l2-x').oninput = e => set('x', e.target.value / 100);
     $('#l2-y').oninput = e => set('y', e.target.value / 100);
     $('#l2-mirror').onchange = e => set('mirror', e.target.checked);
+    $('#l2-reset').onclick = () => { Object.assign(d, { scale: 0.9, x: 0.5, y: 1.04 }); this.markDirty(); this.renderRight(); };
     $('#l2-del').onclick = () => { this.tl.live2d = null; this.engine.setTimeline(this.tl); this.markDirty(); this.renderRight(); };
     $('#l2-up').onclick = () => $('#l2-file').click();
     $('#l2-file').onchange = async e => {
@@ -2117,9 +2208,9 @@ alert('LyricFlow: ' + D.cuts.length + ' text layers created.' + (miss.length ? '
         <h4>前景キャラ / 被写体</h4>
         ${this.tl.subject ? `
           <div class="prop-row"><span>素材</span><span style="font-size:11px;color:var(--cyan);overflow:hidden;text-overflow:ellipsis">${esc(this.tl.subject.name || '設定済み')}</span></div>
-          <div class="prop-row"><span>大きさ</span><input type="range" id="su-scale" min="30" max="300" value="${(this.tl.subject.scale || 0.72) * 100}"></div>
-          <div class="prop-row"><span>横位置</span><input type="range" id="su-x" min="0" max="100" value="${(this.tl.subject.x ?? 0.5) * 100}"></div>
-          <div class="prop-row"><span>縦位置</span><input type="range" id="su-y" min="0" max="100" value="${(this.tl.subject.y ?? 0.98) * 100}"></div>
+          <div class="prop-row"><span>大きさ</span><input type="range" id="su-scale" min="10" max="400" value="${(this.tl.subject.scale || 0.72) * 100}"></div>
+          <div class="prop-row"><span>横位置</span><input type="range" id="su-x" min="-50" max="150" value="${(this.tl.subject.x ?? 0.5) * 100}"></div>
+          <div class="prop-row"><span>縦位置</span><input type="range" id="su-y" min="5" max="250" value="${(this.tl.subject.y ?? 0.98) * 100}"></div>
           <button class="btn danger sm" id="su-del" style="width:100%;justify-content:center;margin-top:5px">キャラを外す</button>
         ` : `
           <div class="empty-note" style="padding:4px 2px;text-align:left;font-size:11px">アニメキャラ等の画像/透過PNGを前景に配置し、リムライト・浮遊・呼吸で演出します。</div>
@@ -2138,9 +2229,9 @@ alert('LyricFlow: ' + D.cuts.length + ' text layers created.' + (miss.length ? '
           <div class="prop-row"><span>大きさ</span>
             <input type="range" id="dn-scale" min="20" max="400" value="${Math.round((this.tl.dance.scale ?? 0.92) * 100)}">
             <span id="dn-scale-v" style="flex:none;width:38px;text-align:right;font-size:11px">${Math.round((this.tl.dance.scale ?? 0.92) * 100)}%</span></div>
-          <div class="prop-row"><span>横位置</span><input type="range" id="dn-x" min="0" max="100" value="${(this.tl.dance.x ?? 0.5) * 100}"></div>
+          <div class="prop-row"><span>横位置</span><input type="range" id="dn-x" min="-50" max="150" value="${(this.tl.dance.x ?? 0.5) * 100}"></div>
           <div class="prop-row"><span>縦位置</span>
-            <input type="range" id="dn-y" min="0" max="160" value="${Math.round((this.tl.dance.y ?? 1.0) * 100)}">
+            <input type="range" id="dn-y" min="5" max="250" value="${Math.round((this.tl.dance.y ?? 1.0) * 100)}">
             <span id="dn-y-v" style="flex:none;width:38px;text-align:right;font-size:11px">${Math.round((this.tl.dance.y ?? 1.0) * 100)}%</span></div>
           <div class="prop-row"><span>開始オフセット(秒)</span><input type="number" class="input sm" id="dn-offset" step="0.1" value="${this.tl.dance.offset || 0}" style="width:64px"></div>
           <div class="prop-row"><span>ステージ比</span><span style="display:flex;gap:4px" id="dn-ar">
@@ -2159,7 +2250,8 @@ alert('LyricFlow: ' + D.cuts.length + ' text layers created.' + (miss.length ? '
         <input type="file" id="dn-vrm-file" accept=".vrm" style="display:none">
         <input type="file" id="dn-vmd-file" accept=".vmd" style="display:none">
       </div>
-      ${this._live2dPanelHTML()}`;
+      ${this._live2dPanelHTML()}
+      ${this._charTextPanelHTML()}`;
     const $ = s => el.querySelector(s);
     const engSel = $('#ai-engine');
     engSel.value = this.aiEngine();
@@ -2239,6 +2331,12 @@ alert('LyricFlow: ' + D.cuts.length + ' text layers created.' + (miss.length ? '
     this._bindDancePanel($);
     // Live2D キャラ
     this._bindLive2DPanel($);
+    // キャラと文字の重なり・キャラへのグロー
+    const tlay = $('#ct-layer');
+    if (tlay) {
+      tlay.onchange = e => { this.tl.textLayer = e.target.value; this.markDirty(); };
+      $('#ct-glow').oninput = e => { this.tl.charGlow = e.target.value / 100; this.markDirty(); };
+    }
     if (selWord) {
       $('#w-start').onchange = e => { selWord.start = +e.target.value; this.markDirty(); this.renderTimeline(); };
       $('#w-end').onchange = e => { selWord.end = +e.target.value; this.markDirty(); this.renderTimeline(); };

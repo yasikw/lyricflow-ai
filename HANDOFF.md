@@ -84,6 +84,14 @@
 - 自分のモデル: zip をアセットとしてアップロード(type=`live2d`)→ `uploads/live2d/<id>/` に展開(zip slip・300MB/3000ファイル上限、UTF-8 フラグ無しの日本語名は cp437→utf-8/cp932 で読み直し)、URL は model3.json。
 - DB: assets.type の CHECK に `model3d/motion3d/live2d` を追加(`migrate_assets_types`、起動時に作り直し)。**旧DBでは VRM のアップロードも CHECK で失敗していた**。
 
+## キャラと文字の重なり・キャラへのグロー(2026-10-13)
+
+- キャラ(前景画像 subject → 3Dダンス dance → Live2D)は `FXEngine.charLayer` に描いてから合成。`engine._charBoxes` に各キャラの枠(プレビューのドラッグ用)。
+- 文字の前後: `timeline.textLayer = 'front'(既定)|'behind'`、演出エンジンのカット案 `textLayer` が上書き(`FXEngine.textBehindAt(t)`)。
+  おまかせ・🎲で振り直しても `textLayer` は残す(core planAll / editor のダイス)。
+- キャラへのグロー: `timeline.charGlow`(0..1, 既定0.25)。ブルームの光源からキャラを抜き、キャラの上に乗る光も弱める(半解像度の glowLayer)。
+- エディター: プレビューのキャラをドラッグで移動・ホイールで大きさ(文字の枠と重なる時は ⌥)。位置は x:-0.5〜1.5、y(足元):0.05〜2.5、大きさ 0.1〜4。
+
 ## 連携が切れたときの復帰(重要)
 
 - `_loadAtelier()` は**成功時のみキャッシュ**する。失敗をキャッシュすると、後から

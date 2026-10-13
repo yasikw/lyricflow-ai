@@ -17,6 +17,12 @@ class FXEngine {
     // ブルーム用の低解像度バッファ (whole-frame blur add)
     this.bloom = document.createElement('canvas');
     this.bctx = this.bloom.getContext('2d');
+    // キャラ(前景画像・3Dダンス・Live2D)専用のレイヤー: 文字の前後を切り替え、グローを抑えるために分ける
+    this.charLayer = document.createElement('canvas');
+    this.cctx = this.charLayer.getContext('2d');
+    this.glowLayer = document.createElement('canvas');
+    this.gctx = this.glowLayer.getContext('2d');
+    this._charBoxes = [];
     this.particles = [];
     this.pTime = -1;
     this.rand = this._seededRand(42);
@@ -67,8 +73,26 @@ class FXEngine {
       this.canvas.width = w; this.canvas.height = h;
       this.textLayer.width = w; this.textLayer.height = h;
       this.post.width = w; this.post.height = h;
+      this.charLayer.width = w; this.charLayer.height = h;
       this.particles = [];
     }
+  }
+
+  /* 文字をキャラの後ろに回すか: 全体の設定(tl.textLayer)を、演出エンジンのカットの設定(案.textLayer)が上書きする */
+  textBehindAt(t) {
+    const tl = this.timeline || {};
+    let v = tl.textLayer === 'behind';
+    const cm = tl.compose;
+    if (cm && cm.enabled && window.LFC) {
+      try {
+        const L = window.LFC, cuts = L.buildCuts(tl), i = L.cutAt(cuts, t), c = cuts[i];
+        if (c && t <= c.end + 0.05) {
+          const pl = cm.cuts && cm.cuts[c.line + ':' + c.part];
+          if (pl && pl.textLayer) v = pl.textLayer === 'behind';
+        }
+      } catch (e) { /* 演出エンジンが無くても全体の設定で描く */ }
+    }
+    return v;
   }
 
   /* t秒時点のボーカル帯(250〜3500Hz)の音量(0..1)。口パク用に 1/60 秒刻み(computeVocalEnvelope で作る) */
@@ -103,6 +127,7 @@ class FXEngine {
     const q = this.quality === 'draft' ? 0.5 : 1;
     if (!st.renderAt(t, window.Live2DStage.driver(this, d, st), Math.round(sw * q), Math.round(sh * q))) return;
     const cx = W * (d.x ?? 0.5), by = H * (d.y ?? 1.04);
+    this._charBoxes.push({ key: 'live2d', x0: cx - sw / 2, y0: by - sh, x1: cx + sw / 2, y1: by });
     ctx.save();
     if (d.mirror) { ctx.translate(cx, 0); ctx.scale(-1, 1); ctx.translate(-cx, 0); }
     ctx.drawImage(st.canvas, cx - sw / 2, by - sh, sw, sh);
@@ -159,15 +184,23 @@ class FXEngine {
     // 被写界深度 (Depth of Field) — 背景をフォーカス帯の外でぼかす
     const dof = (fxActive.dof ?? fx.dof ?? 0);
     if (dof > 0.05 && this.quality !== 'draft') this._dof(ctx, W, H, dof);
-    // 前景キャラ/被写体レイヤー (任意アップロード素材)
-    this._drawSubject(ctx, t, W, H, energy, boost);
-    // 3Dダンスレイヤー (VRMアバター + MMDモーション / VRM Atelier連携)
-    this._drawDance(ctx, t, W, H, energy, boost);
-    // Live2D キャラ層 (歌に合わせて口パク・拍に合わせて踊る)
-    this._drawLive2D(ctx, t, W, H);
-    // パーティクル(粒子) — 前景キャラ/被写体より前面に降らせる
+    // キャラ(前景画像 → 3Dダンス → Live2D)は専用レイヤーに描き、文字の前/後ろを切り替えて重ねる
+    const cc = this.cctx;
+    if (this.charLayer.width !== W || this.charLayer.height !== H) { this.charLayer.width = W; this.charLayer.height = H; }
+    cc.setTransform(1, 0, 0, 1, 0, 0); cc.globalAlpha = 1; cc.globalCompositeOperation = 'source-over'; cc.filter = 'none';
+    cc.clearRect(0, 0, W, H);
+    this._charBoxes = [];
+    this._drawSubject(cc, t, W, H, energy, boost);       // 前景キャラ/被写体 (任意アップロード素材)
+    this._drawDance(cc, t, W, H, energy, boost);         // 3Dダンス (VRM + MMD)
+    this._drawLive2D(cc, t, W, H);                       // Live2D (口パク・踊り)
+    this._hasChars = this._charBoxes.length > 0;
+    const behind = this._hasChars && this.textBehindAt(t);
+    const lyrics = () => { if (!this.hideLyrics) this._drawLyricLayer(t, W, H, colors, energy, boost, fx); };   // タップ同期中は歌詞を隠す
+    if (behind) lyrics();
+    if (this._hasChars) ctx.drawImage(this.charLayer, 0, 0);
+    // パーティクル(粒子) — キャラより前面に降らせる
     this._stepParticles(ctx, t, W, H, colors, energy * boost);
-    if (!this.hideLyrics) this._drawLyricLayer(t, W, H, colors, energy, boost, fx);   // タップ同期中は歌詞を隠す
+    if (!behind) lyrics();
     this._drawOverlays(ctx, t, W, H, colors);
 
     // ---- post processing ----
@@ -207,6 +240,7 @@ class FXEngine {
       st.setSize(this.quality === 'draft' ? W / 2 : W, this.quality === 'draft' ? H / 2 : H);
       if (!st.renderAt(t, opts)) return;
       ctx.drawImage(st.canvas, 0, 0, W, H);
+      this._charBoxes.push({ key: 'dance', x0: 0, y0: 0, x1: W, y1: H, fixed: true });   // VMDカメラは画面全体(動かせない)
       return;
     }
     // 配置モード: 被写体と同じく接地アンカーで合成
@@ -225,6 +259,7 @@ class FXEngine {
     if (!st.renderAt(t, opts)) return;
     const cx = W * (d.x ?? 0.5), by = H * (d.y ?? 1.0);
     const x = cx - sw / 2, y = by - sh;
+    this._charBoxes.push({ key: 'dance', x0: x, y0: y, x1: x + sw, y1: by });
     // 接地の影
     ctx.save();
     ctx.globalAlpha = 0.32;
@@ -257,6 +292,7 @@ class FXEngine {
     const cx = W * (sub.x ?? 0.5), by = H * (sub.y ?? 0.98);           // 接地位置
     const floatY = Math.sin(t * 1.1) * H * 0.008;                       // 浮遊
     const x = cx - iw / 2, y = by - ih + floatY;
+    this._charBoxes.push({ key: 'subject', x0: x, y0: y, x1: x + iw, y1: y + ih });
     ctx.save();
     // 接地の影
     ctx.globalAlpha = 0.35;
@@ -383,6 +419,37 @@ class FXEngine {
     b.globalCompositeOperation = 'multiply';        // 自己乗算で明部を残し暗部を落とす(擬似しきい値)
     b.drawImage(this.canvas, 0, 0, bw, bh);
     b.globalCompositeOperation = 'source-over';
+    // キャラにはグローをあまり掛けない: キャラ自身の明部を光源から外し、キャラの上に乗る光も弱める
+    const cg = Math.min(1, Math.max(0, this.timeline.charGlow ?? 0.25));
+    if (this._hasChars && cg < 0.99) {
+      b.globalCompositeOperation = 'destination-out';
+      b.globalAlpha = 1 - cg;
+      b.drawImage(this.charLayer, 0, 0, bw, bh);
+      b.globalAlpha = 1; b.globalCompositeOperation = 'source-over';
+      const gw = Math.max(160, W >> 1), gh = Math.max(90, H >> 1), k = gw / W;
+      if (this.glowLayer.width !== gw || this.glowLayer.height !== gh) { this.glowLayer.width = gw; this.glowLayer.height = gh; }
+      const g = this.gctx;
+      g.setTransform(1, 0, 0, 1, 0, 0); g.globalCompositeOperation = 'source-over'; g.globalAlpha = 1; g.filter = 'none';
+      g.clearRect(0, 0, gw, gh);
+      g.globalCompositeOperation = 'lighter';
+      g.filter = `blur(${Math.max(1, (W / 300) * k)}px)`;
+      g.globalAlpha = Math.min(0.95, strength);
+      g.drawImage(this.bloom, 0, 0, gw, gh);
+      g.filter = `blur(${Math.max(2.5, (W / 110) * k)}px)`;
+      g.globalAlpha = Math.min(0.6, strength * 0.65);
+      g.drawImage(this.bloom, 0, 0, gw, gh);
+      g.filter = 'none';
+      g.globalCompositeOperation = 'destination-out';
+      g.globalAlpha = (1 - cg) * 0.9;
+      g.drawImage(this.charLayer, 0, 0, gw, gh);
+      g.globalAlpha = 1; g.globalCompositeOperation = 'source-over';
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.imageSmoothingEnabled = true;
+      ctx.drawImage(this.glowLayer, 0, 0, W, H);
+      ctx.restore();
+      return;
+    }
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
     ctx.imageSmoothingEnabled = true;

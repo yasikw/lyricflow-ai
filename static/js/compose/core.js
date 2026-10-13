@@ -1110,6 +1110,7 @@ L.planAll = (tl, opts = {}) => {
     cut.emph = !!(opts.emphFn && opts.emphFn(cut));
     plans[key] = L.planCut(cut, { rng, st, moods, cm, portrait, recent, W, H, keep, prevCut: cuts[i - 1], seed });
     if (old && old.reroll) plans[key].reroll = old.reroll;
+    if (old && old.textLayer) plans[key].textLayer = old.textLayer;   // 文字とキャラの前後は人が決めたものなので振り直しても残す
   });
   cm.cuts = plans;
   cm.seed = seed;
