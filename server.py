@@ -1562,8 +1562,13 @@ class Handler(BaseHTTPRequestHandler):
         self.send_json({"error": {"code": ecode, "message": msg}}, code)
 
     def body(self):
+        # 1リクエストにつき1回だけ読む(同じ接続で次のリクエストが続くため、読んだ分は覚えておく)
+        if getattr(self, "_body_read", False):
+            return self._body
         ln = int(self.headers.get("Content-Length") or 0)
-        return self.rfile.read(ln) if ln else b""
+        self._body = self.rfile.read(ln) if ln else b""
+        self._body_read = True
+        return self._body
 
     def json_body(self):
         try:
@@ -1603,6 +1608,18 @@ class Handler(BaseHTTPRequestHandler):
         self.route("DELETE")
 
     def route(self, method):
+        self._body_read = False
+        try:
+            self._route(method)
+        finally:
+            # 本文を読まない API(例: 複製)に本文付きで来ても、残りが次のリクエストに混ざらないよう読み捨てる
+            try:
+                if not self._body_read and int(self.headers.get("Content-Length") or 0) > 0:
+                    self.body()
+            except Exception:
+                pass
+
+    def _route(self, method):
         try:
             path = self.path.split("?")[0]
             if path.startswith("/api/"):
