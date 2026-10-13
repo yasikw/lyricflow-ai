@@ -1114,12 +1114,40 @@ L.planAll = (tl, opts = {}) => {
     cut.emph = !!(opts.emphFn && opts.emphFn(cut));
     plans[key] = L.planCut(cut, { rng, st, moods, cm, portrait, recent, W, H, keep, prevCut: cuts[i - 1], seed, avoidChars: L.avoidingChars(tl) });
     if (old && old.reroll) plans[key].reroll = old.reroll;
-    if (old && old.textLayer) plans[key].textLayer = old.textLayer;   // 文字とキャラの前後は人が決めたものなので振り直しても残す
+    if (old && old.textLayer && !old.textLayerAuto) plans[key].textLayer = old.textLayer;   // 人が決めた前後は振り直しても残す(おまかせで決めた分は決め直す)
   });
   cm.cuts = plans;
   cm.seed = seed;
+  L.assignTextLayers(tl);
   cm.planVersion = (cm.planVersion || 0) + 1;
   return cm;
+};
+
+/* おまかせで「文字をキャラの前/後ろ」をカットごとに決める(cm.randomTextLayer、既定オン・キャラがいる時だけ)。
+   人が選んだカット(textLayerAuto でない textLayer)は触らない。決定論(種・カット・振り直し回数)。
+   画面いっぱいの構図は後ろに回すと映えるので後ろ寄り、強調カットも少し後ろ寄り。同じ側が続きすぎないように */
+L.hasChars = tl => !!(tl && (tl.subject || (tl.dance && tl.dance.enabled) || (tl.live2d && tl.live2d.enabled)));
+L.assignTextLayers = tl => {
+  const cm = tl.compose || {};
+  const plans = cm.cuts || {};
+  const on = cm.randomTextLayer !== false && L.hasChars(tl);
+  const cuts = L.buildCuts(tl);
+  let prev = null, run = 0, n = 0;
+  for (const cut of cuts) {
+    const key = cut.line + ':' + cut.part, p = plans[key];
+    if (!p) continue;
+    if (p.textLayer && !p.textLayerAuto) { prev = p.textLayer; run = 1; continue; }
+    if (!on) { if (p.textLayerAuto) { delete p.textLayer; delete p.textLayerAuto; } continue; }
+    const lay = L.get('layout', p.layout);
+    let pb = lay && lay.busy ? 0.6 : 0.32;
+    if (cut.emph || cut.emphMark || cut.impact) pb += 0.12;
+    if (prev === 'behind' && run >= 2) pb = 0.1;
+    if (prev === 'front' && run >= 4) pb = 0.75;
+    const v = L.r('textLayer', cm.seed || 1, cut.line, cut.part, p.reroll || 0) < pb ? 'behind' : 'front';
+    p.textLayer = v; p.textLayerAuto = true; n++;
+    run = v === prev ? run + 1 : 1; prev = v;
+  }
+  return n;
 };
 
 /* カットに案(defs)を解決して付与。案が無ければその場で決定論的に作る(保存はしない) */

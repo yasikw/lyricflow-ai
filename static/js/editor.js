@@ -1033,8 +1033,8 @@ class Editor {
       ${row('つなぎ', 'trans', p.trans, true)}
       <div class="prop-row" title="このカットだけ文字をキャラの前/後ろにする(既定=右の「キャラと文字」の設定)"><span>文字とキャラ</span><select class="input sm" data-cl="1">
         <option value="" ${!p.textLayer ? 'selected' : ''}>既定に合わせる</option>
-        <option value="front" ${p.textLayer === 'front' ? 'selected' : ''}>キャラの前</option>
-        <option value="behind" ${p.textLayer === 'behind' ? 'selected' : ''}>キャラの後ろ</option></select></div>
+        <option value="front" ${p.textLayer === 'front' ? 'selected' : ''}>キャラの前${p.textLayer === 'front' && p.textLayerAuto ? '（おまかせ）' : ''}</option>
+        <option value="behind" ${p.textLayer === 'behind' ? 'selected' : ''}>キャラの後ろ${p.textLayer === 'behind' && p.textLayerAuto ? '（おまかせ）' : ''}</option></select></div>
       <div class="cmp-cut-btns">
         <button class="btn sm" id="cmp-cut-dice">🎲 このカットだけ振り直す</button>
         <label class="chk-row"><input type="checkbox" id="cmp-cut-lock" ${p.locked ? 'checked' : ''}><span>🔒 固定</span></label>
@@ -1072,13 +1072,14 @@ class Editor {
       const rng = L.rng(L.h(cm.seed, 'plan', cut.line, cut.part, reroll));
       const np = L.planCut(cut, { rng, st: L.getStyle(cm.style), moods, cm, portrait: H > W, recent: {}, W, H, keep: null, prevCut: cuts[ci - 1], seed: cm.seed });
       np.reroll = reroll;
-      if (q.textLayer) np.textLayer = q.textLayer;
+      if (q.textLayer && !q.textLayerAuto) np.textLayer = q.textLayer;
       cm.cuts[key] = np;
+      L.assignTextLayers(this.tl);
       bump();
       this._composeCutPanel(true);
     };
     box.querySelector('#cmp-cut-lock').onchange = e => { materialize().locked = e.target.checked; this.markDirty(); };
-    box.querySelector('[data-cl]').onchange = e => { const q = materialize(); q.textLayer = e.target.value || undefined; if (!q.textLayer) delete q.textLayer; bump(); };
+    box.querySelector('[data-cl]').onchange = e => { const q = materialize(); q.textLayer = e.target.value || undefined; delete q.textLayerAuto; if (!q.textLayer) delete q.textLayer; bump(); this._composeCutPanel(true); };
   }
 
   /* ---------------- モーションリール(拍同期モーショングラフィックス) ----------------
@@ -1770,9 +1771,10 @@ alert('LyricFlow: ' + D.cuts.length + ' text layers created.' + (miss.length ? '
         <div class="prop-row" title="カットごとに変えるときは、演出エンジンの「いまのカット」の『文字とキャラ』で"><span>文字の位置</span><select class="input sm" id="ct-layer">
           <option value="front" ${behind ? '' : 'selected'}>キャラの前</option>
           <option value="behind" ${behind ? 'selected' : ''}>キャラの後ろ</option></select></div>
+        <div class="prop-row" title="演出エンジンでおまかせ/構図を作るたびに、カットごとに文字をキャラの前か後ろかを決める(画面いっぱいの構図や強調カットは後ろ寄り)。手で選んだカットはそのまま"><span>前/後ろをおまかせ</span><input type="checkbox" id="ct-rand" ${(this.tl.compose && this.tl.compose.randomTextLayer === false) ? '' : 'checked'}></div>
         <div class="prop-row" title="文字がキャラと重なる時だけ、空いている所へずらして置く(入らなければ少し縮める)。文字が「キャラの後ろ」のカットでは避けない"><span>キャラを避けて置く</span><input type="checkbox" id="ct-avoid" ${this.tl.avoidChars === false ? '' : 'checked'}></div>
         <div class="prop-row" title="0 = キャラにはグロー(光のにじみ)を掛けない / 100 = 画面全体と同じだけ掛ける"><span>キャラへのグロー</span><input type="range" id="ct-glow" min="0" max="100" value="${Math.round((this.tl.charGlow ?? 0.25) * 100)}"></div>
-        <div style="font-size:10.5px;color:var(--muted)">カットごとの前後は、演出エンジンの「いまのカット」で選べます。</div>
+        <div style="font-size:10.5px;color:var(--muted)">カットごとの前後は、演出エンジンの「いまのカット」で選べます(おまかせで決めた所も上書きできます)。</div>
       </div>`;
   }
 
@@ -2337,6 +2339,13 @@ alert('LyricFlow: ' + D.cuts.length + ' text layers created.' + (miss.length ? '
     if (tlay) {
       tlay.onchange = e => { this.tl.textLayer = e.target.value; this.markDirty(); };
       $('#ct-glow').oninput = e => { this.tl.charGlow = e.target.value / 100; this.markDirty(); };
+      $('#ct-rand').onchange = e => {
+        const cm = this._cm(); cm.randomTextLayer = e.target.checked;
+        const n = window.LFC ? window.LFC.assignTextLayers(this.tl) : 0;
+        cm.planVersion = (cm.planVersion || 0) + 1;
+        this.markDirty(); this._composeCutPanel(true); this.renderTimeline();
+        toast(e.target.checked ? (cm.enabled ? `${n}カットの前/後ろをおまかせで決めました` : '演出エンジンでおまかせを作ると、カットごとに前/後ろが決まります') : 'おまかせの前/後ろを外しました（全体の「文字の位置」に従います）', 'ok');
+      };
       $('#ct-avoid').onchange = e => { this.tl.avoidChars = e.target.checked; this.engine._avoid = null; this.engine._avoidSig = null; this.markDirty(); };
     }
     if (selWord) {

@@ -88,7 +88,9 @@
 
 - キャラ(前景画像 subject → 3Dダンス dance → Live2D)は `FXEngine.charLayer` に描いてから合成。`engine._charBoxes` に各キャラの枠(プレビューのドラッグ用)。
 - 文字の前後: `timeline.textLayer = 'front'(既定)|'behind'`、演出エンジンのカット案 `textLayer` が上書き(`FXEngine.textBehindAt(t)`)。
-  おまかせ・🎲で振り直しても `textLayer` は残す(core planAll / editor のダイス)。
+  おまかせ・🎲で振り直しても人が選んだ `textLayer` は残す(core planAll / editor のダイス)。
+  `compose.randomTextLayer`(既定オン・キャラがいる時)なら `L.assignTextLayers(tl)` がカットごとに前/後ろを決めて `textLayerAuto:true` を付ける
+  (画面いっぱいの構図・強調カットは後ろ寄り、同じ側が続きすぎない)。おまかせで決めた分は作り直すたびに決め直す。
 - キャラへのグロー: `timeline.charGlow`(0..1, 既定0.25)。ブルームの光源からキャラを抜き、キャラの上に乗る光も弱める(半解像度の glowLayer)。
 - キャラを避けて置く: `timeline.avoidChars`(既定オン)。文字がキャラの前の時だけ、歌詞を `lyricLayer` に描いて charLayer の不透明部分(64格子・1マス膨張・累積和)と重なれば
   空いている所へずらす/縮める(`FXEngine._placeAvoid`)。カット/行ごとに区間の最初の0.7秒で決めて0.25秒でなめらかに移す(書き出しは頭から順なので毎回同じ)。
