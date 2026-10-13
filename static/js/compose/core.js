@@ -1016,6 +1016,7 @@ L.planCut = (cut, ctx) => {
       let w = def.w * moodMult(def.tags) * bias('layout', def.key) * recentMult('layout', def.key);
       if (hm && HM_FAKENUM.test(def.key) && !/[0-9０-９]/.test(cut.text)) w *= 0.1;
       if (cm.textSize !== 'normal') w *= L.sizeMult(def.key);          // 文字の大きさ=大きめ(MV): 歌詞を大きく組む構図を優先
+      if (ctx.avoidChars && def.busy) w *= 0.2;                         // キャラを避ける時は、画面いっぱいで避けられない構図を控える
       if (portrait && def.portrait != null) w *= def.portrait;
       if (emph && def.emph != null) w *= def.emph;
       return w;
@@ -1081,6 +1082,9 @@ L.planCut = (cut, ctx) => {
   return out;
 };
 
+/* キャラ(前景画像/3Dダンス/Live2D)がいて、文字がキャラの前で、「キャラを避けて置く」が有効か */
+L.avoidingChars = tl => !!(tl && (tl.subject || (tl.dance && tl.dance.enabled) || (tl.live2d && tl.live2d.enabled)) && tl.avoidChars !== false && tl.textLayer !== 'behind');
+
 /* 全カットを計画する。opts.only = 'layout'|'motion'|'decor'|'cam' で一部だけ振り直し */
 L.planAll = (tl, opts = {}) => {
   const cm = tl.compose = tl.compose || {};
@@ -1108,7 +1112,7 @@ L.planAll = (tl, opts = {}) => {
       if (opts.only === 'cam') { delete keep.cam; delete keep.camP; delete keep.trans; delete keep.transP; }
     }
     cut.emph = !!(opts.emphFn && opts.emphFn(cut));
-    plans[key] = L.planCut(cut, { rng, st, moods, cm, portrait, recent, W, H, keep, prevCut: cuts[i - 1], seed });
+    plans[key] = L.planCut(cut, { rng, st, moods, cm, portrait, recent, W, H, keep, prevCut: cuts[i - 1], seed, avoidChars: L.avoidingChars(tl) });
     if (old && old.reroll) plans[key].reroll = old.reroll;
     if (old && old.textLayer) plans[key].textLayer = old.textLayer;   // 文字とキャラの前後は人が決めたものなので振り直しても残す
   });

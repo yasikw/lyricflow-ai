@@ -1770,6 +1770,7 @@ alert('LyricFlow: ' + D.cuts.length + ' text layers created.' + (miss.length ? '
         <div class="prop-row" title="カットごとに変えるときは、演出エンジンの「いまのカット」の『文字とキャラ』で"><span>文字の位置</span><select class="input sm" id="ct-layer">
           <option value="front" ${behind ? '' : 'selected'}>キャラの前</option>
           <option value="behind" ${behind ? 'selected' : ''}>キャラの後ろ</option></select></div>
+        <div class="prop-row" title="文字がキャラと重なる時だけ、空いている所へずらして置く(入らなければ少し縮める)。文字が「キャラの後ろ」のカットでは避けない"><span>キャラを避けて置く</span><input type="checkbox" id="ct-avoid" ${this.tl.avoidChars === false ? '' : 'checked'}></div>
         <div class="prop-row" title="0 = キャラにはグロー(光のにじみ)を掛けない / 100 = 画面全体と同じだけ掛ける"><span>キャラへのグロー</span><input type="range" id="ct-glow" min="0" max="100" value="${Math.round((this.tl.charGlow ?? 0.25) * 100)}"></div>
         <div style="font-size:10.5px;color:var(--muted)">カットごとの前後は、演出エンジンの「いまのカット」で選べます。</div>
       </div>`;
@@ -2336,6 +2337,7 @@ alert('LyricFlow: ' + D.cuts.length + ' text layers created.' + (miss.length ? '
     if (tlay) {
       tlay.onchange = e => { this.tl.textLayer = e.target.value; this.markDirty(); };
       $('#ct-glow').oninput = e => { this.tl.charGlow = e.target.value / 100; this.markDirty(); };
+      $('#ct-avoid').onchange = e => { this.tl.avoidChars = e.target.checked; this.engine._avoid = null; this.engine._avoidSig = null; this.markDirty(); };
     }
     if (selWord) {
       $('#w-start').onchange = e => { selWord.start = +e.target.value; this.markDirty(); this.renderTimeline(); };

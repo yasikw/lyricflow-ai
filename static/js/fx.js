@@ -195,7 +195,12 @@ class FXEngine {
     this._drawLive2D(cc, t, W, H);                       // Live2D (口パク・踊り)
     this._hasChars = this._charBoxes.length > 0;
     const behind = this._hasChars && this.textBehindAt(t);
-    const lyrics = () => { if (!this.hideLyrics) this._drawLyricLayer(t, W, H, colors, energy, boost, fx); };   // タップ同期中は歌詞を隠す
+    const avoid = this._hasChars && !behind && tl.avoidChars !== false;
+    const lyrics = () => {                                // タップ同期中は歌詞を隠す
+      if (this.hideLyrics) return;
+      if (avoid) this._drawLyricsAvoid(t, W, H, colors, energy, boost, fx);   // キャラを避けて置く
+      else this._drawLyricLayer(t, W, H, colors, energy, boost, fx);
+    };
     if (behind) lyrics();
     if (this._hasChars) ctx.drawImage(this.charLayer, 0, 0);
     // パーティクル(粒子) — キャラより前面に降らせる
@@ -871,10 +876,120 @@ class FXEngine {
     const cm = this.timeline && this.timeline.compose;
     if (cm && cm.enabled && window.LFC) {
       this._lyricBox = null;
-      try { window.LFC.render(this, this.ctx, t, W, H, energy, boost); return; }
+      try { const bb = window.LFC.render(this, this.ctx, t, W, H, energy, boost); return bb || null; }
       catch (e) { if (!this._lfcWarned) { this._lfcWarned = true; console.warn('[LFC] render failed, fallback to classic', e); } }
     }
     this._drawLyrics(t, W, H, C, energy, boost, fx);
+    const lb = this._lyricBox;
+    return lb ? { x0: lb.x, y0: lb.y, x1: lb.x + lb.w, y1: lb.y + lb.h } : null;
+  }
+
+  /* ---------------- キャラを避けて歌詞を置く ----------------
+     歌詞を別レイヤーに描き、キャラ(charLayer の不透明な所)と重なる時だけ、空いている所へずらす(入らなければ縮める)。
+     置き場所はカット(演出エンジン)/行(従来の歌詞)ごとに決め、出だしの 0.25 秒でなめらかに移す。
+     決めるのは区間の最初の 0.7 秒の間だけ(歌詞の枠が大きくなった時に見直す)→ 書き出しは頭から順に描くので毎回同じになる */
+  _segAt(t) {
+    const tl = this.timeline || {};
+    const cm = tl.compose;
+    if (cm && cm.enabled && window.LFC) {
+      try {
+        const L = window.LFC, cuts = L.buildCuts(tl), i = L.cutAt(cuts, t), c = cuts[i];
+        if (c && t <= c.end + 0.05) return { key: 'c' + c.line + ':' + c.part, start: c.start };
+      } catch (e) { /* noop */ }
+      return null;
+    }
+    const words = (tl.tracks && tl.tracks.lyrics) || [];
+    let line = -1;
+    for (const w of words) if (t >= w.start - 0.15 && t < w.end + 0.65) line = Math.max(line, w.line);
+    if (line < 0) return null;
+    let st = Infinity;
+    for (const w of words) if (w.line === line) st = Math.min(st, w.start);
+    return { key: 'l' + line, start: st - 0.15 };
+  }
+  _charMask(W, H) {
+    const gw = 64, gh = Math.max(12, Math.round(64 * H / W));
+    if (!this._maskCv) { this._maskCv = document.createElement('canvas'); this._maskCtx = this._maskCv.getContext('2d', { willReadFrequently: true }); }
+    const mc = this._maskCv, mx = this._maskCtx;
+    if (mc.width !== gw || mc.height !== gh) { mc.width = gw; mc.height = gh; }
+    mx.clearRect(0, 0, gw, gh);
+    mx.drawImage(this.charLayer, 0, 0, gw, gh);
+    const d = mx.getImageData(0, 0, gw, gh).data;
+    // 1 マス広げて(踊りの揺れの分)、累積和で矩形内の占有を O(1) で数える
+    const occ = new Uint8Array(gw * gh);
+    for (let y = 0; y < gh; y++) for (let x = 0; x < gw; x++) if (d[(y * gw + x) * 4 + 3] > 40) {
+      for (let yy = Math.max(0, y - 1); yy <= Math.min(gh - 1, y + 1); yy++) for (let xx = Math.max(0, x - 1); xx <= Math.min(gw - 1, x + 1); xx++) occ[yy * gw + xx] = 1;
+    }
+    const sat = new Int32Array((gw + 1) * (gh + 1));
+    for (let y = 0; y < gh; y++) for (let x = 0; x < gw; x++) sat[(y + 1) * (gw + 1) + x + 1] = occ[y * gw + x] + sat[y * (gw + 1) + x + 1] + sat[(y + 1) * (gw + 1) + x] - sat[y * (gw + 1) + x];
+    return { gw, gh, sx: gw / W, sy: gh / H, sat };
+  }
+  _overlap(m, x0, y0, x1, y1) {
+    const a = Math.max(0, Math.floor(x0 * m.sx)), b = Math.max(0, Math.floor(y0 * m.sy));
+    const c = Math.min(m.gw, Math.ceil(x1 * m.sx)), d = Math.min(m.gh, Math.ceil(y1 * m.sy));
+    if (c <= a || d <= b) return 0;
+    const W1 = m.gw + 1, S = m.sat;
+    const n = S[d * W1 + c] - S[b * W1 + c] - S[d * W1 + a] + S[b * W1 + a];
+    return n / ((c - a) * (d - b));
+  }
+  _placeAvoid(bb, W, H) {
+    const m = this._charMask(W, H);
+    const bw = bb.x1 - bb.x0, bh = bb.y1 - bb.y0, cx = (bb.x0 + bb.x1) / 2, cy = (bb.y0 + bb.y1) / 2;
+    const base = this._overlap(m, bb.x0, bb.y0, bb.x1, bb.y1);
+    if (base < 0.04) return { dx: 0, dy: 0, s: 1 };
+    if (bw > W * 0.82) return { dx: 0, dy: 0, s: 1 };       // 画面いっぱいの構図(帯・全面)は動かすと崩れるのでそのまま
+    const mg = Math.min(W, H) * 0.04;
+    let best = { dx: 0, dy: 0, s: 1, cost: base * 14 };
+    const ys = [cy, H * 0.2, H * 0.32, H * 0.5, H * 0.68, H * 0.8];
+    for (const sc of [1, 0.88, 0.76, 0.64, 0.52]) {
+      const w = bw * sc, h = bh * sc;
+      if (w > W - mg * 2 || h > H - mg * 2) continue;
+      for (let i = 0; i <= 24; i++) {
+        const x = mg + w / 2 + (W - mg * 2 - w) * i / 24;
+        for (const y0 of ys) {
+          const y = Math.min(H - mg - h / 2, Math.max(mg + h / 2, y0));
+          const ov = this._overlap(m, x - w / 2, y - h / 2, x + w / 2, y + h / 2);
+          const cost = ov * 14 + (1 - sc) * 2.2 + Math.abs(x - cx) / W * 1.1 + Math.abs(y - cy) / H * 1.4;
+          if (cost < best.cost) best = { dx: x - cx, dy: y - cy, s: sc, cost };
+        }
+      }
+    }
+    return best;
+  }
+  _drawLyricsAvoid(t, W, H, colors, energy, boost, fx) {
+    if (!this.lyricLayer) { this.lyricLayer = document.createElement('canvas'); this.lyctx = this.lyricLayer.getContext('2d'); }
+    const lc = this.lyricLayer, lx = this.lyctx;
+    if (lc.width !== W || lc.height !== H) { lc.width = W; lc.height = H; }
+    lx.setTransform(1, 0, 0, 1, 0, 0); lx.globalAlpha = 1; lx.globalCompositeOperation = 'source-over'; lx.filter = 'none';
+    lx.clearRect(0, 0, W, H);
+    const main = this.ctx;
+    let bb = null;
+    this.ctx = lx;
+    try { bb = this._drawLyricLayer(t, W, H, colors, energy, boost, fx); } finally { this.ctx = main; }
+    const seg = this._segAt(t);
+    const tl = this.timeline;
+    const sig = JSON.stringify([W, H, tl.subject && [tl.subject.x, tl.subject.y, tl.subject.scale], tl.dance && tl.dance.enabled && [tl.dance.x, tl.dance.y, tl.dance.scale], tl.live2d && tl.live2d.enabled && [tl.live2d.x, tl.live2d.y, tl.live2d.scale, tl.live2d.model_url], tl.compose && tl.compose.planVersion]);
+    if (this._avoidSig !== sig) { this._avoidSig = sig; this._avoid = new Map(); }
+    let e = null;
+    if (seg && bb) {
+      const area = (bb.x1 - bb.x0) * (bb.y1 - bb.y0);
+      e = this._avoid.get(seg.key);
+      if ((!e || (area > e.area * 1.25 && t - seg.start < 0.7)) && area > 1) {
+        const pl = this._placeAvoid(bb, W, H);
+        e = { ...pl, area, cx: (bb.x0 + bb.x1) / 2, cy: (bb.y0 + bb.y1) / 2 };
+        if (this._avoid.size > 400) this._avoid.clear();
+        this._avoid.set(seg.key, e);
+      }
+    } else if (seg) e = this._avoid.get(seg.key) || null;
+    const ctx = main;
+    if (!e || (e.dx === 0 && e.dy === 0 && e.s === 1)) { ctx.drawImage(lc, 0, 0); return; }
+    const k = Math.min(1, Math.max(0, (t - seg.start) / 0.25)), ez = k * k * (3 - 2 * k);
+    const sc = 1 + (e.s - 1) * ez;
+    ctx.save();
+    ctx.translate(e.cx + e.dx * ez, e.cy + e.dy * ez);
+    ctx.scale(sc, sc);
+    ctx.translate(-e.cx, -e.cy);
+    ctx.drawImage(lc, 0, 0);
+    ctx.restore();
   }
 
   /* 合成用の書き出し: 背景・粒子・後処理を省き、歌詞だけを黒地(ブラックバック)/緑地(グリーンバック)に描く。
