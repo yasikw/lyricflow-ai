@@ -78,7 +78,7 @@ const rawGlyphs = (env, it, m, o) => {
     ctx.save();
     ctx.translate(g.x + dx, g.y + dy);
     if (g.vrot) ctx.rotate(PI / 2);
-    if (o.lw) ctx.strokeText(g.ch, ox, oy); else ctx.fillText(g.ch, ox, oy);
+    if (o.lw) L._strokeText(null, ctx, g.ch, ox, oy); else ctx.fillText(g.ch, ox, oy);
     ctx.restore();
   }
   ctx.restore();

@@ -93,7 +93,20 @@ const rowsOf0 = (text, k) => {
   return out;
 };
 /* 1〜maxRows 行の組み方から一番大きく組めるものを選ぶ(行を増やすのは 12% 以上大きくなる時だけ) */
+const fitBestCache = new Map();
+if (document.fonts && document.fonts.addEventListener) document.fonts.addEventListener('loadingdone', () => fitBestCache.clear());
 const fitBest = (text, font, weight, track, lead, maxW, maxH, cap, maxRows = 3) => {
+  // 同じ引数なら同じ結果なので覚えておく(毎フレームの測り直しを省く)
+  const T = L.TYPO || {};
+  const key = [text, font, weight, track, lead, Math.round(maxW), Math.round(maxH), Math.round(cap), maxRows, T.mode, T.ref, T.lockKey].join('\u0001');
+  const hit = fitBestCache.get(key);
+  if (hit) return { rows: hit.rows.slice(), size: hit.size };
+  const r = fitBestRaw(text, font, weight, track, lead, maxW, maxH, cap, maxRows);
+  if (fitBestCache.size > 3000) fitBestCache.clear();
+  fitBestCache.set(key, { rows: r.rows.slice(), size: r.size });
+  return r;
+};
+const fitBestRaw = (text, font, weight, track, lead, maxW, maxH, cap, maxRows = 3) => {
   const n = L.glyphCount(text);
   let best = null;
   const seen = new Set();

@@ -100,7 +100,7 @@ const strokeGlyph = (ctx, it, g) => {
   ctx.translate(g.x, g.y);
   if (g.vrot) ctx.rotate(PI / 2);
   const ox = g.vshift ? it.size * 0.3 * g.vshift : 0, oy = g.vshift ? -it.size * 0.3 * g.vshift : 0;
-  ctx.strokeText(g.ch, ox, oy);
+  L._strokeText(null, ctx, g.ch, ox, oy);
   ctx.restore();
 };
 const regE = (key, def) => L.register('enter', key, def, P);

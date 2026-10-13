@@ -306,7 +306,22 @@ L.measure = it => {
 };
 
 /* maxW × maxH に収まる最大サイズ(線形なので1回の計測で決まる) */
+/* fitSize は同じ引数なら同じ結果(純関数)なので覚えておく。構図は毎フレーム同じ文字を測り直すため、これだけで重い構図が軽くなる。
+   フォントの読み込み完了・組版モードの変化で作り直す */
+const fitCache = new Map();
+if (document.fonts && document.fonts.addEventListener) document.fonts.addEventListener('loadingdone', () => fitCache.clear());
 L.fitSize = (text, font, maxW, maxH, o = {}) => {
+  const T = L.TYPO;
+  const key = text + '\u0001' + font + '\u0001' + Math.round(maxW * 10) + '\u0001' + Math.round(maxH * 10) + '\u0001' + (o.weight ?? '') + '|' + (o.track ?? '') + '|' + (o.lead ?? '') + '|' + (o.vertical ? 1 : 0) + '|' + (o.sx ?? '') + '|' + (o.sy ?? '') + '|' + (o.max ?? '') + '|' + T.mode + '|' + T.ref + '|' + T.lockKey;
+  let v = fitCache.get(key);
+  if (v === undefined) {
+    v = fitSizeRaw(text, font, maxW, maxH, o);
+    if (fitCache.size > 6000) fitCache.clear();
+    fitCache.set(key, v);
+  }
+  return v;
+};
+const fitSizeRaw = (text, font, maxW, maxH, o = {}) => {
   const base = 100;
   const sx = o.sx || 1, sy = o.sy || 1;
   // 組版レイヤーは字の大きさで字間/行送りが変わるので、結果のサイズ区分で測り直す(最大2回)
@@ -481,6 +496,45 @@ L._pattern = (ctx, kind, color, bg) => {
   return ctx.createPattern(c, 'repeat');
 };
 
+/* 大きな字の縁取り(strokeText)は GPU で毎コマ輪郭を作り直すので重い(194px×26字で 60→38fps)。
+   プレビューでは「縁取りだけ」を字ごとの画像にして使い回す(書き出しは従来どおり毎コマ strokeText で正確に描く)。
+   画像は今の拡大率以上の解像度(2^(1/4) 刻みで切り上げ)で作るので、縮小表示になりぼやけない */
+const strokeCache = new Map();
+let strokeCachePx = 0;
+const STROKE_CACHE_MAX_PX = 12e6;          // 合計 約 1200 万画素(≒48MB)まで
+if (document.fonts && document.fonts.addEventListener) document.fonts.addEventListener('loadingdone', () => { strokeCache.clear(); strokeCachePx = 0; });
+L._sfFast = false; L._sfMiss = 0;
+L._strokeText = (env, ctx, ch, x, y) => {
+  const ss = ctx.strokeStyle;
+  if (!L._sfFast || typeof ss !== 'string' || ctx.getLineDash().length || L._sfMiss > 24 || ctx.textAlign !== 'center' || ctx.textBaseline !== 'middle') { ctx.strokeText(ch, x, y); return; }
+  const tr = ctx.getTransform();
+  const sc = Math.sqrt(Math.abs(tr.a * tr.d - tr.b * tr.c));
+  if (!(sc > 0.02)) return;
+  const b = Math.pow(2, Math.ceil(Math.log2(sc) * 4 - 1e-6) / 4);
+  const key = ch + '\u0001' + ctx.font + '|' + ctx.lineWidth + '|' + ss + '|' + ctx.lineJoin + '|' + ctx.miterLimit + '|' + b;
+  let e = strokeCache.get(key);
+  if (e) { strokeCache.delete(key); strokeCache.set(key, e); }
+  else {
+    L._sfMiss++;
+    const c = document.createElement('canvas'), g = c.getContext('2d');
+    g.font = ctx.font; g.textAlign = 'center'; g.textBaseline = 'middle';
+    const mt = g.measureText(ch), pad = ctx.lineWidth / 2 + 2;
+    const l = (mt.actualBoundingBoxLeft || 0) + pad, r = (mt.actualBoundingBoxRight || 0) + pad;
+    const t = (mt.actualBoundingBoxAscent || 0) + pad, d = (mt.actualBoundingBoxDescent || 0) + pad;
+    const cw = Math.ceil((l + r) * b), chh = Math.ceil((t + d) * b);
+    if (cw < 1 || chh < 1 || cw > 2048 || chh > 2048) { ctx.strokeText(ch, x, y); return; }
+    c.width = cw; c.height = chh;
+    g.scale(b, b); g.translate(l, t);
+    g.font = ctx.font; g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.lineWidth = ctx.lineWidth; g.lineJoin = ctx.lineJoin; g.miterLimit = ctx.miterLimit; g.strokeStyle = ss;
+    g.strokeText(ch, 0, 0);
+    e = { c, l, t, w: cw / b, h: chh / b, px: cw * chh };
+    strokeCache.set(key, e); strokeCachePx += e.px;
+    for (const [k, v] of strokeCache) { if (strokeCachePx <= STROKE_CACHE_MAX_PX) break; strokeCache.delete(k); strokeCachePx -= v.px; }
+  }
+  ctx.drawImage(e.c, x - e.l, y - e.t, e.w, e.h);
+};
+
 L._glyph = (env, ctx, ch, x, y, it, color, a, outline, m) => {
   const main = env.pass === 'main';
   const size = it.size;
@@ -511,7 +565,7 @@ L._glyph = (env, ctx, ch, x, y, it, color, a, outline, m) => {
     if (it.strokeDash) ctx.setLineDash(it.strokeDash); else ctx.setLineDash([]);
   }
   const filled = it.fill !== false && !outline;
-  if (hasStroke && filled && it.strokeUnder !== false) ctx.strokeText(ch, x, y);
+  if (hasStroke && filled && it.strokeUnder !== false) L._strokeText(env, ctx, ch, x, y);
   if (filled) {
     let fs = color;
     if (main && it.gradient) {
@@ -535,7 +589,7 @@ L._glyph = (env, ctx, ch, x, y, it, color, a, outline, m) => {
       ctx.setLineDash([L0 * clamp(it.dash), L0]);
       ctx.lineDashOffset = 0;
     }
-    ctx.strokeText(ch, x, y);
+    L._strokeText(env, ctx, ch, x, y);
     ctx.setLineDash([]);
   }
 };
@@ -1214,6 +1268,7 @@ L.makeEnv = (eng, ctx, t, W, H, cut, energy, boost) => {
     totalBeats: tl.bpm && tl.duration ? Math.max(1, Math.round(tl.duration * tl.bpm / 60)) : null,
   };
   L.makeHelpers(env);
+  L._sfFast = !eng.exporting; L._sfMiss = 0;     // 縁取りの画像キャッシュ: プレビューだけ使う(コマごとに作り直し数を数え直す)
   return env;
 };
 

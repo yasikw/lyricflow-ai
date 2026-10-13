@@ -1374,7 +1374,7 @@ treat('doubleLine', {
         c.globalAlpha = clamp(a * itA(it2));
         if (g.vrot) c.rotate(Math.PI / 2);
         const ox = g.vshift ? s * 0.3 * g.vshift : 0, oy = g.vshift ? -s * 0.3 * g.vshift : 0;
-        c.strokeText(ch, ox, oy);
+        L._strokeText(env2, c, ch, ox, oy);
       });
       ctx.restore();
     }));

@@ -124,13 +124,30 @@ class FXEngine {
     const scale = d.scale ?? 0.9;                       // 画面高に対するキャラの高さ
     const sh = Math.max(64, Math.round(H * scale));
     const sw = Math.max(64, Math.round(sh * Math.min(1.6, st.aspect() * 1.25)));
-    const q = this.quality === 'draft' ? 0.5 : 1;
-    if (!st.renderAt(t, window.Live2DStage.driver(this, d, st), Math.round(sw * q), Math.round(sh * q))) return;
     const cx = W * (d.x ?? 0.5), by = H * (d.y ?? 1.04);
-    this._charBoxes.push({ key: 'live2d', x0: cx - sw / 2, y0: by - sh, x1: cx + sw / 2, y1: by });
+    const X0 = cx - sw / 2, Y0 = by - sh;
+    this._charBoxes.push({ key: 'live2d', x0: X0, y0: Y0, x1: X0 + sw, y1: by });
+    // 画面に映る部分だけを描く(大きく拡大してはみ出していても、描く量は画面の大きさまで)
+    let vx0 = Math.max(0, X0), vx1 = Math.min(W, X0 + sw);
+    if (d.mirror) { vx0 = Math.max(X0, 2 * cx - W); vx1 = Math.min(X0 + sw, 2 * cx); }   // 反転時は画面 [0,W] に映るキャラ側の範囲
+    const vy0 = Math.max(0, Y0), vy1 = Math.min(H, by);
+    if (vx1 - vx0 < 2 || vy1 - vy0 < 2) return;
+    // 解像度: 下書きは半分。プレビューは 1 枚あたり約 90 万画素までに抑える(書き出しは等倍)
+    let q = this.quality === 'draft' ? 0.5 : 1;
+    const px = (vx1 - vx0) * (vy1 - vy0);
+    if (!this.exporting && q === 1 && px > 900000) q = Math.sqrt(900000 / px);
+    const view = { ox: (vx0 - X0) / sw, oy: (vy0 - Y0) / sh, ow: (vx1 - vx0) / sw, oh: (vy1 - vy0) / sh };
+    // プレビューの再生中は Live2D の更新を 30 コマ/秒にする(物理・変形の計算が重いので、間のコマは前の絵を使う)。
+    // 書き出しは毎コマ計算する
+    const sig = [Math.round(sw * q), Math.round(sh * q), view.ox.toFixed(4), view.oy.toFixed(4), view.ow.toFixed(4), view.oh.toFixed(4), d.mirror ? 1 : 0].join('|');
+    const reuse = !this.exporting && st._lastT != null && t > st._lastT && t - st._lastT < 1 / 31 && st._lastSig === sig;
+    if (!reuse) {
+      if (!st.renderAt(t, window.Live2DStage.driver(this, d, st), Math.round(sw * q), Math.round(sh * q), view)) return;
+      st._lastT = t; st._lastSig = sig;
+    }
     ctx.save();
     if (d.mirror) { ctx.translate(cx, 0); ctx.scale(-1, 1); ctx.translate(-cx, 0); }
-    ctx.drawImage(st.canvas, cx - sw / 2, by - sh, sw, sh);
+    ctx.drawImage(st.canvas, vx0, vy0, vx1 - vx0, vy1 - vy0);
     ctx.restore();
   }
   /** 書き出し前の Live2D モデルの読み込み (editor.startRender が呼ぶ) */
@@ -913,7 +930,9 @@ class FXEngine {
     if (mc.width !== gw || mc.height !== gh) { mc.width = gw; mc.height = gh; }
     mx.clearRect(0, 0, gw, gh);
     mx.drawImage(this.charLayer, 0, 0, gw, gh);
-    const d = mx.getImageData(0, 0, gw, gh).data;
+    return this._maskFrom(mx.getImageData(0, 0, gw, gh).data, gw, gh, W, H);
+  }
+  _maskFrom(d, gw, gh, W, H) {
     // 1 マス広げて(踊りの揺れの分)、累積和で矩形内の占有を O(1) で数える
     const occ = new Uint8Array(gw * gh);
     for (let y = 0; y < gh; y++) for (let x = 0; x < gw; x++) if (d[(y * gw + x) * 4 + 3] > 40) {
@@ -931,8 +950,23 @@ class FXEngine {
     const n = S[d * W1 + c] - S[b * W1 + c] - S[d * W1 + a] + S[b * W1 + a];
     return n / ((c - a) * (d - b));
   }
-  _placeAvoid(bb, W, H) {
-    const m = this._charMask(W, H);
+  /* プレビュー用: createImageBitmap で縮小コピーを非同期に取り、読めたら占有格子を作る(同時に1つだけ) */
+  _charMaskAsync(W, H) {
+    if (this._maskBusy) return this._maskBusy;
+    const gw = 64, gh = Math.max(12, Math.round(64 * H / W));
+    this._maskBusy = createImageBitmap(this.charLayer, { resizeWidth: gw, resizeHeight: gh, resizeQuality: 'low' })
+      .then(bmp => {
+        if (!this._maskCv2) { this._maskCv2 = document.createElement('canvas'); this._maskCtx2 = this._maskCv2.getContext('2d', { willReadFrequently: true }); }
+        const mc = this._maskCv2, mx = this._maskCtx2;
+        if (mc.width !== gw || mc.height !== gh) { mc.width = gw; mc.height = gh; }
+        mx.clearRect(0, 0, gw, gh); mx.drawImage(bmp, 0, 0); bmp.close && bmp.close();
+        return this._maskFrom(mx.getImageData(0, 0, gw, gh).data, gw, gh, W, H);
+      })
+      .finally(() => { this._maskBusy = null; });
+    return this._maskBusy;
+  }
+  _placeAvoid(bb, W, H, m) {
+    m = m || this._charMask(W, H);
     const bw = bb.x1 - bb.x0, bh = bb.y1 - bb.y0, cx = (bb.x0 + bb.x1) / 2, cy = (bb.y0 + bb.y1) / 2;
     const base = this._overlap(m, bb.x0, bb.y0, bb.x1, bb.y1);
     if (base < 0.04) return { dx: 0, dy: 0, s: 1 };
@@ -956,6 +990,11 @@ class FXEngine {
     return best;
   }
   _drawLyricsAvoid(t, W, H, colors, energy, boost, fx) {
+    // 置き場所が決まって「動かさない」と分かった区間は、別レイヤーを使わずそのまま描く(1 枚分の合成を省く)
+    if (this._avoid) {
+      const sg = this._segAt(t), ee = sg && this._avoid.get(sg.key);
+      if (ee && t - sg.start >= 0.7 && ee.dx === 0 && ee.dy === 0 && ee.s === 1) { this._drawLyricLayer(t, W, H, colors, energy, boost, fx); return; }
+    }
     if (!this.lyricLayer) { this.lyricLayer = document.createElement('canvas'); this.lyctx = this.lyricLayer.getContext('2d'); }
     const lc = this.lyricLayer, lx = this.lyctx;
     if (lc.width !== W || lc.height !== H) { lc.width = W; lc.height = H; }
@@ -973,9 +1012,18 @@ class FXEngine {
     if (seg && bb) {
       const area = (bb.x1 - bb.x0) * (bb.y1 - bb.y0);
       e = this._avoid.get(seg.key);
-      if ((!e || (area > e.area * 1.25 && t - seg.start < 0.7)) && area > 1) {
-        const pl = this._placeAvoid(bb, W, H);
-        e = { ...pl, area, cx: (bb.x0 + bb.x1) / 2, cy: (bb.y0 + bb.y1) / 2 };
+      // 決め直すのは区間の頭 0.7 秒の間に最大 3 回、0.15 秒以上あけて(枠が 25% 以上大きくなった時だけ)
+      const want = (!e || (area > e.area * 1.25 && t - seg.start < 0.7 && (e.n || 1) < 3 && t - (e.at ?? -1) > 0.15)) && area > 1;
+      if (want) {
+        const ne = { area, cx: (bb.x0 + bb.x1) / 2, cy: (bb.y0 + bb.y1) / 2, at: t, n: (e ? e.n || 1 : 0) + 1 };
+        if (this.exporting || !window.createImageBitmap) {
+          Object.assign(ne, this._placeAvoid(bb, W, H, this._charMask(W, H)));    // 書き出しは同期(毎回同じ結果)
+        } else {
+          // プレビューは GPU を止めないよう非同期にキャラの形を読む(読めるまでは前の置き場所のまま)
+          Object.assign(ne, e ? { dx: e.dx, dy: e.dy, s: e.s } : { dx: 0, dy: 0, s: 1 });
+          this._charMaskAsync(W, H).then(m => { if (m && this._avoid && this._avoid.get(seg.key) === ne) Object.assign(ne, this._placeAvoid(bb, W, H, m)); }).catch(() => {});
+        }
+        e = ne;
         if (this._avoid.size > 400) this._avoid.clear();
         this._avoid.set(seg.key, e);
       }

@@ -358,6 +358,9 @@ class Live2DStage {
       } catch (e) { /* モーション無しのモデル */ }
       this._choreoKey = null;
       im.on('afterMotionUpdate', () => this._apply());
+      // pixi-live2d-display は描画のたびに内部更新(物理・変形)をもう一度走らせる。直前に同じ時刻で更新済みなので省く
+      const upd = im.update.bind(im);
+      im.update = (dt, now) => { if (this._inRender && !dt) return; return upd(dt, now); };
       this.model = model;
       this.app.stage.addChild(model);
       this.baseW = im.width; this.baseH = im.height;
@@ -379,15 +382,22 @@ class Live2DStage {
     }
   }
   /* 時刻 t の姿を描く。drive(t) → {p:{パラメータ}, dy, rot, dx}。w×h は描画先の大きさ */
-  renderAt(t, drive, w, h) {
+  renderAt(t, drive, w, h, view) {
     if (!this.ready || !this.model) return false;
-    if (this.canvas.width !== w || this.canvas.height !== h) this.app.renderer.resize(w, h);
+    // view: 全体(w×h)のうち実際に描く部分(割合)。キャンバスはその部分の大きさだけ用意する
+    const v = view || { ox: 0, oy: 0, ow: 1, oh: 1 };
+    const cw = Math.max(2, Math.round(w * v.ow)), ch = Math.max(2, Math.round(h * v.oh));
+    if (this.canvas.width !== cw || this.canvas.height !== ch) this.app.renderer.resize(cw, ch);
     const im = this.model.internalModel;
     const STEP = 1 / 30;
     if (this.simT == null || t < this.simT - 1e-4 || t - this.simT > 0.5) this.simT = t - 1.2;   // 時刻が飛んだら物理を回し直す
-    while (this.simT + STEP <= t - 1e-6) {
-      this.simT += STEP; this.cur = drive(this.simT); this.elapsed += STEP * 1000;
-      im.update(STEP * 1000, this.elapsed);
+    // 追いつき(シーク直後など大きく空いた時だけ 1/30 秒刻み)。普段の再生は 1 フレーム 1 回の更新で済ませる
+    // (物理・モーション・モデルの変形の更新が重いので、回数を減らすのが一番効く)
+    if (t - this.simT > 0.1) {
+      while (this.simT + STEP <= t - 0.05) {
+        this.simT += STEP; this.cur = drive(this.simT); this.elapsed += STEP * 1000;
+        im.update(STEP * 1000, this.elapsed);
+      }
     }
     const dt = Math.max(0, t - this.simT);
     this.simT = t; this.cur = drive(t); this.elapsed += dt * 1000;
@@ -397,10 +407,11 @@ class Live2DStage {
     const m = this.model;
     m.scale.set(s);
     m.pivot.set(this.baseW / 2, this.baseH);
-    m.position.set(w / 2 + (this.cur.dx || 0) * h, h + (this.cur.dy || 0) * h);
+    m.position.set(w / 2 + (this.cur.dx || 0) * h - v.ox * w, h + (this.cur.dy || 0) * h - v.oy * h);
     m.rotation = ((this.cur.rot || 0) * Math.PI) / 180;
     m.deltaTime = 0; m.elapsedTime = this.elapsed;                         // 描画時の内部更新で時間を進めない
-    this.app.renderer.render(this.app.stage);
+    this._inRender = true;                                                 // 描画時のもう 1 回の内部更新(直前と同じ姿勢)は省く
+    try { this.app.renderer.render(this.app.stage); } finally { this._inRender = false; }
     return true;
   }
   aspect() { return this.ready ? this.baseW / this.baseH : 0.6; }

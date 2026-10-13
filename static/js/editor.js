@@ -513,7 +513,7 @@ class Editor {
         const { o } = charObj(cdrag.key);
         o.x = Math.round(Math.min(1.5, Math.max(-0.5, cdrag.x0 + (p.x - cdrag.px) / c.width)) * 1000) / 1000;
         o.y = Math.round(Math.min(2.5, Math.max(0.05, cdrag.y0 + (p.y - cdrag.py) / c.height)) * 1000) / 1000;
-        this.engine.render(this.t); this._drawGuides();
+        if (!this._dragRaf) this._dragRaf = requestAnimationFrame(() => { this._dragRaf = 0; if (!this.playing) { this.engine.render(this.t); this._drawGuides(); } });
         return;
       }
       if (!drag) {
@@ -522,7 +522,11 @@ class Editor {
         this._hoverChar = ch ? ch.key : null;
         c.style.cursor = lyr || ch ? 'move' : 'default';
         c.title = ch ? 'ドラッグで移動・ホイールで大きさ(文字と重なる時は ⌥ を押しながら)' : '';
-        if (!this.playing) { this.engine.render(this.t); this._drawGuides(); }
+        // 一時停止中の枠表示は 1 フレームにまとめて描き直す(マウスの動きごとに全体を描かない)
+        if (!this.playing && (this._hoverChar || this._hoverPrev) && !this._hoverRaf) {
+          this._hoverRaf = requestAnimationFrame(() => { this._hoverRaf = 0; this.engine.render(this.t); this._drawGuides(); });
+        }
+        this._hoverPrev = this._hoverChar;
         return;
       }
       const st = this.tl.lyricStyle;
@@ -3216,7 +3220,7 @@ alert('LyricFlow: ' + D.cuts.length + ' text layers created.' + (miss.length ? '
         </div>
       </div>`;
     document.body.appendChild(bg);
-    const close = () => { this._exporting = false; bg.remove(); this.fitStage(); };
+    const close = () => { this._exporting = false; this.engine.exporting = false; bg.remove(); this.fitStage(); };
     bg.querySelector('.x-btn').onclick = close;
     bg.querySelector('#exp-cancel').onclick = close;
     bg.onclick = e => { if (e.target === bg) close(); };
@@ -3291,6 +3295,7 @@ alert('LyricFlow: ' + D.cuts.length + ' text layers created.' + (miss.length ? '
     const total = Math.max(1, Math.round(dur * FPS));
     this.pause();
     this._exporting = true;
+    this.engine.exporting = true;   // 書き出し中は決定論の同期処理を使う(キャラ避けの判定など)
     const prevQ = this.engine.quality;
     this.engine.quality = 'full';
     this.engine.resize(W, H);
@@ -3391,6 +3396,7 @@ alert('LyricFlow: ' + D.cuts.length + ' text layers created.' + (miss.length ? '
       else setP('中止しました', 0);
     } finally {
       this._exporting = false;
+      this.engine.exporting = false;
       this.engine.quality = prevQ;
       this.engine.keyMode = null;
       this.fitStage();

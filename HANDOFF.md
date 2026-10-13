@@ -97,6 +97,19 @@
   画面幅の82%を超える構図は動かさない。避ける時はおまかせで busy 構図を0.2倍(`L.avoidingChars(tl)`)。
 - エディター: プレビューのキャラをドラッグで移動・ホイールで大きさ(文字の枠と重なる時は ⌥)。位置は x:-0.5〜1.5、y(足元):0.05〜2.5、大きさ 0.1〜4。
 
+## プレビューのカクつき対策(2026-10-13) — 書き出しの絵は変えない
+
+- `FXEngine.exporting`(editor.startRender が立てる)で「書き出し=毎コマ正確・同期」「プレビュー=間引き/非同期」を切り替える。
+- Live2D: 画面に映る範囲だけ描く+プレビューは 1 枚 90 万画素まで、プレビュー再生中は 30 コマ/秒で更新(間は前の絵)。
+  `im.update` は 1 コマ 1 回(描画中の二重更新を `_inRender` で止める)。
+- 避け配置のマスクはプレビューでは `createImageBitmap` で非同期(getImageData の GPU 待ちを避ける)。
+- `L.fitSize` / h_ 系 `fitBest` はメモ化(TYPO 状態込みのキー、フォント読込で破棄)。
+- **大きな字の縁取り(strokeText)が GPU で最重**(194px×26字で 60→38fps)。プレビューでは `L._strokeText` が縁取りだけを
+  字ごとの画像にキャッシュ(拡大率 2^(1/4) 刻みで切り上げ・合計 1200 万画素の LRU・1 コマの新規作成 24 個まで・破線/グラデは直描き)。
+  `L._sfFast` は `L.makeEnv` が `!eng.exporting` で毎コマ設定。新しく縁取りを描くパックは `ctx.strokeText` でなく `L._strokeText(env|null, ctx, ch, x, y)`
+  を使う(textAlign=center / textBaseline=middle の時だけキャッシュ、それ以外は直描きに落ちる)。
+- 実測(1280×720・Live2D+避け配置・サビの h_underline+doubleLine): 36→59fps。他区間も 57〜60fps。
+
 ## 連携が切れたときの復帰(重要)
 
 - `_loadAtelier()` は**成功時のみキャッシュ**する。失敗をキャッシュすると、後から
