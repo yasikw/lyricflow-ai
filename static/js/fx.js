@@ -101,7 +101,7 @@ class FXEngine {
     const sh = Math.max(64, Math.round(H * scale));
     const sw = Math.max(64, Math.round(sh * Math.min(1.6, st.aspect() * 1.25)));
     const q = this.quality === 'draft' ? 0.5 : 1;
-    if (!st.renderAt(t, window.Live2DStage.driver(this, d), Math.round(sw * q), Math.round(sh * q))) return;
+    if (!st.renderAt(t, window.Live2DStage.driver(this, d, st), Math.round(sw * q), Math.round(sh * q))) return;
     const cx = W * (d.x ?? 0.5), by = H * (d.y ?? 1.04);
     ctx.save();
     if (d.mirror) { ctx.translate(cx, 0); ctx.scale(-1, 1); ctx.translate(-cx, 0); }

@@ -70,10 +70,13 @@
 
 ## Live2D キャラ層の契約 — 破壊的変更禁止(2026-10-13)
 
-- タイムライン: `timeline.live2d = {enabled, model_url, model_name, style:'groove'|'bounce'|'idol'|'calm'|'none', intensity, lipsync, lipGate, scale, x, y, mirror, offset}`
+- タイムライン: `timeline.live2d = {enabled, model_url, model_name, style:'motion'(既定)|'groove'|'bounce'|'idol'|'calm'|'none', intensity, lipsync, lipGate, scale, x, y, mirror, offset}`
 - 描画: `static/js/live2d_stage.js`(`window.Live2DStage`)。PixiJS 6.5.10 + pixi-live2d-display 0.4.0(cubism4, MIT, `static/vendor/live2d/` に同梱)+ 公式 Cubism Core。
   FXEngine `_drawLive2D()`(3Dダンスの直後・歌詞の前)/ `prepareLive2D()`(書き出し前)。姿勢は時刻の関数(drive)、物理は 1/30 秒刻み・時刻が飛んだら 1.2 秒前から回し直す。
   モデルのアイドルモーションと自動まばたきは止め、まばたきも時刻から決める(決定論)。パラメータは afterMotionUpdate で設定(髪・服の物理が追従する)。
+- 'motion' スタイル: モデル自身の motion3.json を**自前で評価**(pixi の再生は内部時計なので使わない。直線/ベジェ/階段/逆階段、PartOpacity も)。
+  歌詞の1行ごとにモーションを切り替え(サビ/盛り上がり=動きの大きいモーション、行の間が空けば一番おだやかなモーション)、長さは小節に合わせて0.75〜1.35倍に伸縮、
+  切り替えはクロスフェード。その上に拍のうなずき・沈み・肩、サビで頬・笑顔・眉、間奏で視線。モーションの無いモデルはグルーヴで代用。
 - 口パク: 歌詞の語のタイミング × ボーカル帯(250〜3500Hz)の音量包絡(`computeVocalEnvelope`, 1/60 秒, `engine.vocal`)× 語のモーラ(かな→母音で口の形)。
   `lipGate:false` で音量だけ。踊り: `tl.bpm` の拍に合わせた頭・体・腕(`~Param…` は最小〜最大の正規化値)、BPM 無しは音量でゆっくり。
 - **Cubism Core とサンプルモデル(Hiyori)は Live2D の許諾があるので git に入れない**: `./scripts/fetch_live2d.sh` が公式CDN/公式サンプルから取得

@@ -92,7 +92,7 @@ function dance(engine, d, t) {
   const S = Math.sin, PI = Math.PI;
   const p = {};
   let dy = 0, rot = 0, dx = 0;
-  const style = d.style || 'groove';
+  const style = !d.style || d.style === 'motion' ? 'groove' : d.style;   // モーションの無いモデルはグルーヴで代用
   if (style === 'groove') {                         // 横揺れ+拍で軽く沈む
     p.ParamAngleX = 13 * amp * S(PI * b);
     p.ParamAngleZ = 8 * amp * S(PI * b + 0.4);
@@ -152,6 +152,163 @@ function dance(engine, d, t) {
   return { p, dy, rot, dx };
 }
 
+/* ---------------- モデル自身のモーション(motion3.json)を時刻から評価する ----------------
+   pixi-live2d-display の再生は内部時計に依存するので、決定論のために自前で読む。
+   Segments: [t0, v0, 種類, 点…] 種類 0=直線 1=ベジェ(制御点2+終点) 2=階段 3=逆階段 */
+function parseMotion(json, name, fin, fout) {
+  const meta = json.Meta || {};
+  const restricted = !!meta.AreBeziersRestricted;
+  const curves = [];
+  for (const c of json.Curves || []) {
+    if (c.Target !== 'Parameter' && c.Target !== 'PartOpacity') continue;
+    const sg = c.Segments || [];
+    if (sg.length < 2) continue;
+    const segs = [];
+    let x0 = sg[0], y0 = sg[1], i = 2;
+    while (i < sg.length) {
+      const ty = sg[i];
+      if (ty === 1) { segs.push({ ty, p: [x0, y0, sg[i + 1], sg[i + 2], sg[i + 3], sg[i + 4], sg[i + 5], sg[i + 6]] }); x0 = sg[i + 5]; y0 = sg[i + 6]; i += 7; }
+      else { segs.push({ ty, p: [x0, y0, sg[i + 1], sg[i + 2]] }); x0 = sg[i + 1]; y0 = sg[i + 2]; i += 3; }
+    }
+    curves.push({ part: c.Target === 'PartOpacity', id: c.Id, first: sg[1], segs });
+  }
+  const dur = meta.Duration || 1;
+  // 動きの大きさ(頭・体・腕の変化量/秒) … サビでは大きい動きを選ぶため
+  let act = 0;
+  for (const c of curves) {
+    if (c.part || !/Angle|Arm|Hand|Body|Shoulder/.test(c.id)) continue;
+    let prev = c.first;
+    for (const g of c.segs) { const y = g.ty === 1 ? g.p[7] : g.p[3]; act += Math.abs(y - prev) / (/Angle/.test(c.id) ? 30 : 1); prev = y; }
+  }
+  return { name, dur, loop: meta.Loop !== false, fin: fin ?? meta.FadeInTime ?? 0.5, fout: fout ?? meta.FadeOutTime ?? 0.5, curves, restricted, act: act / dur };
+}
+function bez(a, b, c, d, s) { const u = 1 - s; return u * u * u * a + 3 * u * u * s * b + 3 * u * s * s * c + s * s * s * d; }
+function evalCurve(c, t, restricted) {
+  const segs = c.segs;
+  if (t <= segs[0].p[0]) return c.first;
+  for (const g of segs) {
+    const p = g.p;
+    const x1 = g.ty === 1 ? p[6] : p[2];
+    if (t > x1) continue;
+    if (g.ty === 0) { const f = (t - p[0]) / ((p[2] - p[0]) || 1); return p[1] + (p[3] - p[1]) * f; }
+    if (g.ty === 2) return p[1];
+    if (g.ty === 3) return p[3];
+    // ベジェ: 時間軸の s を二分法で求めてから値を出す(制限付きなら s は時間に比例)
+    let sv;
+    if (restricted) sv = (t - p[0]) / ((p[6] - p[0]) || 1);
+    else { let lo = 0, hi = 1; for (let k = 0; k < 14; k++) { const m = (lo + hi) / 2; if (bez(p[0], p[2], p[4], p[6], m) < t) lo = m; else hi = m; } sv = (lo + hi) / 2; }
+    return bez(p[1], p[3], p[5], p[7], sv);
+  }
+  const g = segs[segs.length - 1];
+  return g.ty === 1 ? g.p[7] : g.p[3];
+}
+function evalMotion(m, lt) {
+  const t = m.loop ? ((lt % m.dur) + m.dur) % m.dur : clamp(lt, 0, m.dur);
+  const out = { p: {}, parts: {} };
+  for (const c of m.curves) (c.part ? out.parts : out.p)[c.id] = evalCurve(c, t, m.restricted);
+  return out;
+}
+
+/* 振付表: 歌詞の1行ごとにモーションを切り替える(サビ/盛り上がりは大きい動き、静かな所は小さい動き)。
+   モーションの長さは小節に合わせて伸縮。行の間が空いたら一番おだやかなモーションで待つ */
+function buildChoreo(engine, d, stage) {
+  const tl = engine.timeline || {};
+  const lyr = (tl.tracks && tl.tracks.lyrics) || [];
+  const key = [stage.url, lyr.length, lyr.length ? lyr[0].start + '/' + lyr[lyr.length - 1].end : '', tl.bpm || 0, d.seed || 0].join('|');
+  if (stage._choreoKey === key) return stage._choreo;
+  const ms = stage.motions;
+  const lines = new Map();
+  for (const w of lyr) {
+    if (!w || !String(w.word || '').trim()) continue;
+    const k = w.line ?? 0, L = lines.get(k) || { start: Infinity, end: -Infinity };
+    L.start = Math.min(L.start, +w.start || 0); L.end = Math.max(L.end, +w.end || +w.start || 0); lines.set(k, L);
+  }
+  const ls = [...lines.values()].filter(l => isFinite(l.start)).sort((a, b) => a.start - b.start);
+  const byAct = ms.map((m, i) => i).sort((a, b) => ms[a].act - ms[b].act);
+  const calm = byAct[0], half = Math.max(1, Math.ceil(byAct.length / 2));
+  const lowPool = byAct.slice(0, half + 1), highPool = byAct.slice(Math.max(0, byAct.length - half - 1));
+  const bl = tl.bpm ? 60 / tl.bpm : 0.5, bar = bl * 4;
+  const speedFor = m => { const n = Math.max(1, Math.round(m.dur / bar)); return clamp(m.dur / (n * bar), 0.75, 1.35); };
+  const ent = [{ start: -1e9, mi: calm, speed: 1 }];
+  let prev = -1;
+  ls.forEach((l, i) => {
+    let e = 0, n = 0;
+    for (let x = l.start; x <= l.end; x += 0.25) { e += engine.energyAt(x); n++; }
+    const sc = engine.sceneAt ? engine.sceneAt((l.start + l.end) / 2) : null;
+    const hot = (sc && /chorus|サビ/i.test(sc.label || '')) || e / Math.max(1, n) > 0.68;
+    const pool = (hot ? highPool : lowPool).filter(k => k !== prev);
+    const mi = (pool.length ? pool : byAct)[Math.floor(hash01(stage.url, i, d.seed || 0) * (pool.length || byAct.length))];
+    ent.push({ start: l.start - 0.25, mi, speed: speedFor(ms[mi]), hot });
+    prev = mi;
+    const next = ls[i + 1];
+    if (next && next.start - l.end > 2.6) { ent.push({ start: l.end + 0.4, mi: calm, speed: 1 }); prev = calm; }
+  });
+  stage._choreoKey = key; stage._choreo = ent;
+  return ent;
+}
+const smooth = x => { x = clamp(x); return x * x * (3 - 2 * x); };
+/* 時刻 t のモーションの値(前のモーションからクロスフェード) */
+function motionAt(engine, d, stage, t) {
+  const ent = buildChoreo(engine, d, stage);
+  let lo = 0, hi = ent.length - 1, k = 0;
+  while (lo <= hi) { const m = (lo + hi) >> 1; if (ent[m].start <= t) { k = m; lo = m + 1; } else hi = m - 1; }
+  const cur = ent[k], mc = stage.motions[cur.mi];
+  const ev = e => evalMotion(stage.motions[e.mi], Math.max(0, t - Math.max(0, e.start)) * e.speed);
+  const a = ev(cur);
+  const w = smooth((t - cur.start) / Math.max(0.2, mc.fin));
+  if (w >= 1 || k === 0) return { v: a, hot: !!cur.hot };
+  const b = ev(ent[k - 1]);
+  const out = { p: {}, parts: {} };
+  for (const id of new Set([...Object.keys(a.p), ...Object.keys(b.p)])) {
+    const da = stage.def[id] ?? 0;
+    out.p[id] = lerp(b.p[id] ?? da, a.p[id] ?? da, w);
+  }
+  for (const id of new Set([...Object.keys(a.parts), ...Object.keys(b.parts)])) out.parts[id] = lerp(b.parts[id] ?? 1, a.parts[id] ?? 1, w);
+  return { v: out, hot: !!cur.hot || (!!ent[k - 1].hot && w < 0.5) };
+}
+
+/* 'motion' スタイル: モデルのモーション + 拍のノリ(うなずき・沈み・肩)+ 表情(サビで頬・笑顔・眉)+ 視線 */
+function motionDance(engine, d, stage, t) {
+  const tl = engine.timeline || {};
+  const k = d.intensity ?? 0.7;
+  const { v, hot } = motionAt(engine, d, stage, t);
+  const p = {};
+  const gain = 0.55 + 0.75 * k;                      // モーションの振れ幅
+  for (const id in v.p) { const df = stage.def[id] ?? 0; p[id] = df + (v.p[id] - df) * (/Eye|Mouth|Brow|Cheek/.test(id) ? 1 : gain); }
+  const e = clamp(engine.energyAt(t));
+  const bl = tl.bpm ? 60 / tl.bpm : 0;
+  if (bl) {
+    const b = (t - (tl.beatOffset || 0) - (d.offset || 0)) / bl, ph = b - Math.floor(b);
+    const kick = Math.exp(-ph * 6.5) * k * (0.6 + 0.6 * e);
+    p.ParamAngleY = (p.ParamAngleY ?? 0) - 7 * kick;          // 拍でうなずく
+    p.ParamBodyAngleY = (p.ParamBodyAngleY ?? 0) - 4 * kick;  // 体が沈む
+    p.ParamAngleZ = (p.ParamAngleZ ?? 0) + 3 * k * Math.sin(Math.PI * b);
+    if (stage.idx.ParamShoulder != null) { const [mn, mx] = stage.rng.ParamShoulder; p.ParamShoulder = (p.ParamShoulder ?? stage.def.ParamShoulder ?? 0) + (mx - mn) * 0.18 * kick; }
+  }
+  // 表情: サビ・盛り上がりで頬を染めて笑顔、眉を上げる
+  const joy = clamp((hot ? 0.75 : 0) + (e - 0.55) * 1.2) * (0.5 + 0.5 * k);
+  if (stage.idx.ParamCheek != null) p.ParamCheek = Math.max(p.ParamCheek ?? 0, joy);
+  p.ParamEyeLSmile = Math.max(p.ParamEyeLSmile ?? 0, joy * 0.7);
+  p.ParamEyeRSmile = Math.max(p.ParamEyeRSmile ?? 0, joy * 0.7);
+  p.ParamBrowLY = (p.ParamBrowLY ?? 0) + joy * 0.4;
+  p.ParamBrowRY = (p.ParamBrowRY ?? 0) + joy * 0.4;
+  // 視線: 歌っている間はこちらを見る、間奏では少し見回す
+  const words = engine._l2dWords(tl);
+  const wi = wordAt(words, t);
+  const singing = wi >= 0 && t <= (words[wi].end || words[wi].start) + 0.6;
+  const look = singing ? 0 : 1;
+  p.ParamEyeBallX = lerp((p.ParamEyeBallX ?? 0) * 0.3, Math.sin(t * 0.9) * 0.6, look);
+  p.ParamEyeBallY = lerp((p.ParamEyeBallY ?? 0) * 0.3, Math.sin(t * 0.63 + 1) * 0.3, look);
+  // 呼吸・まばたき(モーションの目の開きに掛け合わせる)
+  p.ParamBreath = 0.5 + 0.5 * Math.sin(2 * Math.PI * t / 3.4);
+  const win = Math.floor(t / 3.7), bt = win * 3.7 + 0.4 + hash01('blink', win) * 2.6, db = (t - bt) / 0.16;
+  const blink = db > 0 && db < 1 ? 1 - Math.sin(Math.PI * db) : 1;
+  p.ParamEyeLOpen = (p.ParamEyeLOpen ?? 1) * blink;
+  p.ParamEyeROpen = (p.ParamEyeROpen ?? 1) * blink;
+  const dy = bl ? -Math.pow(Math.sin(Math.PI * ((t - (tl.beatOffset || 0)) / bl)), 2) * 0.008 * k : 0;
+  return { p, parts: v.parts, dy, rot: 0, dx: 0, mouthForm: p.ParamMouthForm };
+}
+
 class Live2DStage {
   constructor() {
     this.canvas = document.createElement('canvas');
@@ -183,6 +340,23 @@ class Live2DStage {
       const ids = cm.getModel().parameters.ids;
       this.idx = {}; this.rng = {};
       for (let i = 0; i < ids.length; i++) { this.idx[ids[i]] = i; this.rng[ids[i]] = [cm.getParameterMinimumValue(i), cm.getParameterMaximumValue(i)]; }
+      this.def = {};
+      for (let i = 0; i < ids.length; i++) this.def[ids[i]] = cm.getParameterDefaultValue(i);
+      // モデル自身のモーションを全部読む(グループは問わない)
+      this.motions = [];
+      try {
+        const mj = await (await fetch(url)).json();
+        const groups = (mj.FileReferences && mj.FileReferences.Motions) || {};
+        const base = new URL(url, location.href);
+        const list = [];
+        for (const g of Object.keys(groups)) for (const m of groups[g] || []) if (m && m.File) list.push({ g, m });
+        const seen = new Set();
+        for (const { g, m } of list) {
+          if (seen.has(m.File)) continue; seen.add(m.File);
+          try { const js = await (await fetch(new URL(m.File, base))).json(); this.motions.push(parseMotion(js, g + ':' + m.File, m.FadeInTime, m.FadeOutTime)); } catch (e) { /* 読めないモーションは飛ばす */ }
+        }
+      } catch (e) { /* モーション無しのモデル */ }
+      this._choreoKey = null;
       im.on('afterMotionUpdate', () => this._apply());
       this.model = model;
       this.app.stage.addChild(model);
@@ -193,6 +367,7 @@ class Live2DStage {
   }
   _apply() {
     const cm = this.model.internalModel.coreModel, p = this.cur.p;
+    if (this.cur.parts) for (const id in this.cur.parts) cm.setPartOpacityById(id, clamp(this.cur.parts[id]));
     for (const key in p) {
       const norm = key[0] === '~';
       const id = norm ? key.slice(1) : key;
@@ -235,14 +410,17 @@ window.Live2DStage = {
   create: () => new Live2DStage(),
   available: () => Live2DStage.available(),
   /* FX エンジン用の駆動関数(時刻 → 姿勢) */
-  driver: (engine, d) => t => {
-    const dn = dance(engine, d, t);
+  driver: (engine, d, stage) => t => {
+    const useMotion = (d.style || 'motion') === 'motion' && stage && stage.motions && stage.motions.length;
+    const dn = useMotion ? motionDance(engine, d, stage, t) : dance(engine, d, t);
     // 口は 3 点平均で少しなめらかに(時刻の関数のまま)
     const a = lip(engine, d, t), b = lip(engine, d, t - 0.025), c = lip(engine, d, t - 0.05);
     dn.p.ParamMouthOpenY = (a.open * 2 + b.open + c.open) / 4;
-    dn.p.ParamMouthForm = (a.form * 2 + b.form + c.form) / 4;
+    const form = (a.form * 2 + b.form + c.form) / 4;
+    dn.p.ParamMouthForm = dn.mouthForm != null ? lerp(dn.mouthForm, form, 0.75) : form;
     return dn;
   },
+  hasMotions: stage => !!(stage && stage.motions && stage.motions.length),
   SAMPLE: { name: 'Hiyori(Live2D 公式サンプル)', url: '/live2d-samples/hiyori/Hiyori.model3.json' },
   _moras: moras,
 };

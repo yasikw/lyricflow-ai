@@ -1693,7 +1693,7 @@ alert('LyricFlow: ' + D.cuts.length + ' text layers created.' + (miss.length ? '
     const ok = !!(window.Live2DStage && window.Live2DStage.available());
     const models = [window.Live2DStage ? window.Live2DStage.SAMPLE : null].filter(Boolean)
       .concat(this.assets.filter(a => (a.type || a.kind) === 'live2d').map(a => ({ name: (a.metadata && a.metadata.name) || a.filename, url: a.url })));
-    const STY = [['groove', 'グルーヴ(横揺れ)'], ['bounce', 'バウンス(跳ねる)'], ['idol', 'アイドル(首振り+腕)'], ['calm', 'ゆったり'], ['none', '踊らない(口パクだけ)']];
+    const STY = [['motion', 'モーション(モデルの動き+拍)'], ['groove', 'グルーヴ(横揺れ)'], ['bounce', 'バウンス(跳ねる)'], ['idol', 'アイドル(首振り+腕)'], ['calm', 'ゆったり'], ['none', '踊らない(口パクだけ)']];
     const pct = (v, def) => Math.round((v ?? def) * 100);
     return `
       <div class="prop-group">
@@ -1704,7 +1704,7 @@ alert('LyricFlow: ' + D.cuts.length + ' text layers created.' + (miss.length ? '
             ${models.map(m => `<option value="${esc(m.url)}" ${m.url === d.model_url ? 'selected' : ''}>${esc(m.name)}</option>`).join('')}</select></div>
           <div class="prop-row"><span>自分のモデル</span><button class="btn sm" id="l2-up">↑ zip を読み込む</button></div>
           <div class="prop-row"><span>踊り方</span><select class="input sm" id="l2-style">
-            ${STY.map(([k, l]) => `<option value="${k}" ${(d.style || 'groove') === k ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+            ${STY.map(([k, l]) => `<option value="${k}" ${(d.style || 'motion') === k ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
           <div class="prop-row" title="踊りの大きさ(曲の盛り上がりでも自動で大きくなります)"><span>踊りの強さ</span><input type="range" id="l2-int" min="0" max="100" value="${pct(d.intensity, 0.7)}"></div>
           <div class="prop-row" title="口の開きの大きさ"><span>口パクの強さ</span><input type="range" id="l2-lip" min="0" max="100" value="${pct(d.lipsync, 0.8)}"></div>
           <div class="prop-row" title="オン: 歌詞のタイミング(語)に合わせて口を動かし、間奏では閉じる。オフ: 声の帯域の音量だけで動かす"><span>歌詞に合わせる</span><input type="checkbox" id="l2-gate" ${d.lipGate === false ? '' : 'checked'}></div>
@@ -1726,7 +1726,7 @@ alert('LyricFlow: ' + D.cuts.length + ' text layers created.' + (miss.length ? '
     const btn = $('#l2-setup');
     if (btn) btn.onclick = () => {
       const S = window.Live2DStage.SAMPLE;
-      this.tl.live2d = { enabled: true, model_url: S.url, model_name: S.name, style: 'groove', intensity: 0.7, lipsync: 0.8, lipGate: true, scale: 0.9, x: 0.5, y: 1.04, mirror: false };
+      this.tl.live2d = { enabled: true, model_url: S.url, model_name: S.name, style: 'motion', intensity: 0.7, lipsync: 0.8, lipGate: true, scale: 0.9, x: 0.5, y: 1.04, mirror: false };
       this.ensureVocal();
       this.engine.setTimeline(this.tl); this.markDirty(); this.renderRight();
     };
