@@ -29,14 +29,16 @@ def _load_dotenv(fp):
 
 # データの置き場所: 既定はリポ直下の data/。インストール版(/Applications)は LF_DATA_DIR に
 # ~/Library/Application Support/LyricFlow AI/data を渡す(アプリ本体を入れ替えてもデータが残る)。
-# .env はデータ側を先に読み、無ければリポ直下(既存の実環境変数は上書きしない)
-DATA = os.path.abspath(os.environ.get("LF_DATA_DIR") or os.path.join(ROOT, "data"))
-_load_dotenv(os.path.join(DATA, ".env"))
+# リポ直下の .env に LF_DATA_DIR を書けば、Web版(ブラウザ)・開発版も同じデータを使う。
+# 読む順: 実環境変数 → リポ直下の .env → データ側の .env (先に読んだ値を上書きしない)
 _load_dotenv(os.path.join(ROOT, ".env"))
+DATA = os.path.abspath(os.path.expanduser(os.environ.get("LF_DATA_DIR") or os.path.join(ROOT, "data")))
+_load_dotenv(os.path.join(DATA, ".env"))
 
 UPLOADS = os.path.join(DATA, "uploads")
 RENDERS = os.path.join(DATA, "renders")
 BGLIB = os.path.join(DATA, "bglib")     # 曲をまたいで再利用する背景画像ライブラリ
+ATELIER_CACHE = os.path.join(DATA, "atelier_cache")   # VRM Atelier のアバター/モーションの控え(Atelier停止中も3Dダンスを描ける)
 DB_PATH = os.path.join(DATA, "lyricflow.db")
 STATIC = os.path.join(ROOT, "static")
 PORT = int(os.environ.get("PORT", "4189"))
@@ -1725,12 +1727,28 @@ class Handler(BaseHTTPRequestHandler):
                 fpath = (qs.get("path") or [""])[0]
                 if not re.match(r"^/files/(avatars|motions|thumbs)/[\w.-]+$", fpath):
                     return self.err(400, "bad_path", "不正なパスです")
+                # 取れたファイルは DATA/atelier_cache に控え、VRM Atelier が止まっている時はそこから返す
+                # (アバター/モーションはUUID名で中身が変わらないので、一度読めば Atelier 無しでも3Dダンスが動く)
+                cache_fp = os.path.join(ATELIER_CACHE, fpath.strip("/").replace("/", "__"))
                 try:
                     req = urllib.request.Request(base + fpath, headers={"X-API-Key": key})
                     with urllib.request.urlopen(req, timeout=15) as r:
                         data = r.read()
+                    try:
+                        os.makedirs(ATELIER_CACHE, exist_ok=True)
+                        tmp = cache_fp + ".tmp"
+                        with open(tmp, "wb") as fh:
+                            fh.write(data)
+                        os.replace(tmp, cache_fp)
+                    except Exception:
+                        pass
                 except Exception as e:
-                    return self.err(502, "atelier_error", f"取得失敗: {e}")
+                    if os.path.isfile(cache_fp):
+                        with open(cache_fp, "rb") as fh:
+                            data = fh.read()
+                    else:
+                        return self.err(502, "atelier_error",
+                                        f"VRM Atelier から取得できません(Atelier を起動すると読み込めます): {e}")
                 ctype = "model/gltf-binary" if fpath.endswith(".vrm") else \
                         ("image/png" if fpath.endswith(".png") else "application/octet-stream")
                 self.send_response(200)

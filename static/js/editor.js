@@ -3170,7 +3170,11 @@ alert('LyricFlow: ' + D.cuts.length + ' text layers created.' + (miss.length ? '
           setP('完了', 100);
           const done = bg.querySelector('#exp-done');
           done.style.display = 'block';
-          done.innerHTML = `<a class="btn primary" href="${j.output_url}" download="${esc(this.project.title)}.${ext}" style="width:100%;justify-content:center">⬇ ${esc(this.project.title)}.${ext} をダウンロード</a>`;
+          // デスクトップ版(Electron)は書き出し先フォルダへ自動保存する(保存はアプリ側が行い、完了を通知する)
+          const desktop = /Electron/.test(navigator.userAgent);
+          done.innerHTML = `<a class="btn primary" href="${j.output_url}" download="${esc(this.project.title)}.${ext}" style="width:100%;justify-content:center">${desktop ? '⬇ もう一度保存する' : `⬇ ${esc(this.project.title)}.${ext} をダウンロード`}</a>` +
+            (desktop ? '<p class="p-sub" style="margin-top:6px">書き出し先フォルダ（既定: ムービー/LyricFlow）に自動で保存します。フォルダはメニュー「ファイル → 書き出し先フォルダを開く」(⇧⌘O)</p>' : '');
+          if (desktop) done.querySelector('a').click();
           this.project.status = 'exported';
           const badge = this.root.querySelector('#status-badge');
           if (badge) { badge.textContent = 'exported'; badge.className = 'badge exported'; }

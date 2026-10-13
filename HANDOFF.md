@@ -1,11 +1,18 @@
 # HANDOFF — LyricFlow AI
 
-最終更新: 2026-09-30 (Claude Code)
+最終更新: 2026-10-13 (Claude Code)
 
 ## インストール版(/Applications/LyricFlow AI.app)
-- 作成・更新: `./scripts/install_app.sh`(Electron.app を複製 → Contents/Resources/app に package.json/server.py/electron/static/scripts、アイコンは dev/icon/)。
-- データ: `~/Library/Application Support/LyricFlow AI/data`(`LF_DATA_DIR`。.env もここ)。初回インストール時だけリポの data/ と .env をコピー。以降は別管理(開発版はリポの data/)。
-- ポート: インストール版 4389 / 開発版 4189(`npm run app` は LF_PORT で上書き可)。インストール版の判定は `.app/Contents/Resources/app` に居るか(実行ファイル名が Electron のため app.isPackaged は使えない)。
+- 作成・更新: `./scripts/install_app.sh`(`--rebuild` で .app も作り直し)。コードは `~/Library/Application Support/LyricFlow AI/app` に置き、
+  .app の `Contents/Resources/app` はそこへのリンク。**更新はコードだけ入れ替えるので .app の署名が変わらない**
+  (Little Snitch が入っているので、署名が変わると通信許可を聞き直され、Google Fonts 待ちで画面が出なくなった)。
+- データ: `~/Library/Application Support/LyricFlow AI/data`(`LF_DATA_DIR`)。**リポの .env にも同じ LF_DATA_DIR を書いてあり、
+  Web版(4189)・開発版も同じデータを使う**(SQLite は WAL+timeout15 なので2プロセス同時でも可)。リポの data/ は 9/30 時点の旧データ(未使用・控え)。
+- ポート: インストール版 4389 / 開発版 4189。インストール版の判定は実行ファイルの場所(実行ファイル名が Electron のため app.isPackaged は使えない)。
+- 書き出しの自動保存(デスクトップ版のみ): ダウンロードは保存ダイアログを出さず `~/Movies/LyricFlow` へ(メニュー「ファイル → 書き出し先を変更…」、
+  設定は userData/settings.json)。動画の書き出し完了時は自動で保存し通知(クリックで Finder)。
+- Google Fonts は `media=print onload` で非ブロッキング(通信が止められていても画面は出る)。
+- VRM Atelier の素材は `DATA/atelier_cache` に控え、Atelier 停止中はそこから返す。`scripts/seed_atelier_cache.py` で Atelier のデータから先に入れられる。
 - server.py: `LF_DATA_DIR` 未指定なら従来どおり ROOT/data(後方互換)。Python は Mac の python3(/opt/homebrew)を使う。
 
 ## 演出エンジン(カット演出)の契約 — 破壊的変更禁止
