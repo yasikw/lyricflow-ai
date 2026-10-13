@@ -96,6 +96,38 @@ async function computeEnvelope(url, hop = 0.1) {
   return { env, duration: audio.duration, hop };
 }
 
+/* 口パク用: ボーカル帯(250〜3500Hz)の音量包絡を 1/60 秒刻みで作る(0..1、上位5%を1に正規化、立ち上がり速く・減衰ゆっくり) */
+async function computeVocalEnvelope(url, hop = 1 / 60) {
+  const dctx = new (window.AudioContext || window.webkitAudioContext)();
+  const audio = await dctx.decodeAudioData(await (await fetch(url)).arrayBuffer());
+  dctx.close();
+  const sr = 22050;
+  const off = new OfflineAudioContext(1, Math.ceil(audio.duration * sr), sr);
+  const src = off.createBufferSource(); src.buffer = audio;
+  const hp = off.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 250; hp.Q.value = 0.7;
+  const lp = off.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 3500; lp.Q.value = 0.7;
+  src.connect(hp).connect(lp).connect(off.destination); src.start();
+  const ch = (await off.startRendering()).getChannelData(0);
+  const step = Math.max(1, Math.floor(sr * hop));
+  const n = Math.ceil(ch.length / step);
+  const raw = new Float32Array(n);
+  for (let k = 0; k < n; k++) {
+    let acc = 0; const s0 = k * step, e = Math.min(ch.length, s0 + step);
+    for (let i = s0; i < e; i += 2) acc += ch[i] * ch[i];
+    raw[k] = Math.sqrt(acc / Math.max(1, (e - s0) / 2));
+  }
+  const sorted = Array.from(raw).sort((a, b) => a - b);
+  const ref = sorted[Math.floor(sorted.length * 0.95)] || 1e-4;
+  const env = new Float32Array(n);
+  let y = 0;
+  for (let k = 0; k < n; k++) {
+    const x = Math.min(1, raw[k] / ref);
+    y = x > y ? y + (x - y) * 0.6 : y + (x - y) * 0.18;
+    env[k] = y;
+  }
+  return { env, hop: step / sr };
+}
+
 // BPM(テンポ)検知: オンセット強度の自己相関でテンポを推定し、拍の位相も求める
 async function detectBPM(url) {
   const ctx = new (window.AudioContext || window.webkitAudioContext)();

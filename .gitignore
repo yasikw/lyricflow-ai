@@ -15,3 +15,7 @@ __pycache__/
 
 # secrets
 .env
+
+# Live2D: 再配布条件のある公式ファイル(scripts/fetch_live2d.sh で取得)
+static/vendor/live2d/live2dcubismcore.min.js
+static/live2d-samples/

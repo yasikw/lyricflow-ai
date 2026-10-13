@@ -287,6 +287,7 @@ class Editor {
       } catch (e) { console.warn('envelope failed', e); }
     }
     this.engine.setTimeline(this.tl);
+    if (this.tl.live2d?.enabled) this.ensureVocal();
   }
 
   /* ---------------- shell ---------------- */
@@ -1686,6 +1687,90 @@ alert('LyricFlow: ' + D.cuts.length + ' text layers created.' + (miss.length ? '
     } catch (e) { toast(e.message, 'err'); }
   }
 
+  /* ---- Live2D キャラ: 歌に合わせて口パク・拍に合わせて踊る (static/js/live2d_stage.js) ---- */
+  _live2dPanelHTML() {
+    const d = this.tl.live2d;
+    const ok = !!(window.Live2DStage && window.Live2DStage.available());
+    const models = [window.Live2DStage ? window.Live2DStage.SAMPLE : null].filter(Boolean)
+      .concat(this.assets.filter(a => (a.type || a.kind) === 'live2d').map(a => ({ name: (a.metadata && a.metadata.name) || a.filename, url: a.url })));
+    const STY = [['groove', 'グルーヴ(横揺れ)'], ['bounce', 'バウンス(跳ねる)'], ['idol', 'アイドル(首振り+腕)'], ['calm', 'ゆったり'], ['none', '踊らない(口パクだけ)']];
+    const pct = (v, def) => Math.round((v ?? def) * 100);
+    return `
+      <div class="prop-group">
+        <h4>Live2D キャラ</h4>
+        ${!ok ? `<div class="empty-note" style="padding:4px 2px;text-align:left;font-size:11px;color:var(--warn, #e8a33d)">Live2D の部品(Cubism Core)が見つかりません。リポで <code>./scripts/fetch_live2d.sh</code> を実行してください。</div>` : ''}
+        ${d?.enabled ? `
+          <div class="prop-row"><span>モデル</span><select class="input sm" id="l2-model" style="max-width:150px">
+            ${models.map(m => `<option value="${esc(m.url)}" ${m.url === d.model_url ? 'selected' : ''}>${esc(m.name)}</option>`).join('')}</select></div>
+          <div class="prop-row"><span>自分のモデル</span><button class="btn sm" id="l2-up">↑ zip を読み込む</button></div>
+          <div class="prop-row"><span>踊り方</span><select class="input sm" id="l2-style">
+            ${STY.map(([k, l]) => `<option value="${k}" ${(d.style || 'groove') === k ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+          <div class="prop-row" title="踊りの大きさ(曲の盛り上がりでも自動で大きくなります)"><span>踊りの強さ</span><input type="range" id="l2-int" min="0" max="100" value="${pct(d.intensity, 0.7)}"></div>
+          <div class="prop-row" title="口の開きの大きさ"><span>口パクの強さ</span><input type="range" id="l2-lip" min="0" max="100" value="${pct(d.lipsync, 0.8)}"></div>
+          <div class="prop-row" title="オン: 歌詞のタイミング(語)に合わせて口を動かし、間奏では閉じる。オフ: 声の帯域の音量だけで動かす"><span>歌詞に合わせる</span><input type="checkbox" id="l2-gate" ${d.lipGate === false ? '' : 'checked'}></div>
+          <div class="prop-row"><span>大きさ</span><input type="range" id="l2-scale" min="20" max="200" value="${pct(d.scale, 0.9)}"></div>
+          <div class="prop-row"><span>横位置</span><input type="range" id="l2-x" min="0" max="100" value="${pct(d.x, 0.5)}"></div>
+          <div class="prop-row"><span>縦位置</span><input type="range" id="l2-y" min="40" max="160" value="${pct(d.y, 1.04)}"></div>
+          <div class="prop-row"><span>左右反転</span><input type="checkbox" id="l2-mirror" ${d.mirror ? 'checked' : ''}></div>
+          <div id="l2-note" style="font-size:10.5px;color:var(--muted);margin:2px 0 4px">${this.tl.bpm ? `拍: ${Math.round(this.tl.bpm)} BPM に合わせて踊ります` : 'BPM が未設定なので、音量に合わせてゆっくり揺れます(タイムラインの「検知」で拍に合わせられます)'}</div>
+          <button class="btn danger sm" id="l2-del" style="width:100%;justify-content:center;margin-top:5px">Live2D キャラを外す</button>
+        ` : `
+          <div class="empty-note" style="padding:4px 2px;text-align:left;font-size:11px">Live2D(.model3.json)のキャラを置き、歌声に合わせて口パク、拍に合わせて踊らせます。モデルは zip で読み込めます。</div>
+          <button class="btn sm" id="l2-setup" style="width:100%;justify-content:center;margin-top:6px" ${ok ? '' : 'disabled'}>＋ Live2D キャラを配置</button>
+        `}
+        <input type="file" id="l2-file" accept=".zip" style="display:none">
+      </div>`;
+  }
+  _bindLive2DPanel($) {
+    const d = this.tl.live2d;
+    const btn = $('#l2-setup');
+    if (btn) btn.onclick = () => {
+      const S = window.Live2DStage.SAMPLE;
+      this.tl.live2d = { enabled: true, model_url: S.url, model_name: S.name, style: 'groove', intensity: 0.7, lipsync: 0.8, lipGate: true, scale: 0.9, x: 0.5, y: 1.04, mirror: false };
+      this.ensureVocal();
+      this.engine.setTimeline(this.tl); this.markDirty(); this.renderRight();
+    };
+    if (!d?.enabled) return;
+    const set = (k, v) => { d[k] = v; this.markDirty(); };
+    const sel = $('#l2-model');
+    if (sel) sel.onchange = e => { set('model_url', e.target.value); set('model_name', e.target.selectedOptions[0]?.textContent || ''); };
+    $('#l2-style').onchange = e => set('style', e.target.value);
+    $('#l2-int').oninput = e => set('intensity', e.target.value / 100);
+    $('#l2-lip').oninput = e => set('lipsync', e.target.value / 100);
+    $('#l2-gate').onchange = e => set('lipGate', e.target.checked);
+    $('#l2-scale').oninput = e => set('scale', e.target.value / 100);
+    $('#l2-x').oninput = e => set('x', e.target.value / 100);
+    $('#l2-y').oninput = e => set('y', e.target.value / 100);
+    $('#l2-mirror').onchange = e => set('mirror', e.target.checked);
+    $('#l2-del').onclick = () => { this.tl.live2d = null; this.engine.setTimeline(this.tl); this.markDirty(); this.renderRight(); };
+    $('#l2-up').onclick = () => $('#l2-file').click();
+    $('#l2-file').onchange = async e => {
+      const f = e.target.files[0];
+      if (!f) return;
+      try {
+        const fd = new FormData(); fd.append('file', f);
+        toast('Live2D モデルを読み込み中…');
+        const a = await API.upload(`/workspaces/${this.project.workspace_id}/assets`, fd);
+        this.assets.unshift(a);
+        set('model_url', a.url); set('model_name', (a.metadata && a.metadata.name) || a.filename);
+        toast('Live2D モデルを読み込みました', 'ok');
+        this.renderRight(); this.renderLeft();
+      } catch (err) { toast('読み込めませんでした: ' + err.message, 'err'); }
+    };
+    this.ensureVocal();
+  }
+  /* 口パク用のボーカル帯の音量(曲ごとに1回計算してエンジンに渡す) */
+  async ensureVocal() {
+    const a = this.audioAsset();
+    if (!a || !window.computeVocalEnvelope) return;
+    if (this.engine.vocal && this.engine.vocal.src === a.url) return;
+    if (this._vocalBusy === a.url) return this._vocalP;
+    this._vocalBusy = a.url;
+    this._vocalP = computeVocalEnvelope(a.url).then(v => { this.engine.vocal = { ...v, src: a.url }; })
+      .catch(e => console.warn('vocal envelope failed', e)).finally(() => { this._vocalBusy = null; });
+    return this._vocalP;
+  }
+
   /* ---- 3Dダンス (VRM × MMD): VRM Atelier連携 + ファイルアップロード ---- */
   async _loadAtelier(force) {
     // 成功時のみキャッシュする。失敗をキャッシュすると、後からVRM Atelierを
@@ -2073,7 +2158,8 @@ alert('LyricFlow: ' + D.cuts.length + ' text layers created.' + (miss.length ? '
         `}
         <input type="file" id="dn-vrm-file" accept=".vrm" style="display:none">
         <input type="file" id="dn-vmd-file" accept=".vmd" style="display:none">
-      </div>`;
+      </div>
+      ${this._live2dPanelHTML()}`;
     const $ = s => el.querySelector(s);
     const engSel = $('#ai-engine');
     engSel.value = this.aiEngine();
@@ -2151,6 +2237,8 @@ alert('LyricFlow: ' + D.cuts.length + ' text layers created.' + (miss.length ? '
     }
     // 3Dダンス (VRM × MMD)
     this._bindDancePanel($);
+    // Live2D キャラ
+    this._bindLive2DPanel($);
     if (selWord) {
       $('#w-start').onchange = e => { selWord.start = +e.target.value; this.markDirty(); this.renderTimeline(); };
       $('#w-end').onchange = e => { selWord.end = +e.target.value; this.markDirty(); this.renderTimeline(); };
@@ -3127,6 +3215,11 @@ alert('LyricFlow: ' + D.cuts.length + ' text layers created.' + (miss.length ? '
       setP('3Dダンス素材を読み込み中…', 0);
       try { await this.engine.prepareDance(); }
       catch (e) { toast('3Dダンス素材の読み込みに失敗: ' + e.message, 'err'); }
+    }
+    if (this.tl.live2d?.enabled) {
+      setP('Live2D キャラを読み込み中…', 0);
+      try { await this.ensureVocal(); await this.engine.prepareLive2D(); }
+      catch (e) { toast('Live2D の読み込みに失敗: ' + e.message, 'err'); }
     }
     try {
       const { job_id } = await API.post('/render/frames/start', {

@@ -68,6 +68,19 @@
 - FXEngine: `_drawDance()`(subjectの直後に描画) / `prepareDance()`(書き出し前プリロード)。
   レイヤー順: 背景 → subject → **dance** → 歌詞。
 
+## Live2D キャラ層の契約 — 破壊的変更禁止(2026-10-13)
+
+- タイムライン: `timeline.live2d = {enabled, model_url, model_name, style:'groove'|'bounce'|'idol'|'calm'|'none', intensity, lipsync, lipGate, scale, x, y, mirror, offset}`
+- 描画: `static/js/live2d_stage.js`(`window.Live2DStage`)。PixiJS 6.5.10 + pixi-live2d-display 0.4.0(cubism4, MIT, `static/vendor/live2d/` に同梱)+ 公式 Cubism Core。
+  FXEngine `_drawLive2D()`(3Dダンスの直後・歌詞の前)/ `prepareLive2D()`(書き出し前)。姿勢は時刻の関数(drive)、物理は 1/30 秒刻み・時刻が飛んだら 1.2 秒前から回し直す。
+  モデルのアイドルモーションと自動まばたきは止め、まばたきも時刻から決める(決定論)。パラメータは afterMotionUpdate で設定(髪・服の物理が追従する)。
+- 口パク: 歌詞の語のタイミング × ボーカル帯(250〜3500Hz)の音量包絡(`computeVocalEnvelope`, 1/60 秒, `engine.vocal`)× 語のモーラ(かな→母音で口の形)。
+  `lipGate:false` で音量だけ。踊り: `tl.bpm` の拍に合わせた頭・体・腕(`~Param…` は最小〜最大の正規化値)、BPM 無しは音量でゆっくり。
+- **Cubism Core とサンプルモデル(Hiyori)は Live2D の許諾があるので git に入れない**: `./scripts/fetch_live2d.sh` が公式CDN/公式サンプルから取得
+  (`static/vendor/live2d/live2dcubismcore.min.js`, `static/live2d-samples/`。.gitignore 済)。Core が無ければ Live2D だけ無効(パネルに案内)。
+- 自分のモデル: zip をアセットとしてアップロード(type=`live2d`)→ `uploads/live2d/<id>/` に展開(zip slip・300MB/3000ファイル上限、UTF-8 フラグ無しの日本語名は cp437→utf-8/cp932 で読み直し)、URL は model3.json。
+- DB: assets.type の CHECK に `model3d/motion3d/live2d` を追加(`migrate_assets_types`、起動時に作り直し)。**旧DBでは VRM のアップロードも CHECK で失敗していた**。
+
 ## 連携が切れたときの復帰(重要)
 
 - `_loadAtelier()` は**成功時のみキャッシュ**する。失敗をキャッシュすると、後から

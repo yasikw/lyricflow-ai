@@ -71,6 +71,53 @@ class FXEngine {
     }
   }
 
+  /* t秒時点のボーカル帯(250〜3500Hz)の音量(0..1)。口パク用に 1/60 秒刻み(computeVocalEnvelope で作る) */
+  vocalAt(t) {
+    const v = this.vocal;
+    if (!v || !v.env || !v.env.length) return this.energyAt(t);
+    const x = t / v.hop, i = Math.floor(x), f = x - i;
+    if (i < 0) return 0;
+    if (i >= v.env.length - 1) return v.env[v.env.length - 1] || 0;
+    return v.env[i] * (1 - f) + v.env[i + 1] * f;
+  }
+  /* 口パク用の歌詞の語(開始順・空でない語) */
+  _l2dWords(tl) {
+    const src = (tl.tracks && tl.tracks.lyrics) || [];
+    if (this._l2dSrc !== src || this._l2dLen !== src.length) {
+      this._l2dSrc = src; this._l2dLen = src.length;
+      this._l2dW = src.filter(w => w && String(w.word || '').replace(/[\s*|/!]/g, '')).map(w => ({ start: +w.start || 0, end: +w.end || 0, word: String(w.word || '').split('|')[0].replace(/[*/!]/g, '') })).sort((a, b) => a.start - b.start);
+    }
+    return this._l2dW;
+  }
+
+  /* Live2D キャラ層: tl.live2d = {enabled, model_url, model_name, scale, x, y, style, intensity, lipsync, lipGate, mirror, offset} */
+  _drawLive2D(ctx, t, W, H) {
+    const d = this.timeline?.live2d;
+    if (!d || !d.enabled || !d.model_url || !window.Live2DStage || !window.Live2DStage.available()) return;
+    if (!this._l2d) this._l2d = window.Live2DStage.create();
+    const st = this._l2d;
+    if (st.url !== d.model_url || !st.ready) { st.load(d.model_url).catch(() => {}); if (!st.ready) return; }
+    const scale = d.scale ?? 0.9;                       // 画面高に対するキャラの高さ
+    const sh = Math.max(64, Math.round(H * scale));
+    const sw = Math.max(64, Math.round(sh * Math.min(1.6, st.aspect() * 1.25)));
+    const q = this.quality === 'draft' ? 0.5 : 1;
+    if (!st.renderAt(t, window.Live2DStage.driver(this, d), Math.round(sw * q), Math.round(sh * q))) return;
+    const cx = W * (d.x ?? 0.5), by = H * (d.y ?? 1.04);
+    ctx.save();
+    if (d.mirror) { ctx.translate(cx, 0); ctx.scale(-1, 1); ctx.translate(-cx, 0); }
+    ctx.drawImage(st.canvas, cx - sw / 2, by - sh, sw, sh);
+    ctx.restore();
+  }
+  /** 書き出し前の Live2D モデルの読み込み (editor.startRender が呼ぶ) */
+  async prepareLive2D() {
+    const d = this.timeline?.live2d;
+    if (!d || !d.enabled || !d.model_url || !window.Live2DStage) return;
+    if (!window.Live2DStage.available()) throw new Error('Live2D の部品(Cubism Core)がありません。scripts/fetch_live2d.sh を実行してください');
+    if (!this._l2d) this._l2d = window.Live2DStage.create();
+    await this._l2d.load(d.model_url);
+    this._l2d.simT = null;                              // 1フレーム目で物理を回し直す
+  }
+
   /* t秒時点のエネルギー(0..1) */
   energyAt(t) {
     const tl = this.timeline;
@@ -116,6 +163,8 @@ class FXEngine {
     this._drawSubject(ctx, t, W, H, energy, boost);
     // 3Dダンスレイヤー (VRMアバター + MMDモーション / VRM Atelier連携)
     this._drawDance(ctx, t, W, H, energy, boost);
+    // Live2D キャラ層 (歌に合わせて口パク・拍に合わせて踊る)
+    this._drawLive2D(ctx, t, W, H);
     // パーティクル(粒子) — 前景キャラ/被写体より前面に降らせる
     this._stepParticles(ctx, t, W, H, colors, energy * boost);
     if (!this.hideLyrics) this._drawLyricLayer(t, W, H, colors, energy, boost, fx);   // タップ同期中は歌詞を隠す

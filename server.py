@@ -7,7 +7,7 @@
 - ホワイトラベル外部API (X-API-Key)
 標準ライブラリのみで動作。DB=SQLite, ファイル=ローカルストレージ。
 """
-import base64, hashlib, hmac, json, math, mimetypes, os, random, re, secrets, shutil, sqlite3, struct, subprocess, tempfile, threading, time, urllib.request, urllib.parse, uuid, wave
+import base64, hashlib, hmac, json, math, mimetypes, os, random, re, secrets, shutil, sqlite3, struct, subprocess, tempfile, threading, time, urllib.request, urllib.parse, uuid, wave, zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -284,7 +284,7 @@ CREATE TABLE IF NOT EXISTS project_versions(
   id TEXT PRIMARY KEY, project_id TEXT, timeline_data_json TEXT, created_at REAL);
 CREATE TABLE IF NOT EXISTS assets(
   id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, project_id TEXT,
-  type TEXT CHECK(type IN('audio','image','video','font')), url TEXT NOT NULL,
+  type TEXT CHECK(type IN('audio','image','video','font','model3d','motion3d','live2d')), url TEXT NOT NULL,
   filename TEXT NOT NULL, size_bytes INTEGER NOT NULL, metadata_json TEXT, created_at REAL);
 CREATE TABLE IF NOT EXISTS ai_jobs(
   id TEXT PRIMARY KEY, workspace_id TEXT, user_id TEXT, kind TEXT,
@@ -482,7 +482,40 @@ def sniff_kind(data, ext):
         detected = "model3d"                                # VRM (GLB)
     elif data[:25] == b"Vocaloid Motion Data 0002":
         detected = "motion3d"                               # MMD VMD
+    elif head[:4] == b"PK\x03\x04" and ext == "zip":
+        detected = "live2d"                                 # Live2D モデル一式(zip)
     return detected
+
+
+def extract_live2d_zip(data, dest):
+    """Live2D モデルの zip を dest へ安全に展開し、model3.json の相対パスを返す(無ければ None)。
+    zip slip・巨大展開(合計300MB/3000ファイル超)を拒否する。"""
+    import io
+    zf = zipfile.ZipFile(io.BytesIO(data))
+    for i in zf.infolist():
+        # UTF-8 フラグの無い zip(macOS の zip コマンド・Windows の日本語名)は cp437 として読まれ文字化けするので読み直す
+        if not (i.flag_bits & 0x800):
+            raw = i.filename.encode("cp437", errors="replace")
+            for enc in ("utf-8", "cp932"):
+                try:
+                    i.filename = raw.decode(enc)
+                    break
+                except UnicodeDecodeError:
+                    continue
+    infos = [i for i in zf.infolist() if not i.is_dir() and "__MACOSX" not in i.filename and not os.path.basename(i.filename).startswith("._")]
+    if len(infos) > 3000 or sum(i.file_size for i in infos) > 300 << 20:
+        raise ValueError("zip が大きすぎます")
+    root = os.path.abspath(dest)
+    for i in infos:
+        name = i.filename.replace("\\", "/")
+        out = os.path.abspath(os.path.join(root, name))
+        if not out.startswith(root + os.sep):
+            raise ValueError("不正なパスを含む zip です")
+        os.makedirs(os.path.dirname(out), exist_ok=True)
+        with zf.open(i) as src, open(out, "wb") as dst:
+            shutil.copyfileobj(src, dst)
+    models = sorted((i.filename.replace("\\", "/") for i in infos if i.filename.lower().endswith(".model3.json")), key=lambda x: (x.count("/"), len(x)))
+    return models[0] if models else None
 
 # ---------------------------------------------------------------- AI engines
 def _percentile(sorted_vals, q):
@@ -1406,9 +1439,28 @@ def ensure_builtin_templates(con):
                          round(4.2 + (hash(tid) % 8) / 10, 1), 40 + hash(title) % 300, now))
     con.commit()
 
+def migrate_assets_types(con):
+    """assets.type の許可リストに 3D/Live2D を足す(旧DBは audio/image/video/font だけで、VRM の登録も失敗していた)。
+    SQLite は CHECK を変えられないので、作り直して中身を移す。"""
+    row = con.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='assets'").fetchone()
+    if not row or "'live2d'" in (row[0] or ""):
+        return
+    con.executescript("""
+BEGIN;
+CREATE TABLE assets_new(
+  id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, project_id TEXT,
+  type TEXT CHECK(type IN('audio','image','video','font','model3d','motion3d','live2d')), url TEXT NOT NULL,
+  filename TEXT NOT NULL, size_bytes INTEGER NOT NULL, metadata_json TEXT, created_at REAL);
+INSERT INTO assets_new SELECT id,workspace_id,project_id,type,url,filename,size_bytes,metadata_json,created_at FROM assets;
+DROP TABLE assets;
+ALTER TABLE assets_new RENAME TO assets;
+COMMIT;
+""")
+
 def seed():
     con = db()
     con.executescript(SCHEMA)
+    migrate_assets_types(con)
     if con.execute("SELECT COUNT(*) c FROM users").fetchone()["c"]:
         ensure_builtin_templates(con)   # 既存DBにも新テンプレを反映
         con.close()
@@ -1556,7 +1608,7 @@ class Handler(BaseHTTPRequestHandler):
             if path.startswith("/api/"):
                 self.handle_api(method, path)
             elif method == "GET" and path.startswith("/media/"):
-                self.serve_file(os.path.join(DATA, path[len("/media/"):]))
+                self.serve_file(os.path.join(DATA, urllib.parse.unquote(path[len("/media/"):])))   # Live2D のファイル名に空白・日本語があり得る
             elif method == "GET":
                 self.serve_static(path)
             else:
@@ -1960,7 +2012,7 @@ class Handler(BaseHTTPRequestHandler):
                         kind = {"mp3": "audio", "wav": "audio", "m4a": "audio", "png": "image", "jpg": "image",
                                 "jpeg": "image", "svg": "image", "webp": "image", "mp4": "video", "webm": "video",
                                 "ttf": "font", "otf": "font", "woff2": "font",
-                                "vrm": "model3d", "vmd": "motion3d"}.get(ext.lstrip("."))
+                                "vrm": "model3d", "vmd": "motion3d", "zip": "live2d"}.get(ext.lstrip("."))
                         if not kind:
                             return self.err(400, "bad_type", f"未対応のファイル形式です: {ext}")
                         # 仕様 8.3: マジックバイトによるMIME検証 (拡張子偽装を拒否)
@@ -1981,9 +2033,28 @@ class Handler(BaseHTTPRequestHandler):
                             return self.err(402, "storage_full", f"ストレージ上限（{lim['storage'] >> 30}GB）を超えます。不要なアセットを削除するかアップグレードしてください。")
                         aid = str(uuid.uuid4())
                         fname = aid + ext
+                        meta = json.loads(fields.get("metadata") or "null")
+                        if kind == "live2d":
+                            # Live2D: zip を uploads/live2d/<id>/ に展開し、URL は model3.json を指す
+                            ldir = os.path.join(UPLOADS, "live2d", aid)
+                            try:
+                                rel = extract_live2d_zip(f["data"], ldir)
+                            except Exception as e:
+                                shutil.rmtree(ldir, ignore_errors=True)
+                                return self.err(400, "bad_zip", f"zip を展開できません: {e}")
+                            if not rel:
+                                shutil.rmtree(ldir, ignore_errors=True)
+                                return self.err(400, "no_model3", "zip の中に .model3.json が見つかりません(Cubism 3 以降のモデルに対応)")
+                            url = "/media/uploads/live2d/" + aid + "/" + "/".join(urllib.parse.quote(p) for p in rel.split("/"))
+                            meta = (meta or {}) | {"name": os.path.basename(rel).replace(".model3.json", ""), "model3": rel}
+                            con.execute("INSERT INTO assets VALUES(?,?,?,?,?,?,?,?,?)",
+                                        (aid, wid, fields.get("project_id") or None, kind, url,
+                                         f["filename"], len(f["data"]), json.dumps(meta), time.time()))
+                            con.commit()
+                            row = con.execute("SELECT * FROM assets WHERE id=?", (aid,)).fetchone()
+                            return self.send_json(dict(row) | {"metadata": meta}, 201)
                         with open(os.path.join(UPLOADS, fname), "wb") as fh:
                             fh.write(f["data"])
-                        meta = json.loads(fields.get("metadata") or "null")
                         if kind == "audio" and FFMPEG and not (meta and meta.get("duration")):
                             try:
                                 pr = subprocess.run([FFMPEG.replace("ffmpeg", "ffprobe"), "-v", "quiet",
@@ -2286,7 +2357,10 @@ class Handler(BaseHTTPRequestHandler):
                 con.execute("DELETE FROM assets WHERE id=?", (s[1],))
                 con.commit()
                 try:
-                    os.remove(os.path.join(DATA, row["url"].lstrip("/media/").lstrip("/")))
+                    if row["type"] == "live2d":
+                        shutil.rmtree(os.path.join(UPLOADS, "live2d", row["id"]), ignore_errors=True)
+                    else:
+                        os.remove(os.path.join(DATA, row["url"].lstrip("/media/").lstrip("/")))
                 except Exception:
                     pass
                 return self.send_json({"ok": True})
