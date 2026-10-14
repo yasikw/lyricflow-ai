@@ -354,7 +354,8 @@ pre.code {
 .stage-wrap canvas { max-width: 100%; max-height: 100%; border-radius: 4px; box-shadow: 0 0 0 1px var(--border), 0 18px 60px rgba(0, 0, 0, .55); }
 .stage-hud { position: absolute; top: 10px; left: 14px; display: flex; gap: 7px; z-index: 4; }
 .stage-hud .chip { font-size: 10.5px; font-weight: 700; padding: 3px 9px; border-radius: 99px; background: rgba(9, 12, 17, .8); border: 1px solid var(--border); color: var(--muted); }
-.transport { display: flex; align-items: center; gap: 11px; padding: 9px 16px; border-top: 1px solid var(--border); background: var(--bg-deep); }
+.transport { display: flex; flex-wrap: wrap; align-items: center; gap: 11px; row-gap: 6px; padding: 9px 16px; border-top: 1px solid var(--border); background: var(--bg-deep); }
+.transport > * { flex: none; }            /* 狭い時はボタンを潰さず次の行へ折り返す */
 .transport .t-time { font-family: 'Inter', monospace; font-size: 12px; color: var(--cyan); min-width: 118px; font-weight: 600; }
 .transport .t-btn { background: var(--panel-2); border: 1px solid var(--border); color: var(--text); width: 34px; height: 30px; border-radius: 6px; display: inline-flex; align-items: center; justify-content: center; }
 .transport .t-btn.play { width: 44px; background: var(--grad); border: none; color: #05121c; }
@@ -531,6 +532,14 @@ pre.code {
   .editor { grid-template-rows: 44px minmax(0, 1fr) min(var(--tl-h, 258px), 30dvh); }
   .ed-left, .ed-right { top: 44px; }
   .ed-scrim { inset: 44px 0 0 0; }
+}
+/* タッチ端末(開いた折りたたみ・タブレットの横向きなど幅が広い時も)は操作ボタンを指で押せる大きさに */
+@media (pointer: coarse) {
+  .transport { gap: 8px; }
+  .transport .t-btn { width: 40px; height: 40px; font-size: 15px; }
+  .transport .t-btn.play { width: 56px; }
+  .aspect-mini button { padding: 7px 10px; }
+  .t-guides button { width: 36px; height: 34px; }
 }
 @media (max-width: 600px) {
   .topbar { padding: 10px 12px; gap: 8px; }
