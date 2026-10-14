@@ -123,7 +123,7 @@
 
 ## VPS 公開(2026-10-14) — https://lyricflow.aixr.tokyo.jp
 
-- 手順・構成は `deploy/DEPLOY.md`。Xserver VPS(ekyc-vps)に systemd `lyricflow` + nginx。Mac のプロジェクトは移していない(VPS は別 DB)。
+- 手順・構成は `deploy/DEPLOY.md`。Xserver VPS(ekyc-vps)に systemd `lyricflow` + nginx。2026-10-15 に Mac のプロジェクト11件を移行済み(以後は別々の DB。手順は DEPLOY.md 末尾)。
 - 公開モードの env(既定はローカル/アプリ版の従来動作のまま=後方互換): `LF_ALLOW_REGISTER`(0で登録停止)、`LF_SEED_DEMO`(0でデモ垢を作らず
   `LF_ADMIN_*` の管理者を作る)、`LF_TRUST_PROXY`(1で X-Real-IP)、`LF_MAX_BODY_MB`。ログイン画面は `GET /api/v1/auth/config` で出し分け。
 - 追加 API: `POST /api/v1/me/password`(current_password/new_password, 10文字以上)。アカウント画面に「パスワード変更」。
