@@ -3,6 +3,7 @@
  * 左: アセット/エフェクト/テンプレート  中央: WebGLプレビュー+トランスポート
  * 下: 5トラックタイムライン  右: プロパティ + AIツール
  * ===================================================================== */
+const PREVIEW_SCALES = [1, 0.8, 0.65, 0.5];   // 自動品質で下げていく段階(描く解像度の倍率)
 const ASPECTS = { '16:9': [1280, 720], '9:16': [405, 720], '1:1': [720, 720], '4:5': [576, 720] };
 const EXPORT_RES = {
   '720p': { '16:9': [1280, 720], '9:16': [720, 1280], '1:1': [720, 720], '4:5': [720, 900] },
@@ -187,7 +188,11 @@ class Editor {
     this.audio = new Audio();
     this.audio.crossOrigin = 'anonymous';
     this.leftTab = 'media';
-    this.quality = 'full';
+    // プレビュー品質: auto(既定・重い端末では描く解像度を自動で下げる) / full / draft
+    try { this.qualityMode = localStorage.getItem('lf_preview_quality') || 'auto'; } catch (e) { this.qualityMode = 'auto'; }
+    if (!['auto', 'full', 'draft'].includes(this.qualityMode)) this.qualityMode = 'auto';
+    this.quality = this.qualityMode === 'draft' ? 'draft' : 'full';
+    this.previewScale = 1;
     this.destroyed = false;
     this.metronomeOn = false;
     try { this.metronomeOn = localStorage.getItem('lf_metronome') === '1'; } catch (_) {}
@@ -239,6 +244,7 @@ class Editor {
     this.assets = assets.assets;
     this.renderShell();
     this.engine = new FXEngine(this.root.querySelector('#stage'));
+    this.engine.quality = this.quality;
     // 非同期の測定(文字色の自動切替など)が済んだら、止めて見ている時も描き直す
     this.engine.onAsyncReady = () => {
       if (this.playing || this._asyncRaf || this.destroyed) return;
@@ -269,6 +275,7 @@ class Editor {
     clearInterval(this.autosaveTimer);
     document.removeEventListener('keydown', this.keyHandler);
     try { this._clock && this._clock.terminate(); } catch (e) {}
+    try { this._stageRO && this._stageRO.disconnect(); } catch (e) {}
     this.audio.pause();
     if (this.dirty) this.save(true);
   }
@@ -411,9 +418,13 @@ class Editor {
     $('#tp-vol').oninput = e => { this.audio.volume = e.target.value / 100; };
     $('#title-in').onchange = e => { this.project.title = e.target.value; API.put('/projects/' + this.pid, { title: e.target.value }); };
     $('#quality-chip').onclick = () => {
-      this.quality = this.quality === 'full' ? 'draft' : 'full';
+      // 自動(重い時だけ解像度を下げる) → 最高(常に等倍) → 下書き(軽い描き方) の順に切り替える
+      this.qualityMode = { auto: 'full', full: 'draft', draft: 'auto' }[this.qualityMode] || 'auto';
+      try { localStorage.setItem('lf_preview_quality', this.qualityMode); } catch (e) {}
+      this.quality = this.qualityMode === 'draft' ? 'draft' : 'full';
       this.engine.quality = this.quality;
-      $('#quality-chip').textContent = '品質: ' + (this.quality === 'full' ? 'Full HD' : 'Draft(高速)');
+      this.previewScale = 1; this._adapt = null;
+      this.fitStage();
     };
     $('#tl-zoom').oninput = e => { this.zoom = +e.target.value; this.renderTimeline(); };
     $('#tl-bpm-detect').onclick = () => this.detectBpm();
@@ -600,9 +611,16 @@ class Editor {
 
   fitStage() {
     const [w, h] = ASPECTS[this.project.aspect_ratio] || ASPECTS['16:9'];
-    this.engine?.resize(w, h);
+    const s = this.qualityMode === 'auto' ? (this.previewScale || 1) : 1;   // 書き出しは startRender が等倍に戻す
+    this.engine?.resize(Math.round(w * s), Math.round(h * s));
     const c = this.root.querySelector('#stage');
-    if (c) { c.style.aspectRatio = `${w}/${h}`; }
+    if (c) {
+      c.style.aspectRatio = `${w}/${h}`; this._sizeStage();
+      // 枠の大きさが変わったら(タイムラインの高さ・端末の回転など)見た目の大きさだけ合わせ直す
+      if (!this._stageRO && window.ResizeObserver && c.parentElement) { this._stageRO = new ResizeObserver(() => this._sizeStage()); this._stageRO.observe(c.parentElement); }
+    }
+    const chip = this.root.querySelector('#quality-chip');
+    if (chip) chip.textContent = this._qualityLabel();
     if (this.engine) this.engine.render(this.t);
   }
 
@@ -614,7 +632,18 @@ class Editor {
      歌詞が取り残される(遅延・ドリフト)。Workerのタイマーは可視性で絞られないため常に追従する。 */
   loop() {
     if (this._clock) return;              // 既に開始済み
-    const tick = () => this.frame();
+    // 描画が 16ms に収まらない端末(iPad など)では Worker の合図が溜まって詰まるので、まだ描いていない合図は 1 回にまとめる。
+    // 画面が見えている時は次の描画のタイミング(rAF)で 1 回だけ描く。止めている間は 1/4 に間引く(操作はそれぞれ自分で描き直す)
+    // rAF が 100ms 来ない(窓が隠れている等で止められている)時は直接描く
+    let pending = 0, idle = 0;
+    const tick = () => {
+      if (!this.playing && !this._exporting && (++idle & 3)) return;
+      const now = performance.now();
+      if (document.visibilityState === 'hidden' || (pending && now - pending > 100)) { pending = 0; this._noAdapt = true; this.frame(); this._noAdapt = false; return; }
+      if (pending) return;
+      pending = now;
+      requestAnimationFrame(() => { if (!pending) return; pending = 0; this.frame(); });
+    };
     try {
       const code = 'let id;onmessage=e=>{if(e.data==="start"){id=setInterval(()=>postMessage(0),16)}else{clearInterval(id)}}';
       this._clock = new Worker(URL.createObjectURL(new Blob([code], { type: 'application/javascript' })));
@@ -630,6 +659,7 @@ class Editor {
 
   frame() {
     if (this.destroyed) return;
+    if (this.playing && !this._exporting && !this._noAdapt) this._adaptPreview();   // 隠れていて描画を止められている間の遅さは数えない
     if (this.playing && this._silentClock) this.t = this._silentClock.t0 + (performance.now() - this._silentClock.at) / 1000;
     else if (this.playing && this.audio.src) this.t = this.audio.currentTime;
     else if (this.playing) this.t += 1 / 60;
@@ -670,6 +700,37 @@ class Editor {
       this._metroClick(beat % bpb === 0, Math.max(when, acNow + 0.001));
       this._metroScheduled = beat;
     }
+  }
+
+  /* プレビューが重い端末では、描く解像度だけを自動で下げる(見た目の大きさと書き出しは変わらない)。
+     再生中の 1 コマの間隔を見て、遅い(約 42fps 未満)が 1 秒続けば 1 段下げ、速い(58fps 以上)が 6 秒続けば 1 段戻す */
+  _adaptPreview() {
+    if (this.qualityMode !== 'auto') return;
+    const now = performance.now(), a = this._adapt || (this._adapt = { last: now, ema: 16.7, slow: 0, fast: 0 });
+    const dt = now - a.last; a.last = now;
+    if (dt > 250) return;                                  // シーク・タブ切替の直後は数えない
+    a.ema += (dt - a.ema) * 0.1;
+    if (a.ema > 24) { a.slow += dt; a.fast = 0; } else if (a.ema < 17.3) { a.fast += dt; a.slow = 0; } else { a.slow = 0; a.fast = 0; }
+    const i = PREVIEW_SCALES.indexOf(this.previewScale);
+    if (a.slow > 1000 && i < PREVIEW_SCALES.length - 1) { this.previewScale = PREVIEW_SCALES[i + 1]; a.slow = 0; a.ema = 16.7; this.fitStage(); }
+    else if (a.fast > 6000 && i > 0) { this.previewScale = PREVIEW_SCALES[i - 1]; a.fast = 0; this.fitStage(); }
+  }
+  _qualityLabel() {
+    if (this.qualityMode === 'draft') return '品質: 下書き(高速)';
+    if (this.qualityMode === 'full') return '品質: 最高';
+    return '品質: 自動' + (this.previewScale < 1 ? `(${Math.round(this.previewScale * 100)}%)` : '');
+  }
+  /* プレビューの見た目の大きさを枠に合わせて決める(描く解像度とは別。解像度を下げても大きさは変えない) */
+  _sizeStage() {
+    const c = this.root.querySelector('#stage'), wrap = c && c.parentElement;
+    if (!c || !wrap) return;
+    const [w, h] = ASPECTS[this.project.aspect_ratio] || ASPECTS['16:9'];
+    const cs = getComputedStyle(wrap);
+    const aw = wrap.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+    const ah = wrap.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
+    if (aw <= 0 || ah <= 0) return;
+    const dw = Math.min(aw, ah * w / h, w * 2);
+    c.style.width = Math.floor(dw) + 'px'; c.style.height = Math.floor(dw * h / w) + 'px';
   }
 
   togglePlay() { this.playing ? this.pause() : this.play(); }

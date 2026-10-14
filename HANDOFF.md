@@ -143,6 +143,14 @@
 - Cloudflare が CSS/JS を4時間キャッシュするため、index.html を返す時に `static_version()`(static/ の最新更新時刻)を
   `?v=` として CSS/JS の URL に付ける(compose の loader も同じ v を引き継ぐ)。index.html は `Cache-Control: no-cache`。
 
+## プレビューの軽量化(iPad 向け, 2026-10-15)
+
+- 再生クロック(Worker の 16ms 合図)が描画より速いと合図が溜まって詰まる → 未描画の合図は rAF で 1 回にまとめる。
+  rAF が 100ms 来ない(窓が隠れている等)時は直接描く。停止中は 1/4 に間引く(操作は各自で描き直す)。
+- プレビュー品質 `qualityMode`(localStorage `lf_preview_quality`): auto(既定)/full/draft。auto は再生中のコマ間隔で
+  描く解像度を 1→0.8→0.65→0.5 と下げ/戻す(`PREVIEW_SCALES`, `_adaptPreview`)。見た目の大きさは `_sizeStage` が枠から決めるので変わらない。
+  書き出しは startRender が等倍に戻すので画質は変わらない。
+
 ## 連携が切れたときの復帰(重要)
 
 - `_loadAtelier()` は**成功時のみキャッシュ**する。失敗をキャッシュすると、後から
