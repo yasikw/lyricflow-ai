@@ -1,6 +1,6 @@
 # HANDOFF — LyricFlow AI
 
-最終更新: 2026-10-13 (Claude Code)
+最終更新: 2026-10-14 (Claude Code)
 
 ## インストール版(/Applications/LyricFlow AI.app)
 - 作成・更新: `./scripts/install_app.sh`(`--rebuild` で .app も作り直し)。コードは `~/Library/Application Support/LyricFlow AI/app` に置き、
@@ -109,6 +109,17 @@
   `L._sfFast` は `L.makeEnv` が `!eng.exporting` で毎コマ設定。新しく縁取りを描くパックは `ctx.strokeText` でなく `L._strokeText(env|null, ctx, ch, x, y)`
   を使う(textAlign=center / textBaseline=middle の時だけキャッシュ、それ以外は直描きに落ちる)。
 - 実測(1280×720・Live2D+避け配置・サビの h_underline+doubleLine): 36→59fps。他区間も 57〜60fps。
+
+## 文字色の自動切替(背景が暗い→白系 / 明るい→暗い文字)(2026-10-14)
+
+- `timeline.autoTextTone`(既定オン、`false` で無効)。エディターの文字スタイル「背景に合わせて白/黒」。
+- `FXEngine._measureTone`: 歌詞を描く直前の画面を 48×27 に縮めて読み、区間(カット `c行:部` / 従来表示 `l行`)ごとに
+  文字の枠(前コマの bb)の中の下位20%のマスでのコントラストで白系/暗色を決める。区間の頭 0.6 秒だけ 0.12 秒おきに測り直し、その後は固定。
+  切替は 0.2 秒で色を移す。書き出しは同期で読む(毎回同じ)、プレビューは createImageBitmap で非同期(済んだら `engine.onAsyncReady` で描き直し)。
+- 演出エンジン: `L.makeEnv` が `L.toneBlend(L.schemeFor(..), eng._toneFor(key, t))` で配色を差し替える。今の文字色が向きに合って読めればそのまま
+  (ユーザーの色を尊重)、合わなければ `#ffffff` / `#15171c`。縁取り・下地用の `sc.bg` は文字と逆の明るさにそろえ、アクセントは `L.fitContrast(.., 2.4)`。
+- 従来表示: `_drawLyrics` が同じ判定で `style.color` / `C` を差し替える。neon/brush/longshadow は暗い文字なら縁を白に・白い芯の発光を省く(`_darkInk`)。
+  金/炎/クロームなど固定配色のレタリングは対象外。合成用(グリーン/ブラックバック)書き出しでは切り替えない。
 
 ## 連携が切れたときの復帰(重要)
 

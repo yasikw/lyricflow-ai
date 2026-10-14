@@ -239,6 +239,11 @@ class Editor {
     this.assets = assets.assets;
     this.renderShell();
     this.engine = new FXEngine(this.root.querySelector('#stage'));
+    // 非同期の測定(文字色の自動切替など)が済んだら、止めて見ている時も描き直す
+    this.engine.onAsyncReady = () => {
+      if (this.playing || this._asyncRaf || this.destroyed) return;
+      this._asyncRaf = requestAnimationFrame(() => { this._asyncRaf = 0; if (!this.playing && !this.destroyed && !this.engine.exporting) { this.engine.render(this.t); this._drawGuides(); } });
+    };
     this.engine.setTimeline(this.tl);
     await this.loadAudio();
     this.renderAll();
@@ -2162,6 +2167,7 @@ alert('LyricFlow: ' + D.cuts.length + ' text layers created.' + (miss.length ? '
         <button class="btn sm" id="st-fontlab" style="width:100%;justify-content:center;margin:2px 0 6px" title="実際の歌詞を各フォントで動かして比較し、主役・強調・補助に割り当てる">🔤 フォント見本（歌詞で動かして選ぶ）</button>
         <div class="prop-row"><span>サイズ</span><input type="range" id="st-size" min="28" max="300" value="${st.size || 64}"></div>
         <div class="prop-row"><span>カラー</span><input type="color" id="st-color" value="${st.color || '#ffffff'}"></div>
+        <div class="prop-row" title="文字の下の背景が暗い所では白系、明るい所では暗い文字色に自動で切り替える(選んだ色が背景に合っていればそのまま使う)。演出エンジンのカットにも効く"><span>背景に合わせて白/黒</span><input type="checkbox" id="st-autotone" ${this.tl.autoTextTone === false ? '' : 'checked'}></div>
         <div class="prop-row"><span>組方向</span>
           <select class="input" id="st-orient">${ORIENTS.map(([v, l]) => `<option value="${v}" ${(st.orient || 'horizontal') === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
         <div class="prop-row"><span>レタリング</span>
@@ -2280,6 +2286,7 @@ alert('LyricFlow: ' + D.cuts.length + ' text layers created.' + (miss.length ? '
     $('#st-fontlab').onclick = () => this.openFontLab();
     $('#st-size').oninput = e => { this.tl.lyricStyle.size = +e.target.value; this.markDirty(); };
     $('#st-color').oninput = e => { this.tl.lyricStyle.color = e.target.value; this.markDirty(); };
+    $('#st-autotone').onchange = e => { this.tl.autoTextTone = e.target.checked; this.engine._tones = null; this.markDirty(); if (!this.playing) this.engine.render(this.t); };
     $('#st-anim').onchange = e => { this.tl.lyricStyle.anim = e.target.value; this.markDirty(); };
     $('#st-orient').onchange = e => { this.tl.lyricStyle.orient = e.target.value; this.markDirty(); };
     $('#st-letter').onchange = e => { this.tl.lyricStyle.lettering = e.target.value; this.markDirty(); };

@@ -889,6 +889,37 @@ L.schemeFor = (tl, st) => {
   };
 };
 
+/* 背景の明るさに合わせた配色: 背景が暗い所では白系、明るい所では暗い文字にする。
+   tn = { light: 背景が明るいか, bg: 文字の下の背景の平均色 }(FXEngine._toneFor が測って渡す)。
+   今の文字色がすでに向きに合っていて読めるならそのまま使う(ユーザーが選んだ色を尊重) */
+const TONE_DARK = '#15171c', TONE_LIGHT = '#ffffff';
+L.toneScheme = (sc, tn) => {
+  if (!tn) return sc;
+  const fgDark = L.lum(sc.fg) < 0.18;
+  const ok = fgDark === !!tn.light && L.contrast(sc.fg, tn.bg) >= 3;
+  const fg = ok ? sc.fg : (tn.light ? TONE_DARK : TONE_LIGHT);
+  // 縁取り・下地に使う bg は文字と逆の明るさにそろえる(暗い文字なら明るい縁)
+  const bgDark = L.lum(sc.bg) < 0.45;
+  const bg = ok || bgDark === !tn.light ? sc.bg : (tn.light ? L.mix(tn.bg, '#ffffff', 0.7) : L.mix(tn.bg, '#000000', 0.7));
+  const accent = L.fitContrast(sc.accent, tn.bg, 2.4), accent2 = L.fitContrast(sc.accent2, tn.bg, 2.4);
+  return Object.assign({}, sc, {
+    fg, bg, bg2: bg === sc.bg ? sc.bg2 : bg, accent, accent2,
+    sub: L.mix(fg, bg, 0.42), dim: L.mix(bg, fg, 0.13),
+    ink: accent, onInk: L.onColor(accent), onAccent2: L.onColor(accent2),
+    dark: !tn.light,
+  });
+};
+const TONE_KEYS = ['fg', 'bg', 'bg2', 'accent', 'accent2', 'sub', 'dim', 'ink'];
+L.toneBlend = (sc, tn) => {
+  if (!tn) return sc;
+  const b = L.toneScheme(sc, tn);
+  if (!tn.from || !(tn.k < 1)) return b;
+  const a = L.toneScheme(sc, tn.from), o = Object.assign({}, b);
+  for (const k of TONE_KEYS) o[k] = L.mix(a[k], b[k], tn.k);
+  o.onInk = L.onColor(o.ink); o.onAccent2 = L.onColor(o.accent2);
+  return o;
+};
+
 /* ================================================================ cuts: 歌詞→カット */
 const PUNCT_TRIM = /^[\s　]+|[\s　]+$/g;
 function joinWords(ws) {
@@ -1259,7 +1290,7 @@ L.makeEnv = (eng, ctx, t, W, H, cut, energy, boost) => {
   const st = cm.fonts ? Object.assign({}, st0 || {}, { fonts: Object.assign({}, (st0 && st0.fonts) || {}, cm.fonts) }) : st0;
   const env = {
     ctx, W, H, t, u: Math.min(W, H) / 1080, portrait: H > W,
-    sc: L.schemeFor(tl, st), st: st || { fonts: {} },
+    sc: L.toneBlend(L.schemeFor(tl, st), cut && eng._toneFor ? eng._toneFor('c' + cut.line + ':' + cut.part, t) : null), st: st || { fonts: {} },
     fx: { motion: cm.motion == null ? 1 : cm.motion, glitch: cm.glitch == null ? 0.5 : cm.glitch, decor: cm.decor == null ? 0.6 : cm.decor, density: cm.density == null ? 0.5 : cm.density },
     cut, energy: energy == null ? 0.5 : energy, boost: boost || 1, beat: L.beatAt(tl, t),
     scale: 1, allowFilter: eng.quality !== 'draft', pass: 'main', ghostColor: '#ffffff', ghostAlpha: 0.5,

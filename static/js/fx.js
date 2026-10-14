@@ -215,8 +215,10 @@ class FXEngine {
     const avoid = this._hasChars && !behind && tl.avoidChars !== false;
     const lyrics = () => {                                // タップ同期中は歌詞を隠す
       if (this.hideLyrics) return;
-      if (avoid) this._drawLyricsAvoid(t, W, H, colors, energy, boost, fx);   // キャラを避けて置く
-      else this._drawLyricLayer(t, W, H, colors, energy, boost, fx);
+      const tk = this._measureTone(t, W, H);              // 文字の下の背景の明るさ(文字色の白/黒を決める)
+      const bb = avoid ? this._drawLyricsAvoid(t, W, H, colors, energy, boost, fx)   // キャラを避けて置く
+        : this._drawLyricLayer(t, W, H, colors, energy, boost, fx);
+      if (tk && bb) tk.bb = bb;
     };
     if (behind) lyrics();
     if (this._hasChars) ctx.drawImage(this.charLayer, 0, 0);
@@ -1029,7 +1031,7 @@ class FXEngine {
       }
     } else if (seg) e = this._avoid.get(seg.key) || null;
     const ctx = main;
-    if (!e || (e.dx === 0 && e.dy === 0 && e.s === 1)) { ctx.drawImage(lc, 0, 0); return; }
+    if (!e || (e.dx === 0 && e.dy === 0 && e.s === 1)) { ctx.drawImage(lc, 0, 0); return bb; }
     const k = Math.min(1, Math.max(0, (t - seg.start) / 0.25)), ez = k * k * (3 - 2 * k);
     const sc = 1 + (e.s - 1) * ez;
     ctx.save();
@@ -1038,6 +1040,82 @@ class FXEngine {
     ctx.translate(-e.cx, -e.cy);
     ctx.drawImage(lc, 0, 0);
     ctx.restore();
+    if (!bb) return null;
+    const cx0 = e.cx + e.dx * ez, cy0 = e.cy + e.dy * ez;
+    return { x0: cx0 + (bb.x0 - e.cx) * sc, y0: cy0 + (bb.y0 - e.cy) * sc, x1: cx0 + (bb.x1 - e.cx) * sc, y1: cy0 + (bb.y1 - e.cy) * sc };
+  }
+
+  /* ---------------- 文字色の自動切替(背景が暗い→白系 / 明るい→暗い文字) ----------------
+     歌詞を描く直前の画面(=文字の下になる背景)を 48×27 に縮めて明るさを測り、区間(カット/行)ごとに向きを決める。
+     測るのは区間の頭 0.6 秒の間だけ(0.12 秒おき・文字の枠が分かれば枠の中)で、その後は固定。切り替わる時は 0.2 秒で色を移す。
+     書き出しは同期で読む(頭から順に描くので毎回同じ)、プレビューは createImageBitmap で非同期に読む */
+  _toneFor(key, t) {
+    if (this.timeline?.autoTextTone === false || this._keyedNow || !this._tones) return null;
+    const e = this._tones.get(key);
+    if (!e || !e.tone) return null;
+    if (!e.from) return e.tone;
+    const k = Math.min(1, Math.max(0, (t - e.sw) / 0.2));
+    return k >= 1 ? e.tone : Object.assign({}, e.tone, { from: e.from, k: k * k * (3 - 2 * k) });
+  }
+  _measureTone(t, W, H) {
+    const tl = this.timeline;
+    if (!tl || tl.autoTextTone === false) return null;
+    const sg = this._segAt(t);
+    if (!sg) return null;
+    const sig = W + 'x' + H + '|' + (this.exporting ? 1 : 0);
+    if (this._toneSig !== sig || !this._tones) { this._toneSig = sig; this._tones = new Map(); }
+    let e = this._tones.get(sg.key);
+    if (!e) { e = { at: -1, n: 0 }; if (this._tones.size > 600) this._tones.clear(); this._tones.set(sg.key, e); }
+    const age = t - sg.start;
+    // 区間の頭 0.6 秒は 0.12 秒おきに測り直す。途中から見始めた区間は 1 回だけ測って固定
+    const want = !e.tone ? !e.busy : (age < 0.6 && t - e.at >= 0.12 && e.n < 6 && !e.busy);
+    if (!want) return e;
+    e.at = t; e.n++;
+    const GW = 48, GH = 27;
+    const apply = d => {
+      const tone = this._toneFrom(d, GW, GH, W, H, e.bb, e.tone);
+      if (e.tone && tone.light !== e.tone.light) { e.from = e.tone; e.sw = t; }
+      e.tone = tone;
+    };
+    if (!this._toneCv) { this._toneCv = document.createElement('canvas'); this._toneCv.width = GW; this._toneCv.height = GH; this._toneCx = this._toneCv.getContext('2d', { willReadFrequently: true }); }
+    const cx = this._toneCx;
+    if (this.exporting || !window.createImageBitmap) {
+      cx.clearRect(0, 0, GW, GH); cx.drawImage(this.canvas, 0, 0, GW, GH);
+      apply(cx.getImageData(0, 0, GW, GH).data);
+    } else {
+      e.busy = true;
+      createImageBitmap(this.canvas, { resizeWidth: GW, resizeHeight: GH, resizeQuality: 'low' }).then(bmp => {
+        cx.clearRect(0, 0, GW, GH); cx.drawImage(bmp, 0, 0); bmp.close && bmp.close();
+        const first = !e.tone;
+        apply(cx.getImageData(0, 0, GW, GH).data);
+        if (first && this.onAsyncReady) this.onAsyncReady();     // 止めて見ている時も測れた色で描き直す
+      }).catch(() => {}).finally(() => { e.busy = false; });
+    }
+    return e;
+  }
+  /* 枠の中のマスの明るさから、白系の文字と暗い文字のどちらが読みやすいかを決める(下位 20% のマスでのコントラストで比べる) */
+  _toneFrom(d, GW, GH, W, H, bb, prev) {
+    let x0 = 0.1, x1 = 0.9, y0 = 0.2, y1 = 0.8;
+    if (bb) { const px = W * 0.03, py = H * 0.03; x0 = (bb.x0 - px) / W; x1 = (bb.x1 + px) / W; y0 = (bb.y0 - py) / H; y1 = (bb.y1 + py) / H; }
+    const a = Math.max(0, Math.floor(x0 * GW)), b = Math.max(0, Math.floor(y0 * GH));
+    const c = Math.min(GW, Math.max(a + 1, Math.ceil(x1 * GW))), dd = Math.min(GH, Math.max(b + 1, Math.ceil(y1 * GH)));
+    const lin = v => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); };
+    const cw = [], cd = [];
+    let r = 0, g = 0, bl = 0, n = 0;
+    const LD = 0.0091;                                    // 暗い文字(#15171c)の相対輝度
+    for (let y = b; y < dd; y++) for (let x = a; x < c; x++) {
+      const i = (y * GW + x) * 4;
+      const Lc = 0.2126 * lin(d[i]) + 0.7152 * lin(d[i + 1]) + 0.0722 * lin(d[i + 2]);
+      cw.push(1.05 / (Lc + 0.05)); cd.push((Lc + 0.05) / (LD + 0.05));
+      r += d[i]; g += d[i + 1]; bl += d[i + 2]; n++;
+    }
+    if (!n) return prev || { light: false, bg: '#000000' };
+    const p20 = arr => { arr.sort((p, q) => p - q); return arr[Math.floor(arr.length * 0.2)]; };
+    const sw = p20(cw), sd = p20(cd);
+    let light = sd > sw;
+    if (prev && prev.light !== light && Math.max(sw, sd) < Math.min(sw, sd) * 1.15) light = prev.light;   // 拮抗している時は変えない
+    const hx = v => Math.round(v / n).toString(16).padStart(2, '0');
+    return { light, bg: '#' + hx(r) + hx(g) + hx(bl) };
   }
 
   /* 合成用の書き出し: 背景・粒子・後処理を省き、歌詞だけを黒地(ブラックバック)/緑地(グリーンバック)に描く。
@@ -1047,6 +1125,7 @@ class FXEngine {
     const saved = tl.colors;
     tl.colors = Object.assign({}, saved || {}, { bg1: '#000000', bg2: '#000000' });
     tl._keyMode = this.keyMode;
+    this._keyedNow = true;                                // 合成用は背景が無いので文字色は自動で変えない
     try {
       ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.globalAlpha = 1; ctx.filter = 'none';
       ctx.globalCompositeOperation = 'source-over'; ctx.clearRect(0, 0, W, H); ctx.restore();
@@ -1057,13 +1136,13 @@ class FXEngine {
       ctx.fillRect(0, 0, W, H);
       ctx.restore();
       if (tl.watermark) this._watermark(ctx, W, H);
-    } finally { tl.colors = saved; delete tl._keyMode; }
+    } finally { tl.colors = saved; delete tl._keyMode; this._keyedNow = false; }
   }
 
   _drawLyrics(t, W, H, C, energy, boost, fx) {
     this._lyricBox = null;   // このフレームで歌詞が描かれなければドラッグ対象なし
     const words = this.timeline?.tracks?.lyrics || [];
-    const style = this.timeline?.lyricStyle || {};
+    let style = this.timeline?.lyricStyle || {};
     // シーン(セクション)ごとにアニメを上書き可能。指定が無ければ全体設定を使う
     const sc = this.sceneAt(t);
     const anim = (sc && sc.anim) || style.anim || 'glow-pop';
@@ -1071,6 +1150,13 @@ class FXEngine {
     let lineIdx = -1;
     for (const w of words) { if (t >= w.start - 0.15 && t < w.end + 0.65) lineIdx = Math.max(lineIdx, w.line); }
     if (lineIdx < 0) return;
+    const tn = window.LFC && window.LFC.toneBlend && this._toneFor('l' + lineIdx, t);
+    if (tn) {                                             // 背景の明るさに合わせて文字色を白系/暗色に
+      const sc0 = { fg: style.color || C.text || '#ffffff', bg: C.bg1 || '#0d1117', bg2: C.bg2 || C.bg1 || '#0d1117', accent: C.accent || '#00d4ff', accent2: C.accent2 || '#7b2ff7' };
+      const sc = window.LFC.toneBlend(sc0, tn);
+      C = Object.assign({}, C, { text: sc.fg, accent: sc.accent, accent2: sc.accent2, bg1: sc.bg });
+      style = Object.assign({}, style, { color: sc.fg });
+    }
     const lineWords = words.filter(w => w.line === lineIdx);
     if (!lineWords.length) return;
     const lineStart = lineWords[0].start, lineEnd = lineWords[lineWords.length - 1].end;
@@ -1217,6 +1303,15 @@ class FXEngine {
     return { dx, dy, scale, alpha: alpha * (1 - lineOut), rot, sx, sy, blur, p };
   }
 
+  /* 文字色が暗いか(明るい背景に暗い文字を置いている時は、縁取りを明るくし白い芯の発光を省く) */
+  _darkInk(c) {
+    if (!c || typeof c !== 'string') return false;
+    if (this._inkCache && this._inkCache[0] === c) return this._inkCache[1];
+    const v = window.LFC && window.LFC.lum ? window.LFC.lum(c) < 0.18 : false;
+    this._inkCache = [c, v];
+    return v;
+  }
+
   /* レタリングのプリセット別スタイルを適用し fillStyle を返す (縦横で共有) */
   _letterFill(tc, preset, active, C, style, fs, yTop, yBot) {
     const base = style.color || C.text;
@@ -1237,7 +1332,7 @@ class FXEngine {
       return g;
     }
     if (preset === 'brush') {
-      tc.lineWidth = fs * 0.13; tc.strokeStyle = 'rgba(5,9,16,0.88)';
+      tc.lineWidth = fs * 0.13; tc.strokeStyle = this._darkInk(base) ? 'rgba(255,255,255,0.88)' : 'rgba(5,9,16,0.88)';
       return active ? C.accent : this._alpha(base, 0.94);
     }
     if (preset === 'gold') {
@@ -1277,10 +1372,11 @@ class FXEngine {
       return active ? (C.accent || '#00d4ff') : this._alpha(base, 0.96);
     }
     // neon (default)
-    tc.lineWidth = fs * 0.085; tc.strokeStyle = 'rgba(5,9,16,0.8)';
+    const dk = this._darkInk(base);                     // 暗い文字(明るい背景)なら縁は明るく・芯は文字色に
+    tc.lineWidth = fs * 0.085; tc.strokeStyle = dk ? 'rgba(255,255,255,0.8)' : 'rgba(5,9,16,0.8)';
     if (active) {
       const g = tc.createLinearGradient(0, yTop, 0, yBot);
-      g.addColorStop(0, this._alpha(C.accent2, 0.95)); g.addColorStop(0.45, '#ffffff'); g.addColorStop(1, C.accent);
+      g.addColorStop(0, this._alpha(C.accent2, 0.95)); g.addColorStop(0.45, dk ? base : '#ffffff'); g.addColorStop(1, C.accent);
       return g;
     }
     return this._alpha(base, 0.9);
@@ -1364,7 +1460,7 @@ class FXEngine {
       tc.fillStyle = this._alpha(C.accent2, 0.5);
       for (let s = 2; s <= 14; s += 2) { tc.fillText(text, cx + s, cy + s); }
       tc.restore();
-      tc.lineWidth = fs * 0.09; tc.strokeStyle = 'rgba(5,9,16,0.85)';
+      tc.lineWidth = fs * 0.09; tc.strokeStyle = this._darkInk(style.color || C.text) ? 'rgba(255,255,255,0.85)' : 'rgba(5,9,16,0.85)';
       tc.strokeText(text, cx, cy);
       tc.fillStyle = active ? C.accent : this._alpha(style.color || C.text, 0.95);
       tc.fillText(text, cx, cy);
@@ -1386,7 +1482,7 @@ class FXEngine {
     tc.shadowBlur = 0;
     tc.fillText(text, cx, cy);
     // 芯の発光(白): 色を飛ばさないよう色付きプリセットとmarkerでは省く。控えめに
-    if (active && glow > 0.5 && preset !== 'marker' && !colored) {
+    if (active && glow > 0.5 && preset !== 'marker' && !colored && !this._darkInk(style.color || C.text)) {
       tc.shadowBlur = fs * 0.1; tc.fillStyle = '#ffffff'; tc.globalAlpha = alpha * 0.28;
       tc.fillText(text, cx, cy); tc.globalAlpha = alpha;
     }
