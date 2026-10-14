@@ -92,10 +92,20 @@ const App = {
       requestAnimationFrame(loop);
     };
     loop();
-    document.getElementById('demo-fill').onclick = () => {
+    // 公開サーバーでは新規登録・デモアカウントを出さない(サーバーの設定に従う)
+    API.get('/auth/config').then(cfg => {
+      if (!c.isConnected) return;
+      if (cfg.demo === false) document.getElementById('demo-fill')?.remove();
+      if (cfg.register === false) {
+        const sw = document.querySelector('.auth-switch');
+        if (sw) sw.textContent = isLogin ? '' : 'このサーバーでは新規登録を受け付けていません';
+        if (!isLogin) document.querySelector('#auth-form button[type=submit]')?.setAttribute('disabled', '');
+      }
+    }).catch(() => {});
+    document.getElementById('demo-fill') && (document.getElementById('demo-fill').onclick = () => {
       document.getElementById('f-email').value = 'demo@lyricflow.app';
       document.getElementById('f-pass').value = 'demo1234';
-    };
+    });
     document.getElementById('auth-form').onsubmit = async e => {
       e.preventDefault();
       try {
@@ -597,6 +607,14 @@ const App = {
         </div>
       </div>
       <div class="panel">
+        <h3>パスワード変更</h3>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
+          <label class="fld" style="flex:1;min-width:180px;margin:0"><span>今のパスワード</span><input class="input" type="password" id="pw-cur" autocomplete="current-password"></label>
+          <label class="fld" style="flex:1;min-width:180px;margin:0"><span>新しいパスワード(10文字以上)</span><input class="input" type="password" id="pw-new" autocomplete="new-password" minlength="10"></label>
+          <button class="btn sm" id="pw-save">変更する</button>
+        </div>
+      </div>
+      <div class="panel">
         <h3>二段階認証 (MFA / TOTP)</h3>
         <p class="p-sub">仕様 2.1.1: Time-based One-Time Password。認証アプリ(Google Authenticator等)で6桁コードを生成します。</p>
         <div id="mfa-area">${me.user.mfa_enabled
@@ -629,6 +647,14 @@ const App = {
       if (code === null) return;
       try { await API.post('/mfa/disable', { code }); toast('MFAを無効化しました', 'ok'); this.route(); }
       catch (e) { toast(e.message, 'err'); }
+    };
+    const pwBtn = el.querySelector('#pw-save');
+    if (pwBtn) pwBtn.onclick = async () => {
+      try {
+        await API.post('/me/password', { current_password: el.querySelector('#pw-cur').value, new_password: el.querySelector('#pw-new').value });
+        el.querySelector('#pw-cur').value = ''; el.querySelector('#pw-new').value = '';
+        toast('パスワードを変更しました', 'ok');
+      } catch (e) { toast(e.message, 'err'); }
     };
     const setupBtn = el.querySelector('#mfa-setup');
     if (setupBtn) setupBtn.onclick = () => this.mfaSetup(el.querySelector('#mfa-area'));

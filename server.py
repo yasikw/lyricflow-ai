@@ -42,6 +42,20 @@ ATELIER_CACHE = os.path.join(DATA, "atelier_cache")   # VRM Atelier のアバタ
 DB_PATH = os.path.join(DATA, "lyricflow.db")
 STATIC = os.path.join(ROOT, "static")
 PORT = int(os.environ.get("PORT", "4189"))
+# 公開サーバー(VPS)向けの設定。ローカル/アプリ版は既定のまま(登録あり・デモあり)
+def _env_on(name, default):
+    v = os.environ.get(name)
+    return default if v is None or v == "" else v.strip().lower() in ("1", "true", "yes", "on")
+ALLOW_REGISTER = _env_on("LF_ALLOW_REGISTER", True)     # 新規登録を受け付けるか
+SEED_DEMO = _env_on("LF_SEED_DEMO", True)               # 空の DB にデモ用アカウント(demo1234)を作るか
+TRUST_PROXY = _env_on("LF_TRUST_PROXY", False)          # nginx の X-Real-IP を訪問者の IP として使うか
+# /media/ で配る(=ブラウザが直接読む)のはこのフォルダだけ。DB・署名鍵・.env などは配らない
+MEDIA_DIRS = ("uploads", "renders", "bglib", "atelier_cache")
+MAX_BODY = int(float(os.environ.get("LF_MAX_BODY_MB", "1024")) * (1 << 20))   # 1 リクエストの本文の上限
+MAX_FRAMES = 200_000                     # 書き出し 1 回のフレーム数の上限(30fps で約 1.8 時間)
+MAX_FRAME_BYTES = 40 << 20               # フレーム 1 枚の上限
+_ENCODE_STARTED = set()                  # finish を受け付けたジョブ(1 ジョブ 1 回だけエンコードする)
+_ENCODE_LOCK = threading.Lock()
 ACCESS_TTL = 3600           # 1時間 (仕様 2.1.1)
 REFRESH_TTL = 30 * 86400    # 30日
 # 仕様 9.1 サブスクリプションプラン / 2.3.1 ファイルサイズ上限 (Free 100MB, Pro以上 500MB)
@@ -502,7 +516,10 @@ def extract_live2d_zip(data, dest):
                     break
                 except UnicodeDecodeError:
                     continue
-    infos = [i for i in zf.infolist() if not i.is_dir() and "__MACOSX" not in i.filename and not os.path.basename(i.filename).startswith("._")]
+    # Live2D に要る種類のファイルだけ展開する(HTML などを紛れ込ませても配らない)
+    ok_ext = (".json", ".moc3", ".png", ".jpg", ".jpeg", ".webp", ".wav", ".mp3", ".ogg", ".txt")
+    infos = [i for i in zf.infolist() if not i.is_dir() and "__MACOSX" not in i.filename and not os.path.basename(i.filename).startswith("._")
+             and i.filename.lower().endswith(ok_ext)]
     if len(infos) > 3000 or sum(i.file_size for i in infos) > 300 << 20:
         raise ValueError("zip が大きすぎます")
     root = os.path.abspath(dest)
@@ -1046,7 +1063,7 @@ def run_ai_job(job_id):
             # Whisperエンジン: 実音声を認識して歌詞を強制アライメント (最も正確)
             if engine == "whisper" and whisper_available():
                 aid = payload.get("audio_asset_id")
-                arow = con.execute("SELECT url FROM assets WHERE id=?", (aid,)).fetchone() if aid else None
+                arow = con.execute("SELECT url FROM assets WHERE id=? AND workspace_id=?", (aid, job["workspace_id"])).fetchone() if aid and job["workspace_id"] else None
                 apath = os.path.join(DATA, arow["url"].replace("/media/", "", 1).lstrip("/")) if arow else None
                 if apath and os.path.exists(apath):
                     def wprog(p, st):
@@ -1121,11 +1138,11 @@ def run_render_job(job_id, src_path):
     # 元音源を解決 (映像のみキャプチャ + サーバー側で高音質ミックス)
     audio_path = None
     if settings.get("mux_source_audio") and fmt != "gif":
-        prj = con.execute("SELECT timeline_data_json FROM projects WHERE id=?", (job["project_id"],)).fetchone()
+        prj = con.execute("SELECT timeline_data_json, workspace_id FROM projects WHERE id=?", (job["project_id"],)).fetchone()
         if prj:
             aid = (json.loads(prj["timeline_data_json"]) or {}).get("audio_asset_id")
             if aid:
-                arow = con.execute("SELECT url FROM assets WHERE id=?", (aid,)).fetchone()
+                arow = con.execute("SELECT url FROM assets WHERE id=? AND workspace_id=?", (aid, prj["workspace_id"])).fetchone()
                 if arow:
                     ap = os.path.join(DATA, arow["url"].replace("/media/", "", 1).lstrip("/"))
                     if os.path.exists(ap):
@@ -1198,13 +1215,14 @@ def run_render_job(job_id, src_path):
         con.close()
 
 def resolve_project_audio(con, project_id):
-    prj = con.execute("SELECT timeline_data_json FROM projects WHERE id=?", (project_id,)).fetchone()
+    prj = con.execute("SELECT timeline_data_json, workspace_id FROM projects WHERE id=?", (project_id,)).fetchone()
     if not prj:
         return None
     aid = (json.loads(prj["timeline_data_json"]) or {}).get("audio_asset_id")
     if not aid:
         return None
-    arow = con.execute("SELECT url FROM assets WHERE id=?", (aid,)).fetchone()
+    # 他のワークスペースの音源 ID を書き込まれても読まない(同じワークスペースの素材だけ)
+    arow = con.execute("SELECT url FROM assets WHERE id=? AND workspace_id=?", (aid, prj["workspace_id"])).fetchone()
     if not arow:
         return None
     ap = os.path.join(DATA, arow["url"].replace("/media/", "", 1).lstrip("/"))
@@ -1467,15 +1485,24 @@ def seed():
         return
     now = time.time()
     uid, wid = str(uuid.uuid4()), str(uuid.uuid4())
+    if SEED_DEMO:
+        owner_email, owner_pw, owner_name = "demo@lyricflow.app", "demo1234", "Kaito"
+    else:
+        # 公開サーバー: デモ用の弱いパスワードは作らない。管理者を env から(無ければランダムなパスワードで)作り、初回だけログに出す
+        owner_email = (os.environ.get("LF_ADMIN_EMAIL") or "admin@lyricflow.local").strip().lower()
+        owner_pw = os.environ.get("LF_ADMIN_PASSWORD") or secrets.token_urlsafe(18)
+        owner_name = os.environ.get("LF_ADMIN_NAME") or "Owner"
+        if not os.environ.get("LF_ADMIN_PASSWORD"):
+            print(f"  初回の管理者アカウント: {owner_email} / {owner_pw}  (ログイン後にパスワードを変えてください)", flush=True)
     con.execute("INSERT INTO users(id,email,password_hash,name,avatar_url,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
-                (uid, "demo@lyricflow.app", hash_pw("demo1234"), "Kaito", None, now, now))
+                (uid, owner_email, hash_pw(owner_pw), owner_name, None, now, now))
     con.execute("INSERT INTO workspaces VALUES(?,?,?,?,?,?)",
                 (wid, "Demo Studio", "team",
                  json.dumps({"logo_text": "LF", "primary": "#00d4ff", "secondary": "#7b2ff7",
                              "accent": "#ff7edb", "font": "'Noto Sans JP', sans-serif"}), uid, now))
     con.execute("INSERT INTO workspace_users VALUES(?,?,?)", (wid, uid, "Owner"))
-    for m_email, m_name, role in [("hanako@lyricflow.app", "Hanako Suzuki", "Editor"),
-                                  ("kenji@lyricflow.app", "Kenji Tanaka", "Viewer")]:
+    for m_email, m_name, role in ([("hanako@lyricflow.app", "Hanako Suzuki", "Editor"),
+                                   ("kenji@lyricflow.app", "Kenji Tanaka", "Viewer")] if SEED_DEMO else []):
         mid = str(uuid.uuid4())
         con.execute("INSERT INTO users(id,email,password_hash,name,avatar_url,created_at,updated_at) VALUES(?,?,?,?,?,?,?)", (mid, m_email, hash_pw("demo1234"), m_name, None, now, now))
         con.execute("INSERT INTO workspace_users VALUES(?,?,?)", (wid, mid, role))
@@ -1566,6 +1593,9 @@ class Handler(BaseHTTPRequestHandler):
         if getattr(self, "_body_read", False):
             return self._body
         ln = int(self.headers.get("Content-Length") or 0)
+        if ln > MAX_BODY:
+            self.close_connection = True         # 読まずに接続ごと捨てる(メモリに載せない)
+            raise ValueError("request body too large")
         self._body = self.rfile.read(ln) if ln else b""
         self._body_read = True
         return self._body
@@ -1575,6 +1605,13 @@ class Handler(BaseHTTPRequestHandler):
             return json.loads(self.body() or b"{}")
         except Exception:
             return {}
+
+    def client_ip(self):
+        # nginx 越し(LF_TRUST_PROXY=1)なら X-Real-IP が訪問者の IP。そうでなければ接続元
+        ip = self.client_address[0]
+        if TRUST_PROXY and ip in ("127.0.0.1", "::1"):
+            ip = (self.headers.get("X-Real-IP") or ip).strip()
+        return ip
 
     def auth_user(self):
         h = self.headers.get("Authorization", "")
@@ -1614,8 +1651,11 @@ class Handler(BaseHTTPRequestHandler):
         finally:
             # 本文を読まない API(例: 複製)に本文付きで来ても、残りが次のリクエストに混ざらないよう読み捨てる
             try:
-                if not self._body_read and int(self.headers.get("Content-Length") or 0) > 0:
+                ln = int(self.headers.get("Content-Length") or 0)
+                if not self._body_read and 0 < ln <= MAX_BODY:
                     self.body()
+                elif not self._body_read and ln > MAX_BODY:
+                    self.close_connection = True
             except Exception:
                 pass
 
@@ -1625,7 +1665,11 @@ class Handler(BaseHTTPRequestHandler):
             if path.startswith("/api/"):
                 self.handle_api(method, path)
             elif method == "GET" and path.startswith("/media/"):
-                self.serve_file(os.path.join(DATA, urllib.parse.unquote(path[len("/media/"):])))   # Live2D のファイル名に空白・日本語があり得る
+                rel = urllib.parse.unquote(path[len("/media/"):])   # Live2D のファイル名に空白・日本語があり得る
+                top = rel.lstrip("/").split("/", 1)[0]
+                if top not in MEDIA_DIRS or any(part.startswith(".") for part in rel.split("/")):
+                    return self.err(404, "not_found", "file not found")
+                self.serve_file(os.path.join(DATA, rel.lstrip("/")))
             elif method == "GET":
                 self.serve_static(path)
             else:
@@ -1639,8 +1683,8 @@ class Handler(BaseHTTPRequestHandler):
                 pass
 
     def serve_file(self, fpath):
-        fpath = os.path.abspath(fpath)
-        if not fpath.startswith(DATA) or not os.path.isfile(fpath):
+        fpath = os.path.realpath(fpath)
+        if not any(fpath.startswith(os.path.realpath(os.path.join(DATA, d)) + os.sep) for d in MEDIA_DIRS) or not os.path.isfile(fpath):
             return self.err(404, "not_found", "file not found")
         ctype = mimetypes.guess_type(fpath)[0] or "application/octet-stream"
         size = os.path.getsize(fpath)
@@ -1654,6 +1698,8 @@ class Handler(BaseHTTPRequestHandler):
                 f.seek(start)
                 chunk = f.read(end - start + 1)
                 self.send_response(206)
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.send_header("Content-Security-Policy", "sandbox")
                 self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
                 self.send_header("Accept-Ranges", "bytes")
                 self.send_header("Content-Type", ctype)
@@ -1663,6 +1709,8 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self.send_response(200)
                 self.send_header("Content-Type", ctype)
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.send_header("Content-Security-Policy", "sandbox")   # アップロード物(HTML/SVG)を開いてもスクリプトを動かさない
                 self.send_header("Accept-Ranges", "bytes")
                 self.send_header("Content-Length", str(size))
                 self.end_headers()
@@ -1697,7 +1745,11 @@ class Handler(BaseHTTPRequestHandler):
         try:
             # ---------- auth ----------
             if s[0] == "auth":
+                if len(s) == 2 and s[1] == "config" and method == "GET":   # ログイン画面が出し分けに使う(認証不要)
+                    return self.send_json({"register": ALLOW_REGISTER, "demo": SEED_DEMO})
                 b = self.json_body()
+                if s[1] == "register" and method == "POST" and not ALLOW_REGISTER:
+                    return self.err(403, "register_closed", "このサーバーでは新規登録を受け付けていません")
                 if s[1] == "register" and method == "POST":
                     email, pw, name = (b.get("email") or "").strip().lower(), b.get("password") or "", (b.get("name") or "").strip()
                     if not email or len(pw) < 8 or not name:
@@ -1715,7 +1767,7 @@ class Handler(BaseHTTPRequestHandler):
                                            "user": {"id": uid, "email": email, "name": name}})
                 if s[1] == "login" and method == "POST":
                     email = (b.get("email") or "").strip().lower()
-                    lock_key = f"{self.client_address[0]}|{email}"
+                    lock_key = f"{self.client_ip()}|{email}"
                     locked = login_locked(lock_key)         # 仕様 8.3: 5回失敗で15分ロック
                     if locked:
                         return self.err(429, "account_locked",
@@ -1942,10 +1994,25 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send_json({"ok": True})
                 return self.err(404, "not_found", "unknown bglib endpoint")
 
+            # ---------- パスワード変更 ----------
+            if s == ["me", "password"] and method == "POST":
+                b = self.json_body()
+                urow = con.execute("SELECT password_hash FROM users WHERE id=?", (uid,)).fetchone()
+                new = b.get("new_password") or ""
+                if not urow or not check_pw(b.get("current_password") or "", urow["password_hash"] or ""):
+                    return self.err(403, "wrong_password", "今のパスワードが違います")
+                if len(new) < 10:
+                    return self.err(400, "weak_password", "新しいパスワードは10文字以上にしてください")
+                con.execute("UPDATE users SET password_hash=?, updated_at=? WHERE id=?", (hash_pw(new), time.time(), uid))
+                con.commit()
+                return self.send_json({"ok": True})
+
             # ---------- MFA (TOTP) ----------
             if s[0] == "mfa":
                 urow = con.execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone()
                 if len(s) == 2 and s[1] == "setup" and method == "POST":
+                    if urow["mfa_enabled"]:
+                        return self.err(409, "mfa_enabled", "MFAは有効です。設定し直すには先に無効化してください")
                     secret = _b32(secrets.token_bytes(20))
                     con.execute("UPDATE users SET mfa_secret=? WHERE id=?", (secret, uid))
                     con.commit()
@@ -2129,13 +2196,19 @@ class Handler(BaseHTTPRequestHandler):
                             con.execute("INSERT INTO users(id,email,password_hash,name,avatar_url,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
                                         (nid, email, hash_pw(secrets.token_hex(8)), email.split("@")[0], None, now, now))
                             u = con.execute("SELECT * FROM users WHERE id=?", (nid,)).fetchone()
+                        cur_role = con.execute("SELECT role FROM workspace_users WHERE workspace_id=? AND user_id=?", (wid, u["id"])).fetchone()
+                        if cur_role and (cur_role["role"] == "Owner" or (role == "Admin" and cur_role["role"] == "Admin")):
+                            return self.err(403, "forbidden", "このメンバーのロールは変更できません")
                         con.execute("INSERT OR REPLACE INTO workspace_users VALUES(?,?,?)", (wid, u["id"], new_role))
                         con.commit()
                         return self.send_json({"ok": True}, 201)
                 if sub == "api-keys":
                     if method == "GET":
+                        if role not in ("Owner", "Admin"):
+                            return self.err(403, "forbidden", "APIキーの閲覧はAdmin以上が必要です")
                         rows = con.execute("SELECT * FROM api_keys WHERE workspace_id=?", (wid,)).fetchall()
-                        return self.send_json({"api_keys": [dict(r) for r in rows]})
+                        # 全文は発行した時だけ返す。一覧は伏せ字
+                        return self.send_json({"api_keys": [dict(r) | {"key": (r["key"] or "")[:8] + "…" + (r["key"] or "")[-4:]} for r in rows]})
                     if method == "POST":
                         if role not in ("Owner", "Admin"):
                             return self.err(403, "forbidden", "APIキー発行はAdmin以上が必要です")
@@ -2254,7 +2327,7 @@ class Handler(BaseHTTPRequestHandler):
                 if s[1] in ("sync-lyrics", "analyze-scene", "translate-lyrics", "suggest") and method == "POST":
                     b = self.json_body()
                     wid = b.get("workspace_id")
-                    if wid and not ws_role(wid):
+                    if not wid or not ws_role(wid):
                         return self.err(403, "forbidden", "アクセス権がありません")
                     if b.get("engine") == "codex" and not codex_available():
                         return self.err(400, "codex_unavailable", "Codex CLIが利用できません。builtinエンジンをご利用ください。")
@@ -2271,7 +2344,7 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send_json({"job_id": jid}, 202)
                 if s[1] == "jobs" and len(s) > 2 and method == "GET":
                     row = con.execute("SELECT * FROM ai_jobs WHERE id=?", (s[2],)).fetchone()
-                    if not row:
+                    if not row or not (row["user_id"] == uid or (row["workspace_id"] and ws_role(row["workspace_id"]))):
                         return self.err(404, "not_found", "ジョブが見つかりません")
                     return self.send_json({"id": row["id"], "kind": row["kind"], "status": row["status"],
                                            "progress_pct": row["progress_pct"], "stage": row["stage"],
@@ -2280,6 +2353,10 @@ class Handler(BaseHTTPRequestHandler):
 
             # ---------- render ----------
             if s[0] == "render":
+                def own_job(jid):
+                    # ジョブはプロジェクトのワークスペースのメンバーだけが触れる
+                    r = con.execute("SELECT j.* , p.workspace_id AS wid FROM render_jobs j JOIN projects p ON p.id=j.project_id WHERE j.id=?", (jid,)).fetchone()
+                    return r if r and ws_role(r["wid"]) else None
                 # 決定論的フレームレンダリング (高品質): start → frame×N → finish
                 if len(s) == 3 and s[1] == "frames" and s[2] == "start" and method == "POST":
                     b = self.json_body()
@@ -2305,8 +2382,11 @@ class Handler(BaseHTTPRequestHandler):
                 if len(s) == 4 and s[1] == "frames" and s[3].isdigit() and method == "POST":
                     jid, idx = s[2], int(s[3])
                     fd = os.path.join(RENDERS, f"frames_{jid}")
-                    if not os.path.isdir(fd):
+                    jr = own_job(jid)
+                    if not jr or jr["status"] != "processing" or not os.path.isdir(fd):
                         return self.err(404, "not_found", "レンダリングジョブが見つかりません")
+                    if idx >= MAX_FRAMES or int(self.headers.get("Content-Length") or 0) > MAX_FRAME_BYTES:
+                        return self.err(413, "too_large", "フレームが多すぎるか大きすぎます")
                     with open(os.path.join(fd, f"{idx:06d}.jpg"), "wb") as fh:
                         fh.write(self.body())
                     n = len(os.listdir(fd))
@@ -2316,9 +2396,14 @@ class Handler(BaseHTTPRequestHandler):
                 if len(s) == 4 and s[1] == "frames" and s[3] == "finish" and method == "POST":
                     self.body()          # ボディを読み捨て(keep-alive混線防止)
                     jid = s[2]
-                    row = con.execute("SELECT * FROM render_jobs WHERE id=?", (jid,)).fetchone()
+                    row = own_job(jid)
                     if not row:
                         return self.err(404, "not_found", "ジョブが見つかりません")
+                    # エンコードは 1 ジョブ 1 回だけ(何度も呼んで ffmpeg を並べられないように)
+                    with _ENCODE_LOCK:
+                        if jid in _ENCODE_STARTED or row["status"] != "processing":
+                            return self.err(409, "already_started", "エンコードは開始済みです")
+                        _ENCODE_STARTED.add(jid)
                     threading.Thread(target=run_frames_encode, args=(jid,), daemon=True).start()
                     return self.send_json({"ok": True}, 202)
                 if len(s) == 1 and method == "POST":
@@ -2351,12 +2436,14 @@ class Handler(BaseHTTPRequestHandler):
                     threading.Thread(target=run_render_job, args=(jid, src), daemon=True).start()
                     return self.send_json({"job_id": jid}, 202)
                 if len(s) == 2 and method == "GET":
-                    row = con.execute("SELECT * FROM render_jobs WHERE id=?", (s[1],)).fetchone()
+                    row = own_job(s[1])
                     if not row:
                         return self.err(404, "not_found", "ジョブが見つかりません")
                     return self.send_json({"status": row["status"], "progress_pct": row["progress_pct"],
                                            "output_url": row["output_url"], "error_message": row["error_message"]})
                 if len(s) == 2 and method == "DELETE":
+                    if not own_job(s[1]):
+                        return self.err(404, "not_found", "ジョブが見つかりません")
                     con.execute("UPDATE render_jobs SET status='cancelled' WHERE id=? AND status IN('pending','processing')", (s[1],))
                     con.commit()
                     return self.send_json({}, 204) if False else self.send_json({"ok": True})
@@ -2377,7 +2464,7 @@ class Handler(BaseHTTPRequestHandler):
                     if row["type"] == "live2d":
                         shutil.rmtree(os.path.join(UPLOADS, "live2d", row["id"]), ignore_errors=True)
                     else:
-                        os.remove(os.path.join(DATA, row["url"].lstrip("/media/").lstrip("/")))
+                        os.remove(os.path.join(DATA, row["url"].replace("/media/", "", 1).lstrip("/")))
                 except Exception:
                     pass
                 return self.send_json({"ok": True})
@@ -2391,7 +2478,7 @@ def main():
     seed()
     srv = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
     print(f"LyricFlow AI  →  http://localhost:{PORT}")
-    print(f"  demo: demo@lyricflow.app / demo1234   ffmpeg: {'OK' if FFMPEG else 'なし(webm出力のみ)'}")
+    print(f"  demo: {'demo@lyricflow.app / demo1234' if SEED_DEMO else '(なし)'}  register: {'on' if ALLOW_REGISTER else 'off'}   ffmpeg: {'OK' if FFMPEG else 'なし(webm出力のみ)'}")
     srv.serve_forever()
 
 

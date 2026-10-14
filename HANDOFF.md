@@ -121,6 +121,18 @@
 - 従来表示: `_drawLyrics` が同じ判定で `style.color` / `C` を差し替える。neon/brush/longshadow は暗い文字なら縁を白に・白い芯の発光を省く(`_darkInk`)。
   金/炎/クロームなど固定配色のレタリングは対象外。合成用(グリーン/ブラックバック)書き出しでは切り替えない。
 
+## VPS 公開(2026-10-14) — https://lyricflow.aixr.tokyo.jp
+
+- 手順・構成は `deploy/DEPLOY.md`。Xserver VPS(ekyc-vps)に systemd `lyricflow` + nginx。Mac のプロジェクトは移していない(VPS は別 DB)。
+- 公開モードの env(既定はローカル/アプリ版の従来動作のまま=後方互換): `LF_ALLOW_REGISTER`(0で登録停止)、`LF_SEED_DEMO`(0でデモ垢を作らず
+  `LF_ADMIN_*` の管理者を作る)、`LF_TRUST_PROXY`(1で X-Real-IP)、`LF_MAX_BODY_MB`。ログイン画面は `GET /api/v1/auth/config` で出し分け。
+- 追加 API: `POST /api/v1/me/password`(current_password/new_password, 10文字以上)。アカウント画面に「パスワード変更」。
+- 公開前の点検で直したこと: `/media/` は uploads/renders/bglib/atelier_cache だけ配る(以前は DB と secret.key も取れた)・nosniff+CSP sandbox、
+  Live2D zip は必要な拡張子だけ展開、音源は同じワークスペースの素材だけ解決、render/ai ジョブは持ち主のワークスペースだけ、finish は1回だけ
+  (メモリ上の `_ENCODE_STARTED`、render_jobs.status の CHECK は変えていない)、フレーム数/サイズ上限、本文サイズ上限、
+  Admin が Owner のロールを変えられない、API キー一覧は Admin 以上・伏せ字、MFA 有効中の再設定を拒否、`/ai/*` は workspace_id 必須。
+- 残り(単独利用なので低リスク・未対応): プラン即時切替 API(デモ用)、Viewer の複製、放置された frames_* の掃除、認証なしの `/atelier/file` プロキシ(VPS では Atelier 無し)。
+
 ## 連携が切れたときの復帰(重要)
 
 - `_loadAtelier()` は**成功時のみキャッシュ**する。失敗をキャッシュすると、後から
