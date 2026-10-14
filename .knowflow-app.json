@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "name": "LyricFlow AI",
+  "purpose": "音源と歌詞からアニメ調のリリックビデオ(MV)を作る。AI歌詞同期・609種の文字演出・Live2D/3Dキャラの口パクとダンス・MP4書き出し。Macアプリのほか、外からは Web 版 https://lyricflow.aixr.tokyo.jp でも使える(データは別)。",
+  "category": "映像制作",
+  "examples": [
+    "歌詞の入ったMVを作りたい",
+    "曲に合わせて歌詞をアニメーションさせたい",
+    "Live2Dキャラが口パクして踊るリリックビデオを作りたい",
+    "外出先からリリックビデオを編集したい"
+  ],
+  "agent": "claude-code",
+  "launcher": {
+    "type": "app",
+    "path": "/Applications/LyricFlow AI.app",
+    "label": "Macアプリを開く"
+  },
+  "id": "app-c025e2a1fbc27a8e4ba1b2b7"
+}
