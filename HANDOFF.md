@@ -1,6 +1,6 @@
 # HANDOFF — LyricFlow AI
 
-最終更新: 2026-10-14 (Claude Code)
+最終更新: 2026-10-15 (Claude Code)
 
 ## インストール版(/Applications/LyricFlow AI.app)
 - 作成・更新: `./scripts/install_app.sh`(`--rebuild` で .app も作り直し)。コードは `~/Library/Application Support/LyricFlow AI/app` に置き、
@@ -132,6 +132,16 @@
   (メモリ上の `_ENCODE_STARTED`、render_jobs.status の CHECK は変えていない)、フレーム数/サイズ上限、本文サイズ上限、
   Admin が Owner のロールを変えられない、API キー一覧は Admin 以上・伏せ字、MFA 有効中の再設定を拒否、`/ai/*` は workspace_id 必須。
 - 残り(単独利用なので低リスク・未対応): プラン即時切替 API(デモ用)、Viewer の複製、放置された frames_* の掃除、認証なしの `/atelier/file` プロキシ(VPS では Atelier 無し)。
+
+## スマホ・折りたたみ端末(Galaxy Z Fold7)対応(2026-10-15)
+
+- 幅900px以下、または高さ600px以下のタッチ端末(横向きスマホ)で編集画面を「引き出しパネル」方式にする(app.css 末尾)。
+  上部の「☰ 素材」「⚙ 調整」で左右のサイドバーを出し入れ(`.editor.show-left/.show-right`、暗幕 `#ed-scrim` で閉じる)。
+  幅640px以上(開いた Fold)は暗幕を透明にしてプレビューを見ながら調整できる。再生ボタン等は 40〜56px、タイムライン見出しは横スクロール。
+- 歌詞クリップのドラッグを pointer イベント化。指は 1 回目のタップで選択、選択中のクリップだけドラッグ(`.clip.sel{touch-action:none}`)。
+- `audio.play()` が拒否された時も映像だけ進める(`_silentClock`)。
+- Cloudflare が CSS/JS を4時間キャッシュするため、index.html を返す時に `static_version()`(static/ の最新更新時刻)を
+  `?v=` として CSS/JS の URL に付ける(compose の loader も同じ v を引き継ぐ)。index.html は `Cache-Control: no-cache`。
 
 ## 連携が切れたときの復帰(重要)
 

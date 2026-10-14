@@ -301,6 +301,8 @@ class Editor {
     <div class="editor">
       <div class="ed-top">
         <button class="btn ghost sm" id="back-btn">← 戻る</button>
+        <button class="btn sm mob-only" id="mob-left" title="メディア・テンプレ・歌詞のパネルを開く">☰ 素材</button>
+        <button class="btn sm mob-only" id="mob-right" title="選択中の項目の調整パネルを開く">⚙ 調整</button>
         <span class="logo" style="font-size:13px"><span class="mark">♪</span></span>
         <input class="title-in" id="title-in" value="${esc(this.project.title)}">
         <span class="autosave" id="autosave">自動保存: 30秒ごと</span>
@@ -347,6 +349,7 @@ class Editor {
           </div>
         </section>
         <aside class="ed-right" id="right-pane"></aside>
+        <div class="ed-scrim" id="ed-scrim"></div>
         <div class="resizer resizer-x" id="rz-left" title="ドラッグで左サイドバーの幅を調整"></div>
         <div class="resizer resizer-x" id="rz-right" title="ドラッグで右サイドバーの幅を調整"></div>
       </div>
@@ -377,6 +380,18 @@ class Editor {
   bindShell() {
     const $ = s => this.root.querySelector(s);
     $('#back-btn').onclick = () => { location.hash = '#/projects'; };
+    // 狭い画面(スマホ・折りたたみ端末)では左右のサイドバーを引き出しパネルにする
+    const ed = $('.editor');
+    const drawer = side => {
+      const cls = 'show-' + side, other = side === 'left' ? 'show-right' : 'show-left';
+      ed.classList.remove(other);
+      ed.classList.toggle(cls);
+      $('#mob-left').classList.toggle('on', ed.classList.contains('show-left'));
+      $('#mob-right').classList.toggle('on', ed.classList.contains('show-right'));
+    };
+    $('#mob-left').onclick = () => drawer('left');
+    $('#mob-right').onclick = () => drawer('right');
+    $('#ed-scrim').onclick = () => { ed.classList.remove('show-left', 'show-right'); $('#mob-left').classList.remove('on'); $('#mob-right').classList.remove('on'); };
     $('#save-btn').onclick = () => this.save();
     $('#export-btn').onclick = () => this.openExport();
     $('#publish-btn').onclick = () => this.publishTemplate();
@@ -615,7 +630,8 @@ class Editor {
 
   frame() {
     if (this.destroyed) return;
-    if (this.playing && this.audio.src) this.t = this.audio.currentTime;
+    if (this.playing && this._silentClock) this.t = this._silentClock.t0 + (performance.now() - this._silentClock.at) / 1000;
+    else if (this.playing && this.audio.src) this.t = this.audio.currentTime;
     else if (this.playing) this.t += 1 / 60;
     if (this.playing && this.t >= (this.tl.duration || 0)) { this.pause(); this.t = this.tl.duration || 0; }
     if (this.playing && this.metronomeOn && this.tl.bpm) this._metroTick();
@@ -667,17 +683,28 @@ class Editor {
     }
     this.playing = true;
     if (this.metronomeOn) { this._ensureAudioCtx(); this._syncBeatCursor(); }
-    if (this.audio.src) { this.audio.currentTime = this.t; this.audio.play().catch(() => {}); }
+    this._silentClock = null;
+    if (this.audio.src) {
+      this.audio.currentTime = this.t;
+      this.audio.play().catch(err => {
+        if (!this.playing) return;
+        // 音が出せない時(端末の制限・読み込み失敗など)も、映像だけは進める
+        this._silentClock = { t0: this.t, at: performance.now() };
+        if (!this._audioWarned) { this._audioWarned = true; toast('音声を再生できませんでした。映像だけ再生します(' + (err && err.name || 'error') + ')', 'err'); }
+      });
+    }
     this.root.querySelector('#tp-play').textContent = '⏸';
   }
   pause() {
     this.playing = false;
+    this._silentClock = null;
     this.audio.pause();
     const b = this.root.querySelector('#tp-play');
     if (b) b.textContent = '▶';
   }
   seek(t) {
     this.t = Math.max(0, Math.min(this.tl.duration || 0, t));
+    if (this._silentClock) this._silentClock = { t0: this.t, at: performance.now() };
     if (this.audio.src) this.audio.currentTime = this.t;
     this._syncBeatCursor();
   }
@@ -2949,7 +2976,7 @@ alert('LyricFlow: ' + D.cuts.length + ' text layers created.' + (miss.length ? '
     this.drawWaveform();
     this.bindTimeline(labelW, pps);
     inner.querySelectorAll('.clip.cut').forEach(el => {
-      el.onmousedown = e => e.stopPropagation();
+      el.onpointerdown = e => e.stopPropagation();
       el.onclick = e => {
         e.stopPropagation();
         const cut = (window.LFC.buildCuts(this.tl) || [])[+el.dataset.cut];
@@ -3041,11 +3068,14 @@ alert('LyricFlow: ' + D.cuts.length + ' text layers created.' + (miss.length ? '
     });
     // 歌詞クリップ: ドラッグ移動 / リサイズ / 選択
     this.root.querySelectorAll('.clip[data-clip]').forEach(clip => {
-      clip.onmousedown = e => {
-        e.stopPropagation(); e.preventDefault();
+      clip.onpointerdown = e => {
+        if (e.button > 0) return;
         const id = clip.dataset.clip;
         const w = this.tl.tracks.lyrics.find(x => x.id === id);
         if (!w) return;
+        // 指では 1 回目のタップで選ぶだけ(タイムラインのスクロールを邪魔しない)。選んだクリップはドラッグで動かせる
+        if (e.pointerType === 'touch' && this.sel !== id) { e.stopPropagation(); this.sel = id; this.renderTimeline(); this.renderRight(); return; }
+        e.stopPropagation(); e.preventDefault();
         if (this.sel !== id) { this.sel = id; this.renderTimeline(); this.renderRight(); }
         const mode = e.target.classList.contains('rz') ? (e.target.classList.contains('l') ? 'l' : 'r') : 'move';
         const startX = e.clientX, s0 = w.start, e0 = w.end;
@@ -3058,12 +3088,14 @@ alert('LyricFlow: ' + D.cuts.length + ' text layers created.' + (miss.length ? '
           if (el2) { el2.style.left = w.start * pps + 'px'; el2.style.width = Math.max(14, (w.end - w.start) * pps) + 'px'; }
         };
         const onUp = () => {
-          document.removeEventListener('mousemove', onMove);
-          document.removeEventListener('mouseup', onUp);
+          document.removeEventListener('pointermove', onMove);
+          document.removeEventListener('pointerup', onUp);
+          document.removeEventListener('pointercancel', onUp);
           this.markDirty(); this.renderRight();
         };
-        document.addEventListener('mousemove', onMove);
-        document.addEventListener('mouseup', onUp);
+        document.addEventListener('pointermove', onMove);
+        document.addEventListener('pointerup', onUp);
+        document.addEventListener('pointercancel', onUp);
       };
     });
     this.root.querySelectorAll('.scene-band').forEach(b => b.onclick = () => this.seek(+b.dataset.seek));

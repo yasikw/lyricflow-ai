@@ -1214,6 +1214,21 @@ def run_render_job(job_id, src_path):
     finally:
         con.close()
 
+_STATIC_VER = [0.0, b""]
+def static_version():
+    """static/ の中で一番新しい更新時刻(10秒ごとに見直す)。index.html の CSS/JS の URL に付ける版番号"""
+    now = time.time()
+    if now - _STATIC_VER[0] > 10 or not _STATIC_VER[1]:
+        newest = 0.0
+        for d, _, files in os.walk(STATIC):
+            for fn in files:
+                try:
+                    newest = max(newest, os.path.getmtime(os.path.join(d, fn)))
+                except OSError:
+                    pass
+        _STATIC_VER[0], _STATIC_VER[1] = now, str(int(newest)).encode()
+    return _STATIC_VER[1]
+
 def resolve_project_audio(con, project_id):
     prj = con.execute("SELECT timeline_data_json, workspace_id FROM projects WHERE id=?", (project_id,)).fetchone()
     if not prj:
@@ -1729,8 +1744,14 @@ class Handler(BaseHTTPRequestHandler):
         ctype = mimetypes.guess_type(fpath)[0] or "text/html"
         with open(fpath, "rb") as f:
             data = f.read()
+        if fpath.endswith("index.html"):
+            # Cloudflare やブラウザが CSS/JS を数時間キャッシュするので、更新時刻から作った版番号を URL に付ける(更新すると URL が変わる)
+            v = static_version()
+            data = re.sub(rb'((?:src|href)=["\'])(/(?:js|css|stage|vendor)/[^"\'?#]+)(["\'])', lambda m: m.group(1) + m.group(2) + b"?v=" + v + m.group(3), data)
         self.send_response(200)
         self.send_header("Content-Type", ctype)
+        if fpath.endswith("index.html"):
+            self.send_header("Cache-Control", "no-cache")   # 画面の HTML は毎回確かめる(版番号付きの CSS/JS は長くキャッシュしてよい)
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)
