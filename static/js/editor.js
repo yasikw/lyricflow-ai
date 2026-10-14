@@ -261,6 +261,9 @@ class Editor {
     this.keyHandler = e => {
       if (this._tapActive) return;                 // タップ同期中はSpaceを譲る
       if (e.target.matches('input,textarea,select')) return;
+      if (e.code === 'KeyF' && !e.metaKey && !e.ctrlKey && !e.altKey) { e.preventDefault(); this.toggleFullscreen(); return; }
+      if (e.code === 'Escape' && this._fs) { this.toggleFullscreen(false); return; }
+      if (this._fs && e.code !== 'Space' && e.code !== 'ArrowRight' && e.code !== 'ArrowLeft') return;   // 全画面中は再生の操作だけ
       if (e.code === 'Space') { e.preventDefault(); this.togglePlay(); }
       if (e.code === 'KeyR' && !e.metaKey && !e.ctrlKey && !e.altKey) { e.preventDefault(); this.composeOmakase(); }
       if (e.code === 'ArrowRight') { e.preventDefault(); this.stepFrame(1); }
@@ -276,6 +279,9 @@ class Editor {
     document.removeEventListener('keydown', this.keyHandler);
     try { this._clock && this._clock.terminate(); } catch (e) {}
     try { this._stageRO && this._stageRO.disconnect(); } catch (e) {}
+    if (this._fsChange) { document.removeEventListener('fullscreenchange', this._fsChange); document.removeEventListener('webkitfullscreenchange', this._fsChange); }
+    clearTimeout(this._fsTimer);
+    if (this._fs && (document.fullscreenElement || document.webkitFullscreenElement)) { try { (document.exitFullscreen || document.webkitExitFullscreen).call(document); } catch (e) {} }
     this.audio.pause();
     if (this.dirty) this.save(true);
   }
@@ -336,6 +342,13 @@ class Editor {
               <span class="chip" id="quality-chip" style="cursor:pointer" title="プレビュー品質切替">品質: Full HD</span>
             </div>
             <canvas id="stage"></canvas>
+            <div class="fs-tap" id="fs-tap"></div>
+            <div class="fs-bar" id="fs-bar">
+              <button class="fs-btn" id="fs-play" title="再生 / 一時停止（Space）">▶</button>
+              <span class="fs-time" id="fs-time">00:00</span>
+              <input type="range" id="fs-seek" min="0" max="1000" value="0" aria-label="再生位置">
+              <button class="fs-btn" id="fs-exit" title="全画面を終了（Esc / F）">✕</button>
+            </div>
           </div>
           <div class="transport">
             <button class="t-btn" id="tp-start" title="先頭へ">⏮</button>
@@ -343,6 +356,7 @@ class Editor {
             <button class="t-btn play" id="tp-play">▶</button>
             <button class="t-btn" id="tp-next" title="1フレーム進む（→）">▷</button>
             <button class="t-btn" id="tp-end" title="末尾へ">⏭</button>
+            <button class="t-btn" id="tp-full" title="全画面で再生（F）">⤢</button>
             <span class="t-time" id="tp-time">00:00.00 / 00:00.00</span>
             <input type="range" id="tp-vol" min="0" max="100" value="80" style="width:90px" title="音量">
             <div class="aspect-mini" id="aspect-mini">
@@ -406,6 +420,7 @@ class Editor {
     $('#tp-play').onclick = () => this.togglePlay();
     $('#tp-start').onclick = () => this.seek(0);
     $('#tp-end').onclick = () => this.seek(this.tl.duration || 0);
+    this._bindFullscreen();
     $('#tp-prev').onclick = () => this.stepFrame(-1);
     $('#tp-next').onclick = () => this.stepFrame(1);
     this.root.querySelectorAll('#t-guides button').forEach(b => b.onclick = () => {
@@ -612,7 +627,10 @@ class Editor {
   fitStage() {
     const [w, h] = ASPECTS[this.project.aspect_ratio] || ASPECTS['16:9'];
     const s = this.qualityMode === 'auto' ? (this.previewScale || 1) : 1;   // 書き出しは startRender が等倍に戻す
-    this.engine?.resize(Math.round(w * s), Math.round(h * s));
+    // 全画面では大きく映るので、下書き以外は最大 1.5 倍(16:9 なら 1920×1080)で描く。重ければ自動品質が下げる
+    const fsMul = this._fs && this.qualityMode !== 'draft'
+      ? Math.max(1, Math.min(1.5, (Math.max(screen.width, screen.height) * (window.devicePixelRatio || 1)) / Math.max(w, h))) : 1;
+    this.engine?.resize(Math.round(w * s * fsMul), Math.round(h * s * fsMul));
     const c = this.root.querySelector('#stage');
     if (c) {
       c.style.aspectRatio = `${w}/${h}`; this._sizeStage();
@@ -670,6 +688,12 @@ class Editor {
     if (this.tl.compose && this.tl.compose.enabled && !this._exporting) this._composeCutPanel();   // カットが変わったら編集パネル更新
     const tt = this.root.querySelector('#tp-time');
     if (tt) tt.textContent = `${fmtTime(this.t)} / ${fmtTime(this.tl.duration || 0)}`;
+    if (this._fs) {
+      const ft = this.root.querySelector('#fs-time'), fsk = this.root.querySelector('#fs-seek'), fp = this.root.querySelector('#fs-play');
+      if (ft) ft.textContent = `${fmtTime(this.t)} / ${fmtTime(this.tl.duration || 0)}`;
+      if (fsk && document.activeElement !== fsk) fsk.value = Math.round((this.t / (this.tl.duration || 1)) * 1000);
+      if (fp) fp.textContent = this.playing ? '⏸' : '▶';
+    }
     const sc = this.engine.sceneAt(this.t);
     const chip = this.root.querySelector('#scene-chip');
     if (chip) chip.textContent = sc ? `${sc.label} · energy ${(sc.energy * 100 | 0)}%` : 'シーン未解析';
@@ -729,8 +753,68 @@ class Editor {
     const aw = wrap.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
     const ah = wrap.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
     if (aw <= 0 || ah <= 0) return;
-    const dw = Math.min(aw, ah * w / h, w * 2);
+    const dw = Math.min(aw, ah * w / h, this._fs ? Infinity : w * 2);
     c.style.width = Math.floor(dw) + 'px'; c.style.height = Math.floor(dw * h / w) + 'px';
+  }
+
+  /* ---------------- 全画面再生 ----------------
+     プレビューの枠(.stage-wrap)を全画面にして再生する。編集の操作は止め、タップで再生/一時停止、下の操作バーは再生中2.5秒で隠す。
+     全画面の API が無い端末(iPhone の Safari など)は画面いっぱいに広げる表示で代用する */
+  _bindFullscreen() {
+    const $ = s => this.root.querySelector(s);
+    const wrap = $('.stage-wrap');
+    $('#tp-full').onclick = () => this.toggleFullscreen(true);
+    $('#fs-exit').onclick = e => { e.stopPropagation(); this.toggleFullscreen(false); };
+    $('#fs-play').onclick = e => { e.stopPropagation(); this.togglePlay(); this._fsPoke(); };
+    $('#fs-tap').onclick = () => { if (this._fsBarHidden) { this._fsPoke(); return; } this.togglePlay(); this._fsPoke(); };
+    $('#fs-tap').ondblclick = () => this.toggleFullscreen(false);
+    const seek = $('#fs-seek');
+    seek.oninput = () => { this.seek((seek.value / 1000) * (this.tl.duration || 0)); if (!this.playing) this.frame(); this._fsPoke(); };
+    wrap.addEventListener('pointermove', () => { if (this._fs) this._fsPoke(); });
+    this._fsChange = () => {
+      const on = (document.fullscreenElement || document.webkitFullscreenElement) === wrap;
+      if (!on && this._fs && !wrap.classList.contains('fs-fallback')) this._fsExited();
+    };
+    document.addEventListener('fullscreenchange', this._fsChange);
+    document.addEventListener('webkitfullscreenchange', this._fsChange);
+  }
+  toggleFullscreen(on) {
+    const wrap = this.root.querySelector('.stage-wrap');
+    if (!wrap) return;
+    if (on == null) on = !this._fs;
+    if (on && !this._fs) {
+      if (this._exporting) return;
+      this._fs = true;
+      wrap.classList.add('fs-on');
+      const req = wrap.requestFullscreen || wrap.webkitRequestFullscreen;
+      const fallback = () => { if (this._fs && !(document.fullscreenElement || document.webkitFullscreenElement)) { wrap.classList.add('fs-fallback'); this.fitStage(); } };
+      if (req) {
+        try { const pr = req.call(wrap); if (pr && pr.catch) pr.catch(fallback); } catch (e) { fallback(); }
+        setTimeout(fallback, 600);            // 断られも返事も無い環境(埋め込み表示など)では画面いっぱいの表示で代用
+      } else fallback();
+      this.fitStage();
+      if (!this.playing) this.play();
+      this._fsPoke();
+    } else if (!on && this._fs) {
+      const fsEl = document.fullscreenElement || document.webkitFullscreenElement;
+      if (fsEl) { (document.exitFullscreen || document.webkitExitFullscreen).call(document); }   // fullscreenchange で後片付け
+      else this._fsExited();
+    }
+  }
+  _fsExited() {
+    const wrap = this.root.querySelector('.stage-wrap');
+    this._fs = false;
+    if (wrap) wrap.classList.remove('fs-on', 'fs-fallback', 'fs-idle');
+    clearTimeout(this._fsTimer);
+    this.fitStage();
+  }
+  /* 操作バーを出して、再生中なら 2.5 秒後に隠す */
+  _fsPoke() {
+    const wrap = this.root.querySelector('.stage-wrap');
+    if (!wrap) return;
+    wrap.classList.remove('fs-idle'); this._fsBarHidden = false;
+    clearTimeout(this._fsTimer);
+    this._fsTimer = setTimeout(() => { if (this._fs && this.playing) { wrap.classList.add('fs-idle'); this._fsBarHidden = true; } }, 2500);
   }
 
   togglePlay() { this.playing ? this.pause() : this.play(); }
@@ -759,6 +843,7 @@ class Editor {
   pause() {
     this.playing = false;
     this._silentClock = null;
+    if (this._fs) this._fsPoke();
     this.audio.pause();
     const b = this.root.querySelector('#tp-play');
     if (b) b.textContent = '▶';
