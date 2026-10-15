@@ -678,6 +678,12 @@ class Editor {
   frame() {
     if (this.destroyed) return;
     if (this.playing && !this._exporting && !this._noAdapt) this._adaptPreview();   // 隠れていて描画を止められている間の遅さは数えない
+    // 枠の大きさが変わっていたら見た目の大きさを合わせ直す(ResizeObserver が届かない環境向けの保険・約0.5秒ごと)
+    if ((this._sizeTick = (this._sizeTick || 0) + 1) % 30 === 0) {
+      const wrap = this.root.querySelector('.stage-wrap');
+      const key = wrap ? wrap.clientWidth + 'x' + wrap.clientHeight : '';
+      if (key && key !== this._wrapKey) { this._wrapKey = key; this._sizeStage(); }
+    }
     if (this.playing && this._silentClock) this.t = this._silentClock.t0 + (performance.now() - this._silentClock.at) / 1000;
     else if (this.playing && this.audio.src) this.t = this.audio.currentTime;
     else if (this.playing) this.t += 1 / 60;
@@ -807,6 +813,9 @@ class Editor {
     if (wrap) wrap.classList.remove('fs-on', 'fs-fallback', 'fs-idle');
     clearTimeout(this._fsTimer);
     this.fitStage();
+    // 全画面を抜けた直後はまだ画面の大きさが戻りきっていないことがあるので、少し後にも測り直す
+    requestAnimationFrame(() => this._sizeStage());
+    setTimeout(() => this._sizeStage(), 300);
   }
   /* 操作バーを出して、再生中なら 2.5 秒後に隠す */
   _fsPoke() {
