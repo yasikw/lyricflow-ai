@@ -12,6 +12,10 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { VRMLoaderPlugin, VRMUtils } from '@pixiv/three-vrm';
 import { VMDPlayer } from './js/mmd.js';
+import { CinemaPipeline } from './js/render3d.js';
+
+// シネマ描画を切った時に戻す値
+const NO_FX = { tone: false, exposure: 1, bloom: 0, shadow: false, ibl: 0, pbr: false };
 
 class DanceStage {
   constructor() {
@@ -37,6 +41,10 @@ class DanceStage {
     this._lastT = null;
     this._loadingVrm = null;
     this._loadingVmd = null;
+    // シネマ描画(トーンマップ/発光/影/IBL/PBR)。VRM Atelier と同じ実装を共有する
+    this.pipeline = new CinemaPipeline(this);
+    this._renderKey = null;
+    this._orbit = 0;
   }
 
   /** モデルの実身長とステージ可視高から身長比を求める(モデル差を吸収) */
@@ -49,6 +57,19 @@ class DanceStage {
     const dist = 3.85;
     this.viewHeight = 2 * dist * Math.tan(THREE.MathUtils.degToRad(28) / 2);
     this.charFrac = this.charHeight ? this.charHeight / this.viewHeight : null;
+    this.pipeline?.refresh();
+  }
+
+  /**
+   * キャラの周りを水平に回り込む。注視点の高さと距離は変えないので
+   * 可視範囲(=合成側が使う charFrac と接地アンカー)は不変のまま、向きだけ変わる。
+   */
+  _orbitCamera(deg) {
+    const r = THREE.MathUtils.degToRad(deg || 0);
+    const dist = 3.85, y = 0.96;
+    this.camera.position.set(Math.sin(r) * dist, y, Math.cos(r) * dist);
+    this.camera.lookAt(0, y, 0);
+    this.camera.updateProjectionMatrix();
   }
 
   _resetCamera() {
@@ -68,6 +89,7 @@ class DanceStage {
       this.renderer.setSize(w, h, false);
       this.camera.aspect = w / h;
       this.camera.updateProjectionMatrix();
+      this.pipeline?.setSize(w, h);
     }
   }
 
@@ -154,7 +176,7 @@ class DanceStage {
       this.player.apply(this.vrm);
       if (!this.player.hasMorphs) this._autoBlink(t);
       if (opts.camera && this.player.hasCamera) this.player.applyCamera(this.camera);
-      else if (this._camWasVmd) this._resetCamera();
+      else if (this._camWasVmd) { this._resetCamera(); this._orbit = null; }
       this._camWasVmd = !!(opts.camera && this.player.hasCamera);
     } else if (h) {
       // モーション未設定: A-poseで立たせる + まばたき
@@ -165,12 +187,30 @@ class DanceStage {
       }
       this._autoBlink(t);
     }
+    // セクション連動カメラ: VMDカメラを使っていない時だけ回り込ませる
+    if (!this._camWasVmd) {
+      const deg = opts.orbit || 0;
+      if (deg !== this._orbit) { this._orbitCamera(deg); this._orbit = deg; }
+    }
+    // セクション連動表情(モーション側にモーフが無い時のみ。上書き合戦を避ける)
+    if (opts.expression && !this.player?.hasMorphs) {
+      const em = this.vrm.expressionManager;
+      if (em) for (const [k, v] of Object.entries(opts.expression)) {
+        em.setValue(k, Math.max(0, Math.min(1, v)));
+      }
+    }
+    // シネマ描画の設定変更を反映(毎フレーム作り直さないようキーで比較)
+    const rkey = opts.render ? JSON.stringify(opts.render) : '';
+    if (rkey !== this._renderKey) {
+      this._renderKey = rkey;
+      this.pipeline.apply(opts.render || { preset: 'standard', ...NO_FX });
+    }
     // SpringBone(揺れもの): 順次レンダ前提。シーク/初回は既定Δtで安定化
     let dt = this._lastT == null ? 1 / 30 : t - this._lastT;
     if (!(dt > 0) || dt > 0.25) dt = 1 / 30;
     this._lastT = t;
     this.vrm.update(dt);
-    this.renderer.render(this.scene, this.camera);
+    if (!this.pipeline.render()) this.renderer.render(this.scene, this.camera);
     return true;
   }
 

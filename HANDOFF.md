@@ -164,6 +164,17 @@
   Live2D の物理・粒子など時間で積み上がる状態がその時刻へ飛び、書き出した動画のキャラが1コマごとに震えた(実測 ±10〜37px @1080p)。
   `frame()` と `fitStage()` は `this._exporting` 中は何もしない。書き出しで描くのは startRender のループだけにする。
 
+## 3Dダンスの演出 (Phase 2)
+
+- シネマ描画は VRM Atelier の `render3d.js`(CinemaPipeline)をそのまま共有する。
+  `sync_stage.sh` が `stage/js/render3d.js` と `vendor/jsm/{postprocessing,shaders}` を配る。
+- `timeline.dance.render` = standard / cinema / photoreal、`timeline.dance.autoScene` = セクション連動。
+- セクション連動は `FXEngine._danceDirection(t, energy)` が `sceneAt(t)` から
+  回り込み角・寄り・表情を決める。**tの純関数**にすること(書き出しの決定論を壊さない)。
+- **寄り(push)は3Dキャンバスの寸法に入れない**。連続で変わるためレンダーターゲットが
+  毎フレーム作り直されて重い。3Dは `scale` のみで描き、寄りは `drawImage` の拡大で出す。
+- カメラの回り込みは距離と注視点の高さを変えない(`charFrac` と接地アンカーが不変)。
+
 ## 連携が切れたときの復帰(重要)
 
 - `_loadAtelier()` は**成功時のみキャッシュ**する。失敗をキャッシュすると、後から
@@ -178,7 +189,6 @@
 
 ## 次にやること
 
-- Phase 2: セクション連動カメラ/表情、3Dポストエフェクト(ブルーム/DoFを3D側にも)
 - Phase 3: ダンスMVテンプレート、書き出しプリセット
 - 演出エンジン: ブラウザ内 WebCodecs 書き出し、AE への構図の忠実再現、中国語/韓国語の役割フォント自動切替、曲頭タイトルカード・間奏カット
 - 太い縁取り系の文字加工(sticker/doubleLine/extrude3d/cutout)は CPU 描画で 1080p 4〜7ms。書き出し時間が気になれば軽量化

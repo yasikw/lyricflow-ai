@@ -248,6 +248,39 @@ class FXEngine {
 
   /* 3Dダンスレイヤー: VRMアバター+VMDモーションを透過WebGLで描き、2D合成する。
      tl.dance = {enabled, vrm_url, vmd_url, offset, scale, x, y, camera, loop} */
+  /**
+   * セクション(Intro/Verse/Bridge/Chorus…)と盛り上がりから、3Dダンスの
+   * カメラ回り込み・寄り・表情を決める。tの純関数なので書き出しでも同じ絵になる。
+   */
+  _danceDirection(t, energy) {
+    const sc = this.sceneAt(t);
+    const label = (sc?.label || '').toLowerCase();
+    const e = Math.max(0, Math.min(1, sc?.energy ?? energy ?? 0.5));
+    // セクション内の進行度(0→1)。回り込みをセクション単位で一往復させる
+    const prog = sc && sc.end > sc.start
+      ? Math.max(0, Math.min(1, (t - sc.start) / (sc.end - sc.start))) : (t % 20) / 20;
+    const sweep = Math.sin(prog * Math.PI * 2);        // -1..1
+    let orbit = 0, push = 1, expr = null;
+    if (label.includes('chorus')) {
+      orbit = 20 * sweep;
+      push = 1.16 + 0.10 * e;
+      expr = { happy: 0.35 + 0.30 * e };
+    } else if (label.includes('bridge')) {
+      orbit = -12 + 8 * sweep;
+      push = 1.04;
+      expr = { relaxed: 0.40 };
+    } else if (label.includes('intro') || label.includes('outro')) {
+      orbit = 14 * sweep;
+      push = 0.90;
+      expr = { relaxed: 0.25 };
+    } else {                                            // Verse など
+      orbit = 7 * sweep;
+      push = 1.0;
+      expr = { happy: 0.12 * e };
+    }
+    return { orbit, push, expr };
+  }
+
   _drawDance(ctx, t, W, H, energy, boost) {
     const d = this.timeline?.dance;
     if (!d || !d.enabled || !d.vrm_url || !window.Stage3D) return;
@@ -258,6 +291,9 @@ class FXEngine {
     if (d.vmd_url && st.vmdUrl !== d.vmd_url) { st.loadVMD(d.vmd_url).catch(() => {}); }
     if (!st.ready) return;
     const opts = { offset: d.offset || 0, camera: !!d.camera, loop: d.loop !== false, speed: d.speed || 1 };
+    if (d.render && d.render !== 'standard') opts.render = { preset: d.render };
+    const dir = d.autoScene ? this._danceDirection(t, energy) : null;
+    if (dir) { opts.orbit = dir.orbit; opts.expression = dir.expr; }
     const useVmdCam = !!(d.camera && st.player && st.player.hasCamera);
     if (useVmdCam) {
       // シネマティックモード: 画面全体を3Dカメラで
@@ -268,22 +304,28 @@ class FXEngine {
       return;
     }
     // 配置モード: 被写体と同じく接地アンカーで合成
-    const scale = d.scale ?? 0.92;                       // 画面高に対するキャラの身長
+    const baseScale = d.scale ?? 0.92;                  // 画面高に対するキャラの身長
+    // セクション連動の寄りは毎フレーム連続で変わる。これを3Dキャンバスの寸法に
+    // 入れるとレンダーターゲットが毎フレーム作り直されて重いので、
+    // 3D側は baseScale で描き、寄りは2D合成時の拡大で表現する。
+    const push = dir ? dir.push : 1;
+    const scale = baseScale * push;
     // ステージ高 = 身長 ÷ 身長比。カメラは足元〜頭上までを映すので、
     // ステージ下端 = 足元 になり by(接地アンカー)が正しく効く。
     // 身長比はモデルごとに実測した値を優先する(チビキャラや長身モデルでも
     // 「大きさ」がそのまま画面高に対する身長として効くように)
     const frac = st.charFrac || window.Stage3D?.CHAR_FRAC || 0.81;
-    const sh = Math.max(64, Math.round(H * scale / frac));
+    const sh = Math.max(64, Math.round(H * baseScale / frac));   // 3Dキャンバスの高さ(安定)
     // ステージの横幅比。0.72固定だと腕を横に広げた振付で左右が切れるため、
     // 既定を1:1にし、パネルから変更できるようにしている(縦のfovは不変なので
     // 広げてもキャラの大きさは変わらず、見切れる範囲だけが減る)。
     const sw = Math.round(sh * (d.aspect ?? 1.0));
     st.setSize(this.quality === 'draft' ? sw / 2 : sw, this.quality === 'draft' ? sh / 2 : sh);
     if (!st.renderAt(t, opts)) return;
+    const dw = sw * push, dh = sh * push;                        // 実際に描く大きさ
     const cx = W * (d.x ?? 0.5), by = H * (d.y ?? 1.0);
-    const x = cx - sw / 2, y = by - sh;
-    this._charBoxes.push({ key: 'dance', x0: x, y0: y, x1: x + sw, y1: by });
+    const x = cx - dw / 2, y = by - dh;
+    this._charBoxes.push({ key: 'dance', x0: x, y0: y, x1: x + dw, y1: by });
     // 接地の影
     ctx.save();
     ctx.globalAlpha = 0.32;
@@ -292,7 +334,7 @@ class FXEngine {
     ctx.ellipse(cx, by - H * 0.012, H * scale * 0.18, H * 0.018, 0, 0, Math.PI * 2);
     ctx.fill();
     ctx.globalAlpha = 1;
-    ctx.drawImage(st.canvas, x, y, sw, sh);
+    ctx.drawImage(st.canvas, x, y, dw, dh);
     ctx.restore();
   }
 

@@ -2155,6 +2155,15 @@ alert('LyricFlow: ' + D.cuts.length + ' text layers created.' + (miss.length ? '
     syncYRange();
     $('#dn-offset').onchange = e => { d.offset = +e.target.value || 0; this.markDirty(); };
     $('#dn-camera').onchange = e => { d.camera = e.target.checked; this.markDirty(); };
+    // シネマ描画(トーンマップ/発光/影/IBL/PBR)とセクション連動演出
+    $('#dn-render').onchange = e => { d.render = e.target.value; this.markDirty(); };
+    $('#dn-auto').onchange = e => {
+      d.autoScene = e.target.checked;
+      if (d.autoScene && !(this.tl.scenes || []).length) {
+        toast('シーン解析をすると、サビで寄る・回り込むなどが曲に合います');
+      }
+      this.markDirty();
+    };
     // ステージの横幅比(左右の見切れ対策)
     $('#dn-ar').onclick = e => {
       const b = e.target.closest('button[data-ar]');
@@ -2438,6 +2447,11 @@ alert('LyricFlow: ' + D.cuts.length + ' text layers created.' + (miss.length ? '
               `<button class="btn sm${Math.abs((this.tl.dance.aspect ?? 1) - v) < 0.01 ? ' primary' : ''}" data-ar="${v}">${lab}</button>`).join('')}
           </span></div>
           <div class="prop-row"><span>VMDカメラで撮る</span><input type="checkbox" id="dn-camera" ${this.tl.dance.camera ? 'checked' : ''}></div>
+          <div class="prop-row"><span>シネマ描画</span><select class="input sm" id="dn-render" style="max-width:130px">
+            ${[['standard', '標準 (軽量)'], ['cinema', 'シネマ'], ['photoreal', 'フォトリアル']].map(([v, l]) =>
+              `<option value="${v}"${(this.tl.dance.render || 'standard') === v ? ' selected' : ''}>${l}</option>`).join('')}
+          </select></div>
+          <div class="prop-row"><span>セクション連動</span><input type="checkbox" id="dn-auto" ${this.tl.dance.autoScene ? 'checked' : ''}></div>
           <div class="prop-row"><span>連携</span><span style="display:flex;gap:5px;align-items:center">
             <button class="btn sm" id="dn-reload">↻ 再読込</button></span></div>
           <div id="dn-atelier-note" style="font-size:10.5px;color:var(--muted);margin:2px 0 4px">読み込み中…</div>
