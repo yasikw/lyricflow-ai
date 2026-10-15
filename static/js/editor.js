@@ -625,6 +625,7 @@ class Editor {
   }
 
   fitStage() {
+    if (this._exporting) return;          // 書き出し中は描く大きさを変えない(窓の大きさが変わっても)
     const [w, h] = ASPECTS[this.project.aspect_ratio] || ASPECTS['16:9'];
     const s = this.qualityMode === 'auto' ? (this.previewScale || 1) : 1;   // 書き出しは startRender が等倍に戻す
     // 全画面では大きく映るので、下書き以外は最大 1.5 倍(16:9 なら 1920×1080)で描く。重ければ自動品質が下げる
@@ -677,6 +678,9 @@ class Editor {
 
   frame() {
     if (this.destroyed) return;
+    // 書き出し中はプレビューを描かない。フレーム送信の待ちの間に止めている位置のプレビューを描くと、
+    // Live2D の物理(髪・体の揺れ)や粒子など時間で積み上がる状態がその時刻へ飛び、書き出しの絵が1コマごとに震える
+    if (this._exporting) return;
     if (this.playing && !this._exporting && !this._noAdapt) this._adaptPreview();   // 隠れていて描画を止められている間の遅さは数えない
     // 枠の大きさが変わっていたら見た目の大きさを合わせ直す(ResizeObserver が届かない環境向けの保険・約0.5秒ごと)
     if ((this._sizeTick = (this._sizeTick || 0) + 1) % 30 === 0) {

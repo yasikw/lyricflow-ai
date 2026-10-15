@@ -1,6 +1,6 @@
 # HANDOFF — LyricFlow AI
 
-最終更新: 2026-10-15 (Claude Code)
+最終更新: 2026-10-16 (Claude Code)
 
 ## インストール版(/Applications/LyricFlow AI.app)
 - 作成・更新: `./scripts/install_app.sh`(`--rebuild` で .app も作り直し)。コードは `~/Library/Application Support/LyricFlow AI/app` に置き、
@@ -157,6 +157,12 @@
   `.fs-fallback`(position:fixed で画面いっぱい)で代用。全画面中は編集操作を止め、`#fs-tap` のタップで再生/一時停止
   (操作バーが隠れている時の 1 回目はバーを出すだけ)、`#fs-bar` は再生中 2.5 秒で隠す。Esc / ✕ / ダブルタップで終了。
 - 全画面中は下書き以外で最大 1.5 倍(16:9 で 1920×1080)で描く(fitStage の fsMul)。重ければ自動品質が下げる。
+
+## 書き出し中はプレビューを描かない(2026-10-16)
+
+- 書き出しはフレームごとに送信を await するので、その間に再生ループ(frame)や fitStage が止めている位置のプレビューを描くと、
+  Live2D の物理・粒子など時間で積み上がる状態がその時刻へ飛び、書き出した動画のキャラが1コマごとに震えた(実測 ±10〜37px @1080p)。
+  `frame()` と `fitStage()` は `this._exporting` 中は何もしない。書き出しで描くのは startRender のループだけにする。
 
 ## 連携が切れたときの復帰(重要)
 
