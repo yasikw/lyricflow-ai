@@ -6,8 +6,7 @@
 //   回転を挟む (腕: q⊗r / ひじ・手首: r⁻¹⊗q⊗r)
 // - 脚はMMDダンスモーションの主流である足IKボーンを2ボーンIKで解決
 // - モーフ(まばたき/あいうえお/笑い等)はVRM標準表情へマッピング
-// - キー補間は線形/slerp (MMDのベジェ補間は未対応: ダンス用VMDは高密度キーが
-//   多いため実用上ほぼ差が出ない)
+// - キー補間はMMDのベジェ補間に対応(キーごとの制御点を使って緩急を再現)
 
 import * as THREE from 'three';
 import { MMDParser } from '../vendor/jsm/libs/mmdparser.module.js';
@@ -57,6 +56,40 @@ const MORPH_MAP = {
   '困る': 'sad', '怒り': 'angry', '真面目': 'angry',
 };
 
+// --- MMDのベジェ補間 -------------------------------------------------------
+// VMDのキーは64バイトの補間パラメータを持ち、X/Y/Z移動と回転の4成分それぞれに
+// 制御点(x1,y1)(x2,y2)がある。レイアウトは three.js の MMDLoader と同じ読み方:
+//   成分k → x1=raw[k], x2=raw[k+8], y1=raw[k+4], y2=raw[k+12] (各0〜127)
+// 補間パラメータは「移動先のキー」に付く。
+function readInterp(raw) {
+  if (!raw || raw.length < 16) return null;
+  const out = new Float32Array(16);
+  let linear = true;
+  for (let k = 0; k < 4; k++) {
+    const x1 = raw[k] / 127, x2 = raw[k + 8] / 127;
+    const y1 = raw[k + 4] / 127, y2 = raw[k + 12] / 127;
+    out[k * 4] = x1; out[k * 4 + 1] = x2; out[k * 4 + 2] = y1; out[k * 4 + 3] = y2;
+    if (x1 !== y1 || x2 !== y2) linear = false;   // 制御点が対角線上なら等速
+  }
+  return linear ? null : out;      // 等速ならnull = 従来の線形経路でそのまま速い
+}
+
+/** 3次ベジェ y(x) を二分法で解く(three.js の CubicBezierInterpolation と同手順) */
+function bezierEase(x1, x2, y1, y2, x) {
+  let c = 0.5, t = c, s = 1 - t, sst3 = 0, stt3 = 0, ttt = 0;
+  for (let i = 0; i < 15; i++) {
+    sst3 = 3 * s * s * t;
+    stt3 = 3 * s * t * t;
+    ttt = t * t * t;
+    const ft = sst3 * x1 + stt3 * x2 + ttt - x;
+    if (Math.abs(ft) < 1e-5) break;
+    c /= 2;
+    t += ft < 0 ? c : -c;
+    s = 1 - t;
+  }
+  return sst3 * y1 + stt3 * y2 + ttt;
+}
+
 const _q1 = new THREE.Quaternion();
 const _q2 = new THREE.Quaternion();
 const _q3 = new THREE.Quaternion();
@@ -66,7 +99,7 @@ const _v2 = new THREE.Vector3();
 const _v3 = new THREE.Vector3();
 
 class Track {
-  constructor() { this.times = []; this.pos = []; this.rot = []; this.cursor = 0; }
+  constructor() { this.times = []; this.pos = []; this.rot = []; this.ip = []; this.cursor = 0; }
 
   finalize() {
     // frameNum昇順ソート(同時挿入順を保持)
@@ -74,6 +107,10 @@ class Track {
     this.times = idx.map((i) => this.times[i]);
     if (this.pos.length) this.pos = idx.map((i) => this.pos[i]);
     if (this.rot.length) this.rot = idx.map((i) => this.rot[i]);
+    if (this.ip.length) {
+      this.ip = idx.map((i) => this.ip[i]);
+      this.hasEase = this.ip.some((v) => v);      // 全部等速ならベジェ処理を省く
+    }
   }
 
   _seek(t) {
@@ -91,7 +128,14 @@ class Track {
     if (i >= this.times.length - 1 || this.times[i] > t) return out.set(a[0], a[1], a[2]);
     const b = this.pos[i + 1];
     const w = (t - this.times[i]) / (this.times[i + 1] - this.times[i] || 1);
-    return out.set(a[0] + (b[0] - a[0]) * w, a[1] + (b[1] - a[1]) * w, a[2] + (b[2] - a[2]) * w);
+    // X/Y/Zは別々のベジェ曲線を持つ(移動先キーのパラメータを使う)
+    const p = this.hasEase ? this.ip[i + 1] : null;
+    const wx = p ? bezierEase(p[0], p[1], p[2], p[3], w) : w;
+    const wy = p ? bezierEase(p[4], p[5], p[6], p[7], w) : w;
+    const wz = p ? bezierEase(p[8], p[9], p[10], p[11], w) : w;
+    return out.set(a[0] + (b[0] - a[0]) * wx,
+                   a[1] + (b[1] - a[1]) * wy,
+                   a[2] + (b[2] - a[2]) * wz);
   }
 
   sampleRot(t, out) {
@@ -101,7 +145,9 @@ class Track {
     out.set(a[0], a[1], a[2], a[3]);
     if (i >= this.times.length - 1 || this.times[i] > t) return out;
     const b = this.rot[i + 1];
-    const w = (t - this.times[i]) / (this.times[i + 1] - this.times[i] || 1);
+    let w = (t - this.times[i]) / (this.times[i + 1] - this.times[i] || 1);
+    const p = this.hasEase ? this.ip[i + 1] : null;
+    if (p) w = bezierEase(p[12], p[13], p[14], p[15], w);
     return out.slerp(_q3.set(b[0], b[1], b[2], b[3]), w);
   }
 
@@ -133,6 +179,7 @@ export class VMDPlayer {
       tr.times.push(t);
       tr.pos.push([m.position[0], m.position[1], m.position[2]]);
       tr.rot.push([m.rotation[0], m.rotation[1], m.rotation[2], m.rotation[3]]);
+      tr.ip.push(readInterp(m.interpolation));
       if (t > this.duration) this.duration = t;
     }
     for (const m of vmd.morphs) {
