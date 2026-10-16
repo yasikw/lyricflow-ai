@@ -2238,9 +2238,20 @@ alert('LyricFlow: ' + D.cuts.length + ' text layers created.' + (miss.length ? '
     Object.assign(this.tl, {
       template: tplId, colors: c.colors, fx: { ...c.fx }, particles: c.particles, sceneDefault: c.scene,
       lyricStyle: { ...this.tl.lyricStyle, font: c.font, anim: c.anim, glow: c.fx.bloom, color: c.colors.text,
-                    lettering: c.lettering || 'neon', orient: c.orient || 'horizontal' },
+                    lettering: c.lettering || 'neon', orient: c.orient || 'horizontal',
+                    ...(c.posY != null ? { posY: c.posY } : {}) },
     });
     if (this.tl.tracks.background[0]) this.tl.tracks.background[0].scene = c.scene;
+    // 3Dダンス付きテンプレート: 構図と演出だけ差し替え、選択済みのアバター/モーションは残す
+    if (c.dance) {
+      const prev = this.tl.dance || {};
+      this.tl.dance = { ...c.dance,
+        vrm_url: prev.vrm_url || null, vmd_url: prev.vmd_url || null,
+        vrm_name: prev.vrm_name || '', vmd_name: prev.vmd_name || '' };
+      if (!prev.vrm_url) {
+        toast('右の「3Dダンス」でアバターとモーションを選ぶと踊り出します');
+      }
+    }
     this.engine.setTimeline(this.tl);
     this.markDirty();
     this.renderLeft(); this.renderRight();
@@ -3357,6 +3368,18 @@ alert('LyricFlow: ' + D.cuts.length + ' text layers created.' + (miss.length ? '
   }
 
   /* ---------------- export ---------------- */
+  /** 配信先ごとの書き出し設定。res/fmt/fps と、必要ならプロジェクトの画面比も揃える */
+  static get EXPORT_PRESETS() {
+    return [
+      { id: 'yt1080',  label: 'YouTube 1080p', sub: 'MP4 / 30fps / 16:9', res: '1080p', fmt: 'mp4', fps: 30, aspect: '16:9' },
+      { id: 'yt4k',    label: 'YouTube 4K',    sub: 'MP4 / 30fps / 16:9', res: '4k',    fmt: 'mp4', fps: 30, aspect: '16:9' },
+      { id: 'shorts',  label: 'ショート / Reels', sub: 'MP4 / 30fps / 9:16', res: '1080p', fmt: 'mp4', fps: 30, aspect: '9:16' },
+      { id: 'ig',      label: 'Instagram',     sub: 'MP4 / 30fps / 1:1',  res: '1080p', fmt: 'mp4', fps: 30, aspect: '1:1' },
+      { id: 'cinema',  label: 'シネマ 24fps',   sub: 'MP4 / 24fps / 16:9', res: '1080p', fmt: 'mp4', fps: 24, aspect: '16:9' },
+      { id: 'master',  label: '編集用マスター',  sub: 'ProRes / 30fps',     res: '1080p', fmt: 'prores', fps: 30, aspect: null },
+    ];
+  }
+
   openExport() {
     if (!this.tl.duration) return toast('先に音源を設定してください', 'err');
     const bg = document.createElement('div');
@@ -3378,6 +3401,11 @@ alert('LyricFlow: ' + D.cuts.length + ' text layers created.' + (miss.length ? '
       <div class="modal">
         <div class="m-head"><h2>エクスポート / Export Video</h2><button class="x-btn">×</button></div>
         <div class="m-body">
+          <label class="fld"><span>プリセット</span></label>
+          <div class="exp-grid" id="preset-grid" style="grid-template-columns:1fr 1fr 1fr">
+            ${Editor.EXPORT_PRESETS.map(pr =>
+              `<div class="exp-opt" data-preset="${pr.id}"><b>${pr.label}</b><small>${pr.sub}</small></div>`).join('')}
+          </div>
           <label class="fld"><span>解像度 (プラン: ${(this.plan || 'free').toUpperCase()} — 最大${maxRes}p)</span></label>
           <div class="exp-grid" id="res-grid" style="grid-template-columns:1fr 1fr 1fr">
             ${resOpt('720p', '720p HD', '高速・軽量')}
@@ -3457,6 +3485,29 @@ alert('LyricFlow: ' + D.cuts.length + ' text layers created.' + (miss.length ? '
       if (o.dataset.locked) return toast('このフォーマットは上位プランで利用できます', 'err');
       bg.querySelectorAll('#fmt-grid .exp-opt').forEach(x => x.classList.toggle('sel', x === o));
       state.fmt = o.dataset.fmt;
+    });
+    const selOpt = (grid, attr, val) => bg.querySelectorAll(`#${grid} .exp-opt`).forEach(x =>
+      x.classList.toggle('sel', x.dataset[attr] === String(val)));
+    bg.querySelectorAll('#preset-grid .exp-opt').forEach(o => o.onclick = async () => {
+      const pr = Editor.EXPORT_PRESETS.find(x => x.id === o.dataset.preset);
+      if (!pr) return;
+      if (heights[pr.res] > maxRes) return toast('この解像度はProプラン以上で利用できます', 'err');
+      if (!allowFmts.includes(pr.fmt)) return toast('このフォーマットは上位プランで利用できます', 'err');
+      bg.querySelectorAll('#preset-grid .exp-opt').forEach(x => x.classList.toggle('sel', x === o));
+      state.res = pr.res; state.fmt = pr.fmt; state.fps = pr.fps;
+      selOpt('res-grid', 'res', pr.res);
+      selOpt('fmt-grid', 'fmt', pr.fmt);
+      selOpt('fps-grid', 'fps', pr.fps);
+      // 画面比はプロジェクト側の設定。プリセットが指定していれば合わせる
+      if (pr.aspect && pr.aspect !== this.project.aspect_ratio) {
+        this.project.aspect_ratio = pr.aspect;
+        state.aspect = pr.aspect;
+        this.root.querySelectorAll('#aspect-mini button').forEach(x =>
+          x.classList.toggle('sel', x.dataset.a === pr.aspect));
+        try { await API.put('/projects/' + this.pid, { aspect_ratio: pr.aspect }); } catch (_) {}
+        this.fitStage();
+        toast(`画面比を ${pr.aspect} に変更しました`, 'ok');
+      }
     });
     bg.querySelectorAll('[data-sub]').forEach(b => b.onclick = () => this.downloadSubs(b.dataset.sub));
     bg.querySelector('#ae-btn').onclick = () => this.exportAE(state);

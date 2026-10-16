@@ -164,6 +164,14 @@
   Live2D の物理・粒子など時間で積み上がる状態がその時刻へ飛び、書き出した動画のキャラが1コマごとに震えた(実測 ±10〜37px @1080p)。
   `frame()` と `fitStage()` は `this._exporting` 中は何もしない。書き出しで描くのは startRender のループだけにする。
 
+## ダンスMVテンプレートと書き出しプリセット (Phase 3)
+
+- ビルトインテンプレ `tpl-dance-mv` / `tpl-dance-mv-vertical`(server.py の BUILTIN_TEMPLATES)。
+  config に `dance` ブロックを持つ。`applyTemplate` は構図と演出だけ差し替え、
+  **選択済みの vrm_url / vmd_url は残す**(アバターを選び直さずに見た目を変えられる)。
+- 書き出しプリセットは `Editor.EXPORT_PRESETS`。res/fmt/fps に加え、`aspect` があれば
+  プロジェクトの画面比も合わせて保存する(ダイアログ内で aspect は変更できない仕様のため)。
+
 ## 3Dダンスの演出 (Phase 2)
 
 - シネマ描画は VRM Atelier の `render3d.js`(CinemaPipeline)をそのまま共有する。
@@ -189,6 +197,5 @@
 
 ## 次にやること
 
-- Phase 3: ダンスMVテンプレート、書き出しプリセット
 - 演出エンジン: ブラウザ内 WebCodecs 書き出し、AE への構図の忠実再現、中国語/韓国語の役割フォント自動切替、曲頭タイトルカード・間奏カット
 - 太い縁取り系の文字加工(sticker/doubleLine/extrude3d/cutout)は CPU 描画で 1080p 4〜7ms。書き出し時間が気になれば軽量化

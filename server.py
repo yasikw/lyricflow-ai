@@ -1457,6 +1457,21 @@ BUILTIN_TEMPLATES = [
         "lettering": "brush", "orient": "vertical",
         "colors": {"bg1": "#0a1020", "bg2": "#231a3a", "accent": "#cbb8ff", "accent2": "#8ab4ff", "text": "#f4f0ff"},
         "font": "'Noto Serif JP', serif", "fx": {"bloom": 0.55, "glitch": 0, "chroma": 0.15, "wave": 0.1, "godray": 0.35, "flare": 0.2, "dof": 0.55}}),
+    ("tpl-dance-mv", "ダンスMV (3D)", "lyricflow", 0, {"scene": "stage", "particles": "embers", "anim": "pop-scale",
+        "lettering": "neon", "orient": "horizontal", "posY": 0.82,
+        "colors": {"bg1": "#060a1c", "bg2": "#1d0b3a", "accent": "#5ff0ff", "accent2": "#ff6ad5", "text": "#ffffff"},
+        "font": "'Noto Sans JP', sans-serif",
+        "fx": {"bloom": 0.8, "glitch": 0.08, "chroma": 0.35, "wave": 0.15, "godray": 0.45, "flare": 0.4, "dof": 0.3},
+        "dance": {"enabled": True, "scale": 0.95, "x": 0.5, "y": 1.02, "aspect": 1.0,
+                  "render": "cinema", "autoScene": True, "camera": False, "loop": True, "offset": 0}}),
+    ("tpl-dance-mv-vertical", "ダンスMV 縦型 (ショート)", "lyricflow", 0,
+        {"scene": "city", "particles": "stars", "anim": "glow-pop",
+         "lettering": "neon", "orient": "horizontal", "posY": 0.78,
+         "colors": {"bg1": "#04060f", "bg2": "#12113a", "accent": "#ffd45f", "accent2": "#7b6bff", "text": "#ffffff"},
+         "font": "'Noto Sans JP', sans-serif",
+         "fx": {"bloom": 0.7, "glitch": 0.05, "chroma": 0.25, "wave": 0.1, "godray": 0.3, "flare": 0.3, "dof": 0.25},
+         "dance": {"enabled": True, "scale": 1.05, "x": 0.5, "y": 1.04, "aspect": 0.5625,
+                   "render": "cinema", "autoScene": True, "camera": False, "loop": True, "offset": 0}}),
 ]
 
 DEMO_LYRICS = "星が降り注ぐ夜に\n君の声が心を照らす\n遠く霞む街の灯り\n夢の先で僕らは出会う\nきらめきを集めて\n夜空へ放つメロディー\n何度でも歌うよ\n君に届くまで"
