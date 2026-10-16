@@ -16,6 +16,10 @@ import { MMDParser } from '../vendor/jsm/libs/mmdparser.module.js';
 // 足の開き・しゃがみが深くなりすぎる(公式MMDAnimationHelperとの比較で確認)。
 const MMD_LEG_ROOT_Y = 10.75;  // 股関節(足ボーン)の高さ
 const MMD_WAIST_Y = 13.24;     // 下半身/上半身ピボット(ウエスト)の高さ
+// 足ＩＫ→つま先ＩＫ のバインド差分(ミク実測, MMD単位, +Zが前)。つま先IKの「てこの長さ」。
+// 対象モデル自身の足首→つま先で代用すると、VRoid系は約半分の長さしかないため
+// 同じアニメ差分でも足の振れ角が倍になる。角度はMMD基準で出す。
+const MMD_TOE_OFF = [0, -1.34, 2.464];
 // MMD素体(ミクv2バインド実測)の腕チェーン各ボーンの下向き角。一律37°で近似すると
 // 肩が20°強上ずれし(肩無補正)、肘の折り畳み軸が7°ずれて前腕が上腕へめり込む。
 // 注: 実測ではひじ→手首は40.3°(バインド時点で肘が10.6°折れている)だが、この
@@ -33,15 +37,17 @@ const DIRECT_BONES = [
   ['頭', 'head'],
 ];
 const ARM_CHAIN = [
-  // [mmd名, vrm名, side(+1=左), 自レスト差キー, 親レスト差キー]
-  ['左肩', 'leftShoulder', 1, 'shoulder', null],
-  ['左腕', 'leftUpperArm', 1, 'upperArm', 'shoulder'],
-  ['左ひじ', 'leftLowerArm', 1, 'lowerArm', 'upperArm'],
-  ['左手首', 'leftHand', 1, 'hand', 'lowerArm'],
-  ['右肩', 'rightShoulder', -1, 'shoulder', null],
-  ['右腕', 'rightUpperArm', -1, 'upperArm', 'shoulder'],
-  ['右ひじ', 'rightLowerArm', -1, 'lowerArm', 'upperArm'],
-  ['右手首', 'rightHand', -1, 'hand', 'lowerArm'],
+  // [mmd名, vrm名, side(+1=左), 自レスト差キー, 親レスト差キー, 捩りボーン名]
+  // 捩りボーン(腕捩/手捩)はMMDでは 腕→腕捩→ひじ→手捩→手首 と間に挟まる。
+  // VRMには対応ボーンが無いので、親側の回転へ畳み込む(軸が同じなので等価)。
+  ['左肩', 'leftShoulder', 1, 'shoulder', null, null],
+  ['左腕', 'leftUpperArm', 1, 'upperArm', 'shoulder', '左腕捩'],
+  ['左ひじ', 'leftLowerArm', 1, 'lowerArm', 'upperArm', '左手捩'],
+  ['左手首', 'leftHand', 1, 'hand', 'lowerArm', null],
+  ['右肩', 'rightShoulder', -1, 'shoulder', null, null],
+  ['右腕', 'rightUpperArm', -1, 'upperArm', 'shoulder', '右腕捩'],
+  ['右ひじ', 'rightLowerArm', -1, 'lowerArm', 'upperArm', '右手捩'],
+  ['右手首', 'rightHand', -1, 'hand', 'lowerArm', null],
 ];
 const FK_LEG_BONES = [
   ['左足', 'leftUpperLeg'], ['左ひざ', 'leftLowerLeg'], ['左足首', 'leftFoot'],
@@ -97,6 +103,7 @@ const _q4 = new THREE.Quaternion();
 const _v1 = new THREE.Vector3();
 const _v2 = new THREE.Vector3();
 const _v3 = new THREE.Vector3();
+const _v4 = new THREE.Vector3();
 
 class Track {
   constructor() { this.times = []; this.pos = []; this.rot = []; this.ip = []; this.cursor = 0; }
@@ -228,6 +235,10 @@ export class VMDPlayer {
     return this.bones.get(side + '足ＩＫ') || this.bones.get(side + '足IK') || null;
   }
 
+  _toeTrack(side) {
+    return this.bones.get(side + 'つま先ＩＫ') || this.bones.get(side + 'つま先IK') || null;
+  }
+
   /** VRMのリグ情報(レスト姿勢)を採取。VRM切替時に呼び直す。 */
   attach(vrm) {
     const h = vrm.humanoid;
@@ -258,9 +269,14 @@ export class VMDPlayer {
       const pu = world(u, new THREE.Vector3());
       const pk = world(k, new THREE.Vector3());
       const pf = world(f, new THREE.Vector3());
+      const toes = get(side + 'Toes');
+      // つま先IKの基準: MMDの「足ＩＫ→つま先ＩＫ」に相当するベクトルを、
+      // 対象モデル自身の 足首→つま先 から採る(モデル差をそのまま吸収する)
+      const toeOff = toes ? world(toes, new THREE.Vector3()).sub(pf) : null;
       rig.legs[side] = {
-        upper: u, lower: k, foot: f,
+        upper: u, lower: k, foot: f, toes,
         restUpper: pu, restAnkle: pf,
+        toeOff, toeDir: toeOff && toeOff.length() > 1e-4 ? toeOff.clone().normalize() : null,
         l1: pu.distanceTo(pk), l2: pk.distanceTo(pf),
       };
     }
@@ -369,12 +385,15 @@ export class VMDPlayer {
     // --- 腕チェーン (肩含む): ボーンごとのレスト方向差を挟む
     // q_vrm = R_parent⁻¹ ⊗ q_mmd ⊗ R_self。一律オフセットだと肩が20°強
     // 上ずれし(MMD肩は30°下向きレスト)、肘は折り畳みで前腕が上腕へめり込む。
-    for (const [mmdName, vrmName, side, selfKey, parentKey] of ARM_CHAIN) {
+    for (const [mmdName, vrmName, side, selfKey, parentKey, twistName] of ARM_CHAIN) {
       const node = h.getNormalizedBoneNode(vrmName);
       if (!node) continue;
       const off = rig.armOff[side === 1 ? 'left' : 'right'];
       const tr = this.bones.get(mmdName);
       const q = tr ? FQ(tr.sampleRot(t, _q1)) : _q1.identity();
+      // 捩りボーンを畳み込む: world(ひじ) = q腕 ⊗ q腕捩 ⊗ qひじ の順を保つ
+      const tw = twistName ? this.bones.get(twistName) : null;
+      if (tw && tw.rot.length > 1) q.multiply(FQ(tw.sampleRot(t, _q4)));
       let pOff = parentKey ? off[parentKey] : 0;
       if (selfKey === 'upperArm' && shoulderQ[side]) {
         q.premultiply(shoulderQ[side]);                        // 肩折込み(肩無しモデル)
@@ -391,7 +410,7 @@ export class VMDPlayer {
         const leg = rig.legs[side];
         const ik = this._ikTrack(jp);
         if (!leg || !ik) continue;
-        this._solveLeg(leg, ik, this.bones.get(jp + '足'), hips, rig, t);
+        this._solveLeg(leg, ik, this.bones.get(jp + '足'), hips, rig, t, this._toeTrack(jp));
       }
     } else {
       for (const [mmdName, vrmName] of FK_LEG_BONES) {
@@ -413,7 +432,7 @@ export class VMDPlayer {
   }
 
   /** 2ボーンIK: hips空間で足首をIK目標へ。ひざは前方(+Z)へ曲げる。 */
-  _solveLeg(leg, ik, fk, hips, rig, t) {
+  _solveLeg(leg, ik, fk, hips, rig, t, toeIk) {
     ik.samplePos(t, _v1).multiplyScalar(rig.posScale);          // IKオフセット(root空間)
     if (rig.flip) { _v1.x = -_v1.x; _v1.z = -_v1.z; }
     const target = _v1.add(leg.restAnkle);
@@ -466,11 +485,37 @@ export class VMDPlayer {
     leg.upper.quaternion.copy(aim)
       .multiply(_q2.setFromAxisAngle(_v2.set(1, 0, 0), -a1 * fs));
     leg.lower.quaternion.setFromAxisAngle(_v2.set(1, 0, 0), (Math.PI - beta) * fs);
-    // 足首の向き: ワールド固定にせず「体(センター)のヨー × 脚の開き(FK足ヨー)」に
-    // 追従させ、その上に足IK回転(あれば)を乗せる。WAVEFILE等は足IK回転が全て0のため、
-    // 固定にするとターン時に足だけ正面を向き続けて腰から下が捻れて見える。
     const chain = _q2.copy(hips.quaternion).multiply(leg.upper.quaternion)
       .multiply(leg.lower.quaternion);
+    // --- 足首の向き ---
+    // MMDでは「つま先ＩＫ」(足ＩＫの子)が足首を回して足の向きを作る。足ＩＫ回転も
+    // 足首FKもほぼ0のモーションが多く、実際の足の角度はつま先ＩＫの位置が決めている。
+    if (toeIk && leg.toeDir) {
+      // つま先ＩＫは足ＩＫの子。足首から見た目標の向き = q(足ＩＫ) × (バインド差分 + アニメ差分)。
+      // 長さはMMD単位のまま比を取る(正規化するのでスケール換算は不要)。
+      toeIk.samplePos(t, _v4);
+      _v4.x += MMD_TOE_OFF[0]; _v4.y += MMD_TOE_OFF[1]; _v4.z += MMD_TOE_OFF[2];
+      if (rig.flip) { _v4.x = -_v4.x; _v4.z = -_v4.z; }
+      ik.sampleRot(t, _q3);
+      if (rig.flip) _q3.set(-_q3.x, _q3.y, -_q3.z, _q3.w);
+      _v4.applyQuaternion(_q3);
+      if (_v4.lengthSq() > 1e-8) {
+        _v4.normalize();
+        // CCDは1リンクなので収束後の足首の向き = 目標方向そのもの
+        _q1.setFromUnitVectors(leg.toeDir, _v4);     // レストのつま先方向 → 目標方向
+        leg.foot.quaternion.copy(chain.invert()).multiply(_q1);
+        return;
+      }
+    }
+    // つま先ＩＫが無いモーション: 足首のFK回転をそのまま乗せる(MMDと同じ順序)。
+    // それも無ければ「体のヨー × 脚の開き × 足IK回転」で向きを作る従来の近似。
+    const ankleFk = this.bones.get((leg === rig.legs.left ? '左' : '右') + '足首');
+    if (ankleFk && ankleFk.rot.length > 1) {
+      ankleFk.sampleRot(t, _q1);
+      if (rig.flip) _q1.set(-_q1.x, _q1.y, -_q1.z, _q1.w);
+      leg.foot.quaternion.copy(_q1);
+      return;
+    }
     const qc = this._qCenter || _q1.identity();
     const hy = Math.hypot(qc.y, qc.w) || 1;
     _q1.set(0, qc.y / hy, 0, qc.w / hy);      // 体の向き(センターのヨー)
